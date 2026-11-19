@@ -1,0 +1,22 @@
+# build e eseguibili
+build/
+build_*/
+*.exe
+*.pck
+*.tmp
+# cache e import di Godot
+godot/.godot/
+godot_editor/
+godot_test/
+# cartelle di lavoro, anteprime, backup e prototipi
+anteprime/
+tools_ai/
+/sprites/
+/project/
+godot/assets/sprites_orig/
+godot/assets/tiles_orig.png
+mappa_mondo.png
+__pycache__/
+*.pyc
+/godot/assets/sprites_artistici/
+/godot/assets/sprites_ai_raw/

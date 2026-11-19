@@ -1,0 +1,20 @@
+{
+	"micro": [],
+	"templates": [
+		{
+			"bio": [],
+			"champ": false,
+			"id": "farm_a",
+			"name": "FATTORIA BRUCIATA",
+			"ops": [
+				[
+					"legacy",
+					"farm"
+				]
+			],
+			"r": 15,
+			"type": "farm",
+			"w": 1
+		}
+	]
+}
