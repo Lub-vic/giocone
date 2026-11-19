@@ -238,7 +238,7 @@ var doors: Array = []
 var carved: Array = []
 var use_pad := false
 var show_fps := false
-var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false}
+var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false}
 var opt_sel := 0
 var pause_sel := 0
 var opt_from := "pause"
@@ -253,6 +253,7 @@ const OPTIONS := [
 	{"k": "shake", "n": "SCUOTIMENTO SCHERMO", "t": "toggle"},
 	{"k": "bright", "n": "LUMINOSITA", "t": "slider", "max": 5},
 	{"k": "fps", "n": "MOSTRA FPS", "t": "toggle"},
+	{"k": "aim_manual", "n": "MIRA MANUALE", "t": "toggle"},
 	{"k": "ctrl", "n": "CONTROLLI", "t": "action"},
 	{"k": "back", "n": "INDIETRO", "t": "action"},
 ]

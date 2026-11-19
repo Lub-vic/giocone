@@ -104,6 +104,24 @@ func _bar(pos: Vector2, w: float, h: float, frac: float, col: Color, ghost := -1
 		draw_rect(Rect2(sx, y, 1, hi), Color(0, 0, 0, 0.35))
 
 
+func _crosshair(p: Player) -> void:
+	var cp: Vector2 = get_viewport().get_canvas_transform() * p.aim_world
+	if cp.x < -10.0 or cp.x > size.x + 10.0 or cp.y < -10.0 or cp.y > size.y + 10.0:
+		return
+	var col := Color(1.0, 0.82, 0.42, 0.95)
+	var shadow := Color(0.03, 0.01, 0.04, 0.9)
+	draw_arc(cp, 5.0, 0.0, TAU, 16, shadow, 3.0)
+	draw_arc(cp, 5.0, 0.0, TAU, 16, col, 1.0)
+	draw_line(cp + Vector2(-9, 0), cp + Vector2(-3, 0), shadow, 3.0)
+	draw_line(cp + Vector2(3, 0), cp + Vector2(9, 0), shadow, 3.0)
+	draw_line(cp + Vector2(0, -9), cp + Vector2(0, -3), shadow, 3.0)
+	draw_line(cp + Vector2(0, 3), cp + Vector2(0, 9), shadow, 3.0)
+	draw_line(cp + Vector2(-9, 0), cp + Vector2(-3, 0), col, 1.0)
+	draw_line(cp + Vector2(3, 0), cp + Vector2(9, 0), col, 1.0)
+	draw_line(cp + Vector2(0, -9), cp + Vector2(0, -3), col, 1.0)
+	draw_line(cp + Vector2(0, 3), cp + Vector2(0, 9), col, 1.0)
+
+
 # ---------------------------------------------------------------- schermata principale
 func _draw() -> void:
 	if main == null or main.player == null:
@@ -197,6 +215,8 @@ func _draw() -> void:
 		_minimap()
 		_clock()
 		_edge_markers()
+		if bool(main.settings["aim_manual"]) and main.state == "play":
+			_crosshair(p)
 	if main.chain >= 2:
 		_txt("SERIE x%d   ANIME x%.1f" % [main.chain, main.chain_mult()], Vector2(0, 78), Color(1, 0.78, 0.3), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		_bar(Vector2(size.x / 2 - 40, 82), 80, 3, clampf(main.chain_t / 4.5, 0.0, 1.0), Color(1, 0.62, 0.2))

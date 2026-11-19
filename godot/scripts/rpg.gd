@@ -38,7 +38,7 @@ const CLASSES := {
 const SPELLS := {
 	"dardo": {"n": "Dardo d'Ombra", "cost": 14.0, "cd": 0.6, "d": "proiettile che trapassa"},
 	"nova": {"n": "Nova di Fuoco", "cost": 28.0, "cd": 2.5, "d": "esplosione attorno a te"},
-	"fulmine": {"n": "Catena di Fulmini", "cost": 26.0, "cd": 2.0, "d": "colpisce fino a 4 nemici"},
+	"fulmine": {"n": "Catena di Fulmini", "cost": 26.0, "cd": 2.0, "d": "colpisce un nemico, poi si dirama con il livello"},
 	"gelo": {"n": "Raggio di Gelo", "cost": 22.0, "cd": 1.8, "d": "cono che rallenta"},
 	"cura": {"n": "Guarigione", "cost": 50.0, "cd": 14.0, "d": "cura subito"},
 	"rigenera": {"n": "Rigenerazione", "cost": 44.0, "cd": 16.0, "d": "cura nel tempo"},

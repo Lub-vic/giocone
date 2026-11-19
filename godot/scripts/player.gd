@@ -71,6 +71,7 @@ var rw_t := {}
 var blade_ang := 0.0
 var blade_hit: Dictionary = {}
 var knife_t := 0.0
+var aim_world := Vector2.ZERO
 
 
 func rl(id: String) -> int:
@@ -237,8 +238,21 @@ func _process(dt: float) -> void:
 		regen_t -= dt
 		hp = min(max_hp, hp + regen_rate * dt)
 	var dir := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	if bool(main.settings["aim_manual"]):
+		if main.use_pad:
+			var aim := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down")
+			if aim.length() > 0.25:
+				face = aim.normalized()
+			aim_world = position + face * 80.0
+		else:
+			aim_world = get_global_mouse_position()
+			var aim_delta: Vector2 = aim_world - position
+			if aim_delta.length() > 4.0:
+				face = aim_delta.normalized()
+	else:
+		aim_world = position + face * 80.0
 	var free := atk_t <= 0.0 and dash_t <= 0.0 and heavy_t <= 0.0
-	if dir.length() > 0.1 and free:
+	if dir.length() > 0.1 and free and not bool(main.settings["aim_manual"]):
 		face = dir.normalized()
 	# telecamera: V / R3 passa da normale a Orda a Tattica e di nuovo normale
 	if Input.is_action_just_pressed("zoom"):
@@ -308,7 +322,7 @@ func _process(dt: float) -> void:
 	if Input.is_action_just_pressed("heavy") and idle() and st > 0.0 and zmode == 0 and spend(f["hc"]):
 		heavy_t = f["hw"]
 		var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
-		if near != null:
+		if near != null and not bool(main.settings["aim_manual"]):
 			face = (near.position - position).normalized()
 	if heavy_t > 0.0:
 		heavy_t -= dt
@@ -370,7 +384,7 @@ func attack() -> void:
 		return
 	main.snd("swing")
 	var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
-	if near != null:
+	if near != null and not bool(main.settings["aim_manual"]):
 		face = (near.position - position).normalized()
 	var cdm := Rpg.cd_mult(w) / (1.0 + 0.07 * rl("corvo"))
 	if main.run_mode and main.chain >= 5:
@@ -486,7 +500,7 @@ func cast(slot: int) -> void:
 	var sp := spell_pow()
 	var aim := face
 	var near: Enemy = main.nearest_enemy(position, 170.0)
-	if near != null:
+	if near != null and not bool(main.settings["aim_manual"]):
 		aim = (near.position - position).normalized()
 		face = aim
 	match id:
@@ -505,13 +519,15 @@ func cast(slot: int) -> void:
 			var list: Array = main.enemies.duplicate()
 			list.sort_custom(func(a, b): return a.position.distance_to(position) < b.position.distance_to(position))
 			var n := 0
+			var lightning_level := int(run_w.get("catena", 0))
+			var targets := maxi(1, lightning_level)
 			for e in list:
 				if e.position.distance_to(position) > 150.0:
 					break
 				main.add_bolt(position + Vector2(0, -6), e.position + Vector2(0, -8))
 				e.hurt(bd() * 1.8 * sp, (e.position - position).normalized(), 60.0, false)
 				n += 1
-				if n >= 4:
+				if n >= targets:
 					break
 			main.snd("roar" if n > 0 else "swing")
 		"gelo":

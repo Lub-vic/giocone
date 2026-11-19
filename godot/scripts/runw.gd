@@ -6,7 +6,7 @@ const LIST := [
 	{"id": "lame", "n": "LAME ORBITANTI", "d": "LAME D'OSSO ROTEANO ATTORNO A TE", "up": "+1 LAMA, PIU' DANNO E RAGGIO", "max": 5},
 	{"id": "pugnali", "n": "PUGNALI GOTICI", "d": "LANCIA PUGNALI AL NEMICO PIU' VICINO", "up": "PIU' PUGNALI, PIU' VELOCI", "max": 5},
 	{"id": "nova", "n": "ONDA DI CENERE", "d": "UN'ONDA RESPINGE E COLPISCE TUTTI", "up": "ONDA PIU' AMPIA E FREQUENTE", "max": 5},
-	{"id": "catena", "n": "FULMINE FUNEBRE", "d": "UNA SCARICA SALTA FRA I NEMICI", "up": "+1 SALTO, PIU' RAPIDA", "max": 5},
+	{"id": "catena", "n": "FULMINE FUNEBRE", "d": "UNA SCARICA COLPISCE E DIRAMA NEI NEMICI VICINI", "up": "+1 NEMICO, PIU' RAPIDA", "max": 5},
 ]
 
 const START := {"cavaliere": "lame", "cacciatore": "pugnali", "negromante": "catena", "chierico": "nova"}
@@ -95,10 +95,10 @@ static func tick(p: Player, dt: float) -> void:
 				t1 = maxf(0.8, 2.4 - 0.25 * lv)
 				var hit: Array = [first]
 				var cur: Enemy = first
-				var jumps := 2 + lv
+				var targets := lv
 				var cd := base * (1.2 + 0.15 * lv)
 				var src: Vector2 = p.position + Vector2(0, -6)
-				for j in jumps:
+				for j in targets:
 					if cur == null:
 						break
 					main.add_bolt(src, cur.position + Vector2(0, -6))

@@ -141,6 +141,10 @@ static func setup_input() -> void:
 	_jbtn("move_right", JOY_BUTTON_DPAD_RIGHT)
 	_jbtn("move_up", JOY_BUTTON_DPAD_UP)
 	_jbtn("move_down", JOY_BUTTON_DPAD_DOWN)
+	_jaxis("aim_left", JOY_AXIS_RIGHT_X, -1.0)
+	_jaxis("aim_right", JOY_AXIS_RIGHT_X, 1.0)
+	_jaxis("aim_up", JOY_AXIS_RIGHT_Y, -1.0)
+	_jaxis("aim_down", JOY_AXIS_RIGHT_Y, 1.0)
 	_jbtn("attack", JOY_BUTTON_RIGHT_SHOULDER)
 	_jaxis("heavy", JOY_AXIS_TRIGGER_RIGHT, 1.0)
 	_jbtn("dash", JOY_BUTTON_B)
@@ -158,6 +162,8 @@ static func setup_input() -> void:
 	_jbtn("restart", JOY_BUTTON_START)
 	_jbtn("restart", JOY_BUTTON_A)
 	for a in ["move_left", "move_right", "move_up", "move_down"]:
+		InputMap.action_set_deadzone(a, 0.25)
+	for a in ["aim_left", "aim_right", "aim_up", "aim_down"]:
 		InputMap.action_set_deadzone(a, 0.25)
 	InputMap.action_set_deadzone("heavy", 0.5)
 	InputMap.action_set_deadzone("spell2", 0.5)
