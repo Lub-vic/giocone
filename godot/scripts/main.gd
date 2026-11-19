@@ -5897,10 +5897,166 @@ func _input(ev: InputEvent) -> void:
 		show_fps = not show_fps
 		settings["fps"] = show_fps
 		save_settings()
-	if ev is InputEventJoypadButton or (ev is InputEventJoypadMotion and absf(ev.axis_value) > 0.5):
+	if ev is InputEventJoypadButton or (ev is InputEventJoypadMotion and absf(ev.axis_value) > 0.25):
 		use_pad = true
-	elif ev is InputEventKey or ev is InputEventMouseButton:
+	elif ev is InputEventKey or ev is InputEventMouseButton or ev is InputEventMouseMotion:
 		use_pad = false
+
+
+func _activate_pause_selection() -> void:
+	match pause_sel:
+		0:
+			state = "play"
+		1:
+			opt_from = "pause"
+			opt_sel = 0
+			in_title_menu = false
+			state = "options"
+		2:
+			ctrl_from = "pause"
+			state = "controls"
+		3:
+			save_game()
+			Engine.time_scale = 1.0
+			get_tree().reload_current_scene()
+		_:
+			save_game()
+			get_tree().quit()
+
+
+func _activate_title_selection() -> void:
+	if run_mode:
+		match title_sel:
+			0:
+				state = "class"
+			1:
+				opt_from = "title"
+				opt_sel = 0
+				in_title_menu = true
+				state = "options"
+			_:
+				get_tree().quit()
+	else:
+		match title_sel:
+			0:
+				start_game(title_save)
+			1:
+				state = "class"
+			3:
+				launch_editor()
+			_:
+				opt_from = "title"
+				opt_sel = 0
+				in_title_menu = true
+				state = "options"
+
+
+func _handle_menu_click(pos: Vector2) -> bool:
+	if state == "options":
+		if pos.x < 80.0 or pos.x > 400.0:
+			return false
+		var row := floori((pos.y - 71.0) / 16.0)
+		if row < 0 or row >= OPTIONS.size() or pos.y >= 85.0 + row * 16.0:
+			return false
+		opt_sel = row
+		var option: Dictionary = OPTIONS[row]
+		if option["t"] == "slider":
+			var max_value := int(option["max"])
+			var x0 := 80.0 + (320.0 - 20.0 - max_value * 8.0)
+			var value := clampi(floori((pos.x - x0) / 8.0) + 1, 0, max_value)
+			settings[option["k"]] = value
+			apply_settings()
+			save_settings()
+			snd("page")
+		elif option["t"] == "toggle":
+			opt_change(1)
+		else:
+			opt_activate()
+		return true
+	if state == "pause":
+		var row := floori((pos.y - 106.0) / 14.0)
+		if pos.x < 130.0 or pos.x > 350.0 or row < 0 or row >= 5 or pos.y >= 122.0 + row * 14.0:
+			return false
+		pause_sel = row
+		_activate_pause_selection()
+		return true
+	if state == "title":
+		var count := 3 if run_mode else 4
+		var row := floori((pos.y - 135.0) / 16.0)
+		if pos.x < 90.0 or pos.x > 390.0 or row < 0 or row >= count or pos.y >= 151.0 + row * 16.0:
+			return false
+		title_sel = row
+		_activate_title_selection()
+		return true
+	if state == "class":
+		if pos.y < 36.0 or pos.y > 252.0 or pos.x < 8.0 or pos.x >= 472.0:
+			return false
+		class_sel = clampi(floori((pos.x - 8.0) / 116.0), 0, 3)
+		start_game({}, class_ids[class_sel])
+		return true
+	if state == "pick":
+		if pos.y < 52.0 or pos.y > 202.0 or pos.x < 14.0 or pos.x > 466.0:
+			return false
+		var row := floori((pos.x - 14.0) / 154.0)
+		if row < 0 or row >= picks.size() or pos.x >= 160.0 + row * 154.0:
+			return false
+		choose(row)
+		return true
+	if state == "travel":
+		if pos.x < 90.0 or pos.x > 390.0 or pos.y < 70.0 or pos.y >= 214.0:
+			return false
+		var first := clampi(travel_sel - 6, 0, maxi(0, travel_list.size() - 12))
+		var row := floori((pos.y - 70.0) / 12.0)
+		var index := first + row
+		if index < 0 or index >= travel_list.size():
+			return false
+		travel_sel = index
+		travel_to(travel_list[index])
+		return true
+	if state == "craft":
+		var row := floori((pos.y - 78.0) / 18.0)
+		if pos.x < 65.0 or pos.x > 415.0 or row < 0 or row >= RECIPES.size() or pos.y >= 96.0 + row * 18.0:
+			return false
+		craft_sel = row
+		craft_do(craft_sel)
+		return true
+	if state == "controls":
+		state = ctrl_from
+		return true
+	if state == "dialog":
+		if pos.y < 230.0 or pos.y > 254.0:
+			return false
+		var option_index := floori((pos.x - 32.0) / 120.0)
+		var dialog_options: Array = dlg.get("opts", [])
+		if option_index < 0 or option_index >= dialog_options.size():
+			return false
+		dlg["sel"] = option_index
+		dialog_confirm()
+		return true
+	if state == "menu":
+		if pos.x < 90.0 or pos.x > 390.0:
+			return false
+		if pos.y >= 108.0 and pos.y < 126.0:
+			try_level_up()
+		elif pos.y >= 126.0 and pos.y < 137.0:
+			if pos.x < 250.0:
+				state = "play"
+			else:
+				craft_sel = 0
+				state = "craft"
+				snd("page")
+		elif pos.y >= 137.0 and pos.y < 148.0:
+			open_travel()
+		elif pos.y >= 148.0 and pos.y < 160.0:
+			cycle_spell(0 if pos.x < 240.0 else 1)
+		else:
+			return false
+		return true
+	if state == "results":
+		Engine.time_scale = 1.0
+		get_tree().reload_current_scene()
+		return true
+	return false
 
 
 ## apre l'editor di sviluppo (CryptEditor.exe accanto al gioco). Voce nascosta: F10 in qualsiasi momento, e voce nel menu del titolo
@@ -5917,6 +6073,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10:
 		launch_editor()
 		return
+	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		if _handle_menu_click(ev.position):
+			get_viewport().set_input_as_handled()
+			return
 	if state == "dialog":
 		var n: int = (dlg["opts"] as Array).size()
 		if ev.is_action_pressed("ui_left") or ev.is_action_pressed("ui_up"):
@@ -5952,24 +6112,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 		elif ev.is_action_pressed("ui_cancel") or (ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_START):
 			state = "play"
 		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
-			match pause_sel:
-				0:
-					state = "play"
-				1:
-					opt_from = "pause"
-					opt_sel = 0
-					in_title_menu = false
-					state = "options"
-				2:
-					ctrl_from = "pause"
-					state = "controls"
-				3:
-					save_game()
-					Engine.time_scale = 1.0
-					get_tree().reload_current_scene()
-				_:
-					save_game()
-					get_tree().quit()
+			_activate_pause_selection()
 		return
 	if state == "options":
 		if ev.is_action_pressed("ui_down"):
@@ -5997,29 +6140,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 		elif ev.is_action_pressed("ui_up"):
 			title_sel = (title_sel + (2 if run_mode else 3)) % (3 if run_mode else 4)
 		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton) and run_mode:
-			match title_sel:
-				0:
-					state = "class"
-				1:
-					opt_from = "title"
-					opt_sel = 0
-					in_title_menu = true
-					state = "options"
-				_:
-					get_tree().quit()
+			_activate_title_selection()
 		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
-			match title_sel:
-				0:
-					start_game(title_save)
-				1:
-					state = "class"
-				3:
-					launch_editor()
-				_:
-					opt_from = "title"
-					opt_sel = 0
-					in_title_menu = true
-					state = "options"
+			_activate_title_selection()
 		return
 	if state == "class":
 		if ev.is_action_pressed("ui_right"):

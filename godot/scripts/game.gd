@@ -121,6 +121,7 @@ static func setup_input() -> void:
 		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT],
 		"move_up": [KEY_W, KEY_UP], "move_down": [KEY_S, KEY_DOWN],
 		"attack": [KEY_SPACE, KEY_J], "dash": [KEY_SHIFT, KEY_K], "restart": [KEY_R, KEY_ENTER], "heavy": [KEY_L], "flask": [KEY_Q, KEY_F], "interact": [KEY_E], "zoom": [KEY_V], "parry": [KEY_C], "swap": [KEY_TAB], "spell1": [KEY_1, KEY_R], "spell2": [KEY_2, KEY_G], "item_next": [KEY_Z], "item_use": [KEY_X],
+		"aim_left": [], "aim_right": [], "aim_up": [], "aim_down": [],
 	}
 	for a in m:
 		if not InputMap.has_action(a):
