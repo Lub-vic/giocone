@@ -260,6 +260,7 @@ const OPTIONS := [
 var wake_t := 0.0
 var allies: Array = []
 var horde_t := 0.0
+var horde_age := 0.0      # da quanto dura l'orda: le ondate crescono
 var scout: ScoutFx = null
 const INTERACT := {"res_erba": 1, "res_fungo": 1, "res_legna": 1, "res_minerale": 1, "bed_top": 1, "qitem": 1, "villager": 1, "bell": 1, "shrine": 1, "key": 1, "lever": 1, "stairs_top": 1, "gate_top": 1, "bonfire": 1, "portal": 1, "elder": 1, "npc": 1, "loot": 1, "dig": 1}
 var pick_sel := 0
@@ -417,8 +418,8 @@ func save_game() -> void:
 	var lc: Vector2i = last_fire["cell"]
 	var d := {"v": 3, "seed": world_seed, "pop": pop_salt, "cycle": cycle, "guardians": guardians, "pages": pages_found, "elder": elder_i,
 		"last_fire": {"area": last_fire["area"], "cell": [lc.x, lc.y]}, "persist": persist,
-		"player": {"lv": player.lv, "souls": player.souls, "rk": player.rk, "kills": player.kills},
-		"cls": player.cls, "wslots": player.wslots, "wcur": player.wcur, "spells": player.spells, "known": player.known, "relics": player.relics, "mats": player.mats, "items": player.items}
+		"player": {"lv": player.lv, "souls": player.souls, "rk": player.rk, "attr": player.attr, "kills": player.kills},
+		"cls": player.cls, "wslots": player.wslots, "wcur": player.wcur, "spells": player.spells, "known": player.known, "relics": player.relics, "mats": player.mats, "items": player.items, "armor": player.armor, "brews": player.brews, "bag": player.bag, "belt": player.belt, "relic_eq": player.relic_eq}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(d))
@@ -453,6 +454,9 @@ func start_run(cls_id: String) -> void:
 	cycle = 0
 	stain_data = {}
 	player.rk = {}
+	player.attr = {}
+	player.armor = {}
+	player.brews = {}
 	player.relics = {}
 	player.lv = 1
 	player.souls = 0
@@ -716,6 +720,9 @@ func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
 		world_seed = new_seed()
 		pop_salt = randi()
 		player.rk = {}
+		player.attr = {}
+		player.armor = {}
+		player.brews = {}
 		player.relics = {}
 		player.mats = {}
 		player.items = {}
@@ -746,8 +753,14 @@ func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
 		player.souls = int(pd["souls"])
 		player.kills = int(pd["kills"])
 		player.rk = {}
+		player.attr = {}
+		player.armor = {}
+		player.brews = {}
 		for k in pd["rk"]:
 			player.rk[k] = int(pd["rk"][k])
+		if pd.has("attr"):
+			for k in pd["attr"]:
+				player.attr[k] = int(pd["attr"][k])
 		player.mats = {}
 		if ld.has("mats"):
 			for mk2 in ld["mats"]:
@@ -756,11 +769,46 @@ func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
 		if ld.has("items"):
 			for ik in ld["items"]:
 				player.items[str(ik)] = int(ld["items"][ik])
+		player.armor = {}
+		if ld.has("armor"):
+			for sk in ld["armor"]:
+				var pc: Dictionary = ld["armor"][sk]
+				var st := {}
+				for k in pc["st"]:
+					st[str(k)] = float(pc["st"][k])
+				player.armor[str(sk)] = Rpg.clean_piece(pc)
+		player.brews = {}
+		if ld.has("brews"):
+			for bk in ld["brews"]:
+				player.brews[str(bk)] = ld["brews"][bk]
+		player.bag = []
+		if ld.has("bag"):
+			for be in ld["bag"]:
+				if str(be["k"]) == "w":
+					player.bag.append({"k": "w", "w": Rpg.clean(be["w"])})
+				elif str(be["k"]) == "a":
+					player.bag.append({"k": "a", "a": Rpg.clean_piece(be["a"])})
 		player.item_sel = 0
 		player.relics = {}
 		if ld.has("relics"):
 			for k in ld["relics"]:
 				player.relics[str(k)] = int(ld["relics"][k])
+		player.relic_eq = []
+		if ld.has("relic_eq"):
+			for k in ld["relic_eq"]:
+				player.relic_eq.append(str(k))
+		else:   # salvataggi vecchi: indossa le prime reliquie possedute
+			for k in player.relics:
+				if player.relic_eq.size() < player.RELIC_MAX:
+					player.relic_eq.append(str(k))
+		player.belt = []
+		if ld.has("belt"):
+			for k in ld["belt"]:
+				player.belt.append(str(k))
+		else:
+			for k in player.items:
+				if player.belt.size() < player.BELT_MAX:
+					player.belt.append(str(k))
 		if ld.has("wslots"):
 			player.wslots = [null, null]
 			for i in 2:
@@ -1170,6 +1218,11 @@ var cur_poi_type := ""
 
 
 func poi_chest(c: Vector2i, rare := false) -> void:
+	# meno scrigni nei luoghi: quelli comuni compaiono meta' delle volte, i preziosi non sono garantiti
+	if not rare and randf() < 0.5:
+		return
+	if rare and randf() < 0.45:
+		rare = false
 	var cc := free_spot(c, Vector2i(1, 1))
 	if cc.x < 0:
 		return
@@ -1403,7 +1456,7 @@ func world_strike(pos: Vector2, face: Vector2, reach: float, arc: float, mult: f
 		left = float(terr_dmg.get(bc, tot))
 		drop_kind = str(ti["d"])
 	var e := Destruct.eff(fam, mat)
-	left -= 10.0 * mult * e
+	left -= 10.0 * mult * e * (1.0 + 0.04 * player.a("for"))
 	var cp := Vector2(bc) * Game.TS + Vector2(8, 8)
 	burst(cp, Destruct.COL[mat], 6, 38.0, 0.35)
 	snd("hit")
@@ -2204,7 +2257,9 @@ func nook_chunk(key: Vector2i) -> void:
 					reach[idx(p)] = 1
 		nook_count += 1
 		decorate_nook(c, biome[idx(c)])
-		var rare := nook_count % 3 == 0
+		var rare := nook_count % 4 == 0
+		if not rare and pop_rng.randf() < 0.5:
+			continue   # non ogni angolo nascosto ha un tesoro
 		var ch := add_prop("chest", c)
 		if ch != null:
 			ch.rare = rare
@@ -2554,6 +2609,7 @@ func add_item(id: String, n: int) -> bool:
 	if have >= 9:
 		return false
 	player.items[id] = mini(9, have + n)
+	belt_auto(id)
 	if item_ids().size() == 1:
 		player.item_sel = 0
 	return true
@@ -2581,10 +2637,10 @@ func poi_bonus(t: String, pos: Vector2) -> void:
 		"bandits", "toll", "caravan", "crossroads":
 			var n := int(randi_range(150, 300) * (1.0 + tier * 0.5))
 			player.add_souls(n)
-			drop_loot(pos + Vector2(0, 12), Rpg.make_weapon(clampi(1 + tier / 2, 1, 3)))
+			drop_loot(pos + Vector2(0, 12), Rpg.make_weapon(clampi(tier / 2, 0, 2)))
 			txt = "BOTTINO: %d ANIME E UN'ARMA" % n
 		"tower", "gallows", "scarecrow":
-			drop_loot(pos + Vector2(0, 12), Rpg.make_weapon(clampi(2 + tier / 2, 2, 4)))
+			drop_loot(pos + Vector2(0, 12), Rpg.make_weapon(clampi(1 + tier / 3, 1, 2)))
 			add_item("pelle", 1)
 			txt = "ARSENALE: UN'ARMA SCELTA E UN TONICO"
 		"cave", "quarry", "mine":
@@ -2661,7 +2717,7 @@ func dig_up(p: Prop) -> void:
 		drop_relic(pos + Vector2(0, 10))
 		say("SOTTO LA TERRA: UNA RELIQUIA!")
 	elif r < 0.93:
-		drop_loot(pos + Vector2(0, 10), Rpg.make_weapon(clampi(1 + tier / 2, 1, 3)))
+		drop_loot(pos + Vector2(0, 10), Rpg.make_weapon(clampi(tier / 2, 0, 2)))
 		say("SOTTO LA TERRA: UN'ARMA DIMENTICATA")
 	else:
 		say("UN'ANIMA INQUIETA SI RISVEGLIA!")
@@ -3321,15 +3377,30 @@ func can_craft(rc: Dictionary) -> bool:
 const ITEM_ORDER := ["infuso", "arrosto", "forza", "pelle", "fuoco"]
 
 
+## oggetti usabili con Z/X: quelli nella cintura
 func item_ids() -> Array:
 	var out: Array = []
-	for id in ITEM_ORDER:
+	for id in player.belt:
 		if int(player.items.get(id, 0)) > 0:
 			out.append(id)
 	return out
 
 
+## un oggetto nuovo va nella cintura se c'e' posto
+func belt_auto(id: String) -> void:
+	if not player.belt.has(id) and player.belt.size() < player.BELT_MAX:
+		player.belt.append(id)
+
+
+func relic_gain(rid: String, n: int) -> void:
+	player.relics[rid] = player.relic_own(rid) + n
+	if not player.relic_eq.has(rid) and player.relic_eq.size() < player.RELIC_MAX:
+		player.relic_eq.append(rid)
+
+
 func item_name(id: String) -> String:
+	if player.brews.has(id):
+		return str(player.brews[id]["n"])
 	for rc in RECIPES:
 		if rc["id"] == id:
 			return str(rc["n"])
@@ -3358,6 +3429,8 @@ func item_use() -> void:
 	if id == "":
 		say("NON HAI OGGETTI: CREALI AL CAMPO (C)")
 		return
+	if player.brews.has(id) and not use_brew(player.brews[id]["fx"]):
+		return
 	match id:
 		"infuso":
 			if player.flasks >= player.max_flasks:
@@ -3377,10 +3450,528 @@ func item_use() -> void:
 	player.items[id] = int(player.items[id]) - 1
 	if int(player.items[id]) <= 0:
 		player.items.erase(id)
+		player.belt.erase(id)
 	player.item_sel = clampi(player.item_sel, 0, maxi(0, item_ids().size() - 1))
 	snd("drink")
 	burst(player.position, Color(1.0, 0.85, 0.5), 12, 35.0, 0.5)
 	popup(player.position + Vector2(0, -22), item_name(id), Color(0.8, 1.0, 0.8))
+
+
+## effetto di una pozione creata alla forgia; false se non servirebbe a nulla
+func use_brew(fx: Dictionary) -> bool:
+	var base := str(fx["base"])
+	var v := float(fx["v"])
+	var bf: Dictionary = fx.get("buffs", {})
+	match base:
+		"heal":
+			if player.hp >= player.max_hp - 1.0 and bf.is_empty():
+				say("SEI GIA' IN SALUTE")
+				return false
+			player.hp = minf(player.max_hp, player.hp + player.max_hp * v)
+		"mana":
+			if player.mana >= player.max_mana - 1.0 and bf.is_empty():
+				say("IL MANA E' GIA' PIENO")
+				return false
+			player.mana = minf(player.max_mana, player.mana + player.max_mana * v)
+		"flask":
+			if player.flasks >= player.max_flasks and bf.is_empty():
+				say("LE FIALE SONO GIA' PIENE")
+				return false
+			player.flasks = mini(player.max_flasks, player.flasks + int(v))
+	for k in bf:
+		var cur := float(player.bval.get(k, 0.0)) if player.buffs.has(k) else 0.0
+		player.buffs[k] = maxf(float(player.buffs.get(k, 0.0)), float(fx["dur"]))
+		player.bval[k] = maxf(cur, float(bf[k]))
+	return true
+
+
+# ------------------------------------------------------------------ forgia (artigianato componibile)
+var craft_tab := 0
+var craft_row := 0
+var craft_vals: Array = [[0, 0, 0, 0, 1], [0, 0], [1, 0, 0, 1], [0, 0, 0, 1]]
+
+
+func craft_ids() -> Array:
+	var sl := Forge.slots(craft_tab)
+	var out: Array = []
+	for i in sl.size():
+		var opts: Array = sl[i][1]
+		var vi: int = clampi(int(craft_vals[craft_tab][i]), 0, opts.size() - 1)
+		out.append(opts[vi][0])
+	return out
+
+
+func craft_preview() -> Dictionary:
+	return Forge.make(craft_tab, craft_ids(), player)
+
+
+func craft_afford(cost: Dictionary) -> bool:
+	for k in cost:
+		if int(player.mats.get(k, 0)) < int(cost[k]):
+			return false
+	return true
+
+
+## cambia scheda o scelta nella forgia (riga 0 = schede, ultima = CREA)
+func craft_step(dx: int) -> void:
+	if craft_row == 0:
+		craft_tab = (craft_tab + dx + Forge.TABS.size()) % Forge.TABS.size()
+		snd("page")
+		return
+	var sl := Forge.slots(craft_tab)
+	var i := craft_row - 1
+	if i >= sl.size():
+		return
+	var n: int = (sl[i][1] as Array).size()
+	craft_vals[craft_tab][i] = (int(craft_vals[craft_tab][i]) + dx + n) % n
+	snd("page")
+
+
+func craft_make() -> void:
+	var res := Forge.make(craft_tab, craft_ids(), player, true)
+	if str(res.get("err", "")) != "":
+		say(str(res["err"]))
+		return
+	var cost: Dictionary = res["cost"]
+	if not craft_afford(cost):
+		say("MATERIALI INSUFFICIENTI")
+		snd("hurt")
+		return
+	var it: Dictionary = res["item"]
+	match craft_tab:
+		0:
+			if player.wslots[1] == null:
+				player.wslots[1] = it
+				player.wcur = 1
+				say("FORGIATA E IMPUGNATA: %s" % str(it["nm"]).to_upper())
+			elif player.bag_free() > 0:
+				player.bag.append({"k": "w", "w": it})
+				say("FORGIATA, IN BORSA: %s   (I PER EQUIPAGGIARE)" % str(it["nm"]).to_upper())
+			else:
+				say("BORSA PIENA: LIBERA SPAZIO CON I")
+				return
+		1:
+			var rc: Dictionary = (it.get("rc", {}) as Dictionary).duplicate()
+			for k in cost:
+				rc[k] = int(rc.get(k, 0)) + int(cost[k])
+			it["rc"] = rc
+			player.wslots[player.wcur] = it
+			say("MODIFICATA: %s" % Rpg.wname(it).to_upper())
+		2:
+			var sl := str(it["slot"])
+			if not player.armor.has(sl):
+				player.armor[sl] = it
+				say("INDOSSI: %s" % str(it["n"]))
+			elif player.bag_free() > 0:
+				player.bag.append({"k": "a", "a": it})
+				say("IN BORSA: %s   (I PER INDOSSARE)" % str(it["n"]))
+			else:
+				say("BORSA PIENA: LIBERA SPAZIO CON I")
+				return
+		_:
+			var id := str(it["id"])
+			if int(player.items.get(id, 0)) >= 9:
+				say("SCORTA PIENA (MAX 9)")
+				return
+			if int(player.items.get(id, 0)) == 0 and player.bag_free() <= 0:
+				say("BORSA PIENA: LIBERA SPAZIO CON I")
+				return
+			player.brews[id] = {"n": it["n"], "fx": it["fx"]}
+			player.items[id] = int(player.items.get(id, 0)) + 1
+			belt_auto(id)
+			say("%s IN BORSA%s" % [str(it["n"]), ": Z CAMBIA, X USA" if player.belt.has(id) else " (CINTURA PIENA: AGGIUNGILA CON I)"])
+	for k in cost:
+		player.mats[k] = int(player.mats[k]) - int(cost[k])
+		if int(player.mats[k]) <= 0:
+			player.mats.erase(k)
+	player.apply_stats()
+	snd("buy")
+	burst(player.position, Color(1.0, 0.85, 0.5), 14, 40.0, 0.5)
+	save_game()
+
+
+# ------------------------------------------------------------------ borsa ed equipaggiamento (il mondo non si ferma)
+const INV_TABS := ["TUTTO", "ARMI", "ARMAT.", "POZIONI", "MATER.", "RELIQ."]
+const ITEM_COL := {"infuso": "erba", "arrosto": "carne", "forza": "fungo", "pelle": "osso", "fuoco": "carne"}
+var inv_open := false
+var inv_tab := 0
+var inv_cell := 0
+var inv_side := 1          # 0 = personaggio (slot), 1 = borsa
+var inv_slot := 0          # 0-1 armi, 2-4 armatura, 5-8 cintura, 9-11 reliquie
+var inv_scroll := 0
+var inv_confirm := ""
+var inv_confirm_t := 0.0
+var inv_back_t := -1.0
+var inv_back_used := false
+
+
+## voci mostrate nella borsa per la scheda scelta
+func inv_list(tab: int) -> Array:
+	var out: Array = []
+	if tab in [0, 1]:
+		for i in player.bag.size():
+			if str(player.bag[i]["k"]) == "w":
+				out.append({"k": "w", "w": player.bag[i]["w"], "bi": i})
+	if tab in [0, 2]:
+		for i in player.bag.size():
+			if str(player.bag[i]["k"]) == "a":
+				out.append({"k": "a", "a": player.bag[i]["a"], "bi": i})
+	if tab in [0, 3]:
+		var ids: Array = []
+		for id in ITEM_ORDER:
+			if int(player.items.get(id, 0)) > 0:
+				ids.append(id)
+		for id in player.items:
+			if not ids.has(id) and int(player.items[id]) > 0:
+				ids.append(id)
+		for id in ids:
+			out.append({"k": "b", "id": id, "n": int(player.items[id]), "eq": player.belt.has(id)})
+	if tab in [0, 5]:
+		for rr in Relics.LIST:
+			var rid := str(rr["id"])
+			if player.relic_own(rid) > 0:
+				out.append({"k": "r", "id": rid, "n": player.relic_own(rid), "eq": player.relic_eq.has(rid)})
+	if tab in [0, 4]:
+		for mid in MAT_ORDER:
+			if int(player.mats.get(mid, 0)) > 0:
+				out.append({"k": "m", "id": mid, "n": int(player.mats[mid])})
+	return out
+
+
+## colore della fiala di una pozione (base della ricetta)
+func brew_base(id: String) -> String:
+	if id.begins_with("b:"):
+		return id.split(":")[1]
+	return str(ITEM_COL.get(id, "erba"))
+
+
+## cosa c'e' nello slot n del personaggio (null se vuoto)
+func inv_slot_entry(n: int):
+	if n <= 1:
+		return null if player.wslots[n] == null else {"k": "w", "w": player.wslots[n]}
+	if n <= 4:
+		var sl: String = Forge.PIECES[n - 2]
+		return {"k": "a", "a": player.armor[sl]} if player.armor.has(sl) else null
+	if n <= 8:
+		var bi := n - 5
+		if bi < player.belt.size():
+			var id: String = player.belt[bi]
+			return {"k": "b", "id": id, "n": int(player.items.get(id, 0)), "eq": true}
+		return null
+	var ri := n - 9
+	if ri < player.relic_eq.size():
+		var rid: String = player.relic_eq[ri]
+		return {"k": "r", "id": rid, "n": player.relic_own(rid), "eq": true}
+	return null
+
+
+func inv_selected():
+	if inv_side == 0:
+		return inv_slot_entry(inv_slot)
+	var lst := inv_list(inv_tab)
+	return lst[inv_cell] if inv_cell < lst.size() else null
+
+
+func inv_toggle() -> void:
+	inv_open = not inv_open
+	inv_confirm = ""
+	if inv_open:
+		inv_side = 1
+		inv_cell = clampi(inv_cell, 0, maxi(0, inv_list(inv_tab).size() - 1))
+	snd("page")
+
+
+## confronto con il pezzo indossato: [nome, segno, testo]
+func inv_compare(e: Dictionary) -> Array:
+	var out: Array = []
+	if str(e["k"]) == "w":
+		var cur: Dictionary = player.weapon()
+		var a := _wvals(e["w"])
+		var b := _wvals(cur)
+		for k in [["DANNO", "b", 100.0, "%"], ["VELOCITA'", "sp", 100.0, "%"], ["CRITICO", "cr", 100.0, "%"], ["PORTATA", "rc", 1.0, ""], ["STAMINA", "st", -100.0, "%"]]:
+			var d := (float(a[k[1]]) - float(b[k[1]])) * float(k[2])
+			if absf(d) >= 0.5:
+				out.append([k[0], d, "%+d%s" % [int(round(d * (1.0 if float(k[2]) > 0.0 else -1.0))), k[3]]])
+	elif str(e["k"]) == "a":
+		var sl := str(e["a"]["slot"])
+		var cur_st: Dictionary = player.armor[sl]["st"] if player.armor.has(sl) else {}
+		var new_st: Dictionary = e["a"]["st"]
+		for k in Forge.ASTAT_N:
+			var d := float(new_st.get(k, 0.0)) - float(cur_st.get(k, 0.0))
+			var pct: bool = k in Forge.PCT
+			if absf(d) < (0.004 if pct else 0.05):
+				continue
+			var good := d if k != "mv" or true else d
+			out.append([Forge.ASTAT_N[k], good, ("%+.1f%%" % (d * 100.0)) if pct else ("%+.2f/s" % d if k == "rg" else "%+d" % int(round(d)))])
+		if cur_st.is_empty():
+			out.push_front(["SLOT VUOTO", 1.0, ""])
+	return out
+
+
+func _wvals(w: Dictionary) -> Dictionary:
+	var m: Dictionary = w.get("mods", {})
+	return {"b": float(w["b"]), "sp": float(m.get("sp", 0.0)), "cr": float(m.get("cr", 0.0)) + 0.08 * (w["a"] as Array).count("acuta"),
+		"rc": float(m.get("rc", 0.0)), "st": float(m.get("st", 0.0))}
+
+
+## materiali restituiti smontando: meta' del costo di creazione (o in base alla rarita' per gli oggetti trovati)
+func salvage_of(e: Dictionary) -> Dictionary:
+	var src: Dictionary = {}
+	if str(e["k"]) == "w":
+		src = e["w"].get("rc", {})
+		if src.is_empty():
+			var r := int(e["w"]["r"])
+			return {"minerale": 1 + r, "legna": 1, "osso": r} if r > 0 else {"minerale": 1, "legna": 1}
+	elif str(e["k"]) == "a":
+		src = e["a"].get("rc", {"pelle": 2})
+	var out := {}
+	for k in src:
+		var n := int(src[k]) / 2
+		if n > 0:
+			out[k] = n
+	return out
+
+
+func inv_action(kind: String) -> void:
+	var e = inv_selected()
+	if e == null:
+		return
+	var k := str(e["k"])
+	match kind:
+		"equip":
+			if inv_side == 0:
+				_inv_unequip(e)
+			else:
+				_inv_equip(e)
+		"smonta":
+			if inv_side == 0 or not (k in ["w", "a"]):
+				say("SI SMONTANO SOLO ARMI E ARMATURE IN BORSA")
+				return
+			var sv := salvage_of(e)
+			player.bag.remove_at(int(e["bi"]))
+			var parts: Array = []
+			for mk in sv:
+				player.mats[mk] = int(player.mats.get(mk, 0)) + int(sv[mk])
+				parts.append("%d %s" % [int(sv[mk]), MAT_NAMES[mk]])
+			say("SMONTATO: " + (", ".join(parts) if not parts.is_empty() else "NULLA DI UTILE"))
+			snd("buy")
+		"getta":
+			var tag := "%s:%s:%d" % [k, str(e.get("id", "")), int(e.get("bi", -1))]
+			if inv_confirm != tag or inv_confirm_t <= 0.0:
+				inv_confirm = tag
+				inv_confirm_t = 2.5
+				say("PREMI DI NUOVO PER GETTARE")
+				return
+			inv_confirm = ""
+			if inv_side == 0:
+				say("TOGLILO PRIMA DI GETTARLO")
+				return
+			match k:
+				"w":
+					player.bag.remove_at(int(e["bi"]))
+					drop_loot(player.position + Vector2(0, 12), e["w"])
+				"a":
+					player.bag.remove_at(int(e["bi"]))
+					drop_loot(player.position + Vector2(0, 12), {"k": "a", "a": e["a"]})
+				"r":
+					var rid := str(e["id"])
+					player.relics[rid] = player.relic_own(rid) - 1
+					if player.relic_own(rid) <= 0:
+						player.relics.erase(rid)
+						player.relic_eq.erase(rid)
+					drop_loot(player.position + Vector2(0, 12), {"k": "relic", "id": rid})
+				"b":
+					var id := str(e["id"])
+					player.items[id] = int(player.items[id]) - 1
+					if int(player.items[id]) <= 0:
+						player.items.erase(id)
+						player.belt.erase(id)
+				"m":
+					player.mats.erase(str(e["id"]))
+			say("GETTATO")
+			snd("page")
+	player.apply_stats()
+	player.hp = minf(player.hp, player.max_hp)
+	inv_cell = clampi(inv_cell, 0, maxi(0, inv_list(inv_tab).size() - 1))
+
+
+func _inv_equip(e: Dictionary) -> void:
+	match str(e["k"]):
+		"w":
+			var bi := int(e["bi"])
+			if player.wslots[1] == null:
+				player.wslots[1] = e["w"]
+				player.bag.remove_at(bi)
+				player.wcur = 1
+			else:
+				var old: Dictionary = player.wslots[player.wcur]
+				player.wslots[player.wcur] = e["w"]
+				player.bag[bi] = {"k": "w", "w": old}
+			say("IMPUGNI: %s" % Rpg.wname(player.weapon()).to_upper())
+		"a":
+			var bi := int(e["bi"])
+			var sl := str(e["a"]["slot"])
+			if player.armor.has(sl):
+				player.bag[bi] = {"k": "a", "a": player.armor[sl]}
+			else:
+				player.bag.remove_at(bi)
+			player.armor[sl] = e["a"]
+			say("INDOSSI: %s" % str(e["a"]["n"]))
+		"b":
+			var id := str(e["id"])
+			if player.belt.has(id):
+				player.belt.erase(id)
+				say("TOLTA DALLA CINTURA")
+			elif player.belt.size() >= player.BELT_MAX:
+				say("CINTURA PIENA (4): TOGLINE UNA")
+				return
+			else:
+				player.belt.append(id)
+				say("NELLA CINTURA: Z CAMBIA, X USA")
+		"r":
+			var rid := str(e["id"])
+			if player.relic_eq.has(rid):
+				player.relic_eq.erase(rid)
+				say("RELIQUIA TOLTA: %s" % Relics.info(rid)["n"])
+			elif player.relic_eq.size() >= player.RELIC_MAX:
+				say("PUOI INDOSSARE SOLO 3 RELIQUIE: TOGLINE UNA")
+				return
+			else:
+				player.relic_eq.append(rid)
+				say("RELIQUIA INDOSSATA: %s" % Relics.info(rid)["n"])
+		"m":
+			say("MATERIALE PER LA FORGIA (AL FALO', C)")
+			return
+	snd("page")
+
+
+func _inv_unequip(e: Dictionary) -> void:
+	var n := inv_slot
+	if n <= 1:
+		if player.wslots[1 - n] == null:
+			say("TI SERVE ALMENO UN'ARMA")
+			return
+		if player.bag_free() <= 0:
+			say("BORSA PIENA")
+			return
+		player.bag.append({"k": "w", "w": player.wslots[n]})
+		player.wslots[n] = null
+		if n == 0:
+			player.wslots[0] = player.wslots[1]
+			player.wslots[1] = null
+		player.wcur = 0
+		say("ARMA RIPOSTA IN BORSA")
+	elif n <= 4:
+		if player.bag_free() <= 0:
+			say("BORSA PIENA")
+			return
+		var sl: String = Forge.PIECES[n - 2]
+		player.bag.append({"k": "a", "a": player.armor[sl]})
+		player.armor.erase(sl)
+		say("ARMATURA RIPOSTA IN BORSA")
+	elif n <= 8:
+		player.belt.erase(str(e["id"]))
+		say("TOLTA DALLA CINTURA")
+	else:
+		player.relic_eq.erase(str(e["id"]))
+		say("RELIQUIA TOLTA")
+	snd("page")
+
+
+func inv_move(dx: int, dy: int) -> void:
+	if inv_side == 0:
+		if dx > 0:
+			inv_side = 1
+			return
+		if dy != 0:
+			inv_slot = (inv_slot + dy + 12) % 12
+		elif dx < 0:
+			inv_slot = (inv_slot + 11) % 12
+		return
+	var n := inv_list(inv_tab).size()
+	var col := inv_cell % 12
+	if dx < 0 and col == 0:
+		inv_side = 0
+		return
+	var nc := inv_cell + dx + dy * 12
+	if n > 0:
+		inv_cell = clampi(nc, 0, n - 1) if (dy == 0 or (nc >= 0 and nc < n)) else inv_cell
+	var row := inv_cell / 12
+	if row < inv_scroll:
+		inv_scroll = row
+	elif row > inv_scroll + 2:
+		inv_scroll = row - 2
+
+
+func inv_input(ev: InputEvent) -> bool:
+	var key: bool = ev is InputEventKey and ev.pressed
+	var pad: bool = ev is InputEventJoypadButton and ev.pressed
+	if (key and not ev.echo and (ev.keycode == KEY_I or ev.keycode == KEY_ESCAPE)) or (pad and ev.button_index == JOY_BUTTON_B):
+		inv_toggle()
+		return true
+	if ev.is_action_pressed("ui_left", true) or (key and ev.keycode in [KEY_A]) or (pad and ev.button_index == JOY_BUTTON_DPAD_LEFT):
+		inv_move(-1, 0)
+	elif ev.is_action_pressed("ui_right", true) or (key and ev.keycode in [KEY_D]) or (pad and ev.button_index == JOY_BUTTON_DPAD_RIGHT):
+		inv_move(1, 0)
+	elif ev.is_action_pressed("ui_up", true) or (key and ev.keycode in [KEY_W]) or (pad and ev.button_index == JOY_BUTTON_DPAD_UP):
+		inv_move(0, -1)
+	elif ev.is_action_pressed("ui_down", true) or (key and ev.keycode in [KEY_S]) or (pad and ev.button_index == JOY_BUTTON_DPAD_DOWN):
+		inv_move(0, 1)
+	elif (key and not ev.echo and ev.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]) or (pad and ev.button_index == JOY_BUTTON_A):
+		inv_action("equip")
+	elif (key and not ev.echo and ev.keycode == KEY_X) or (pad and ev.button_index == JOY_BUTTON_X):
+		inv_action("smonta")
+	elif (key and not ev.echo and ev.keycode == KEY_G) or (pad and ev.button_index == JOY_BUTTON_Y):
+		inv_action("getta")
+	elif key and not ev.echo and ev.keycode == KEY_TAB:
+		inv_side = 1 - inv_side
+	elif (key and not ev.echo and ev.keycode == KEY_Q) or (pad and ev.button_index == JOY_BUTTON_LEFT_SHOULDER):
+		inv_tab = (inv_tab + INV_TABS.size() - 1) % INV_TABS.size()
+		inv_cell = 0
+		inv_scroll = 0
+		inv_side = 1
+	elif (key and not ev.echo and ev.keycode == KEY_E) or (pad and ev.button_index == JOY_BUTTON_RIGHT_SHOULDER):
+		inv_tab = (inv_tab + 1) % INV_TABS.size()
+		inv_cell = 0
+		inv_scroll = 0
+		inv_side = 1
+	elif ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		var hit: Array = hud.inv_hit(ev.position)
+		if hit.is_empty():
+			return true
+		match str(hit[0]):
+			"tab":
+				inv_tab = int(hit[1])
+				inv_cell = 0
+				inv_scroll = 0
+				inv_side = 1
+			"slot":
+				if inv_side == 0 and inv_slot == int(hit[1]):
+					inv_action("equip")
+				inv_side = 0
+				inv_slot = int(hit[1])
+			"cell":
+				var ci := int(hit[1]) + inv_scroll * 12
+				if ci < inv_list(inv_tab).size():
+					if inv_side == 1 and inv_cell == ci:
+						inv_action("equip")
+					inv_side = 1
+					inv_cell = ci
+	else:
+		return (ev is InputEventKey) or (ev is InputEventJoypadButton)   # gli altri tasti non arrivano al personaggio
+	return true
+
+
+## Back del pad: tocco = cambia oggetto, tenuto = apre/chiude la borsa
+func inv_pad_update(real: float) -> void:
+	if inv_confirm_t > 0.0:
+		inv_confirm_t -= real
+	if inv_back_t < 0.0:
+		return
+	inv_back_t += real
+	if inv_back_t >= 0.45 and not inv_back_used:
+		inv_back_used = true
+		inv_toggle()
 
 
 func craft_cost(rc: Dictionary, mat: String) -> int:
@@ -3412,7 +4003,7 @@ func craft_do(i: int) -> void:
 			w["u"] = int(w.get("u", 0)) + 1
 		"reliquia":
 			var rid := Relics.roll()
-			player.relics[rid] = player.rl(rid) + 1
+			relic_gain(rid, 1)
 			player.apply_stats()
 			say("RELIQUIA: %s" % Relics.info(rid)["n"])
 	for k in rc["cost"]:
@@ -4633,7 +5224,8 @@ func furnish(ty: String, i: int, r: Rect2i, inner: Rect2i) -> void:
 			spread("shelf_top", inner, "N", 3)
 			spread("wardrobe_top", inner, "W", 1)
 			corner_lamps(inner)
-			drop_loot(cell_pos(Vector2i(cx, cy + 3)), Rpg.make_weapon(3))
+			if randf() < 0.35:
+				drop_loot(cell_pos(Vector2i(cx, cy + 3)), Rpg.random_weapon([40, 45, 14, 1]))
 		"cucina":
 			wp("hearth_top", inner, "N", clampi(iw / 2 - 1, 0, maxi(iw - 2, 0)))
 			spread("shelf_top", inner, "N", 1)
@@ -4714,8 +5306,8 @@ func furnish(ty: String, i: int, r: Rect2i, inner: Rect2i) -> void:
 			wp("hearth_top", inner, "N", clampi(iw / 2 - 1, 0, maxi(iw - 2, 0)))
 			try_place("anvil_top", Vector2i(cx, inner.position.y + 2))
 			wp("rack_top", inner, "N", 0)
-			if i == 0:
-				drop_loot(cell_pos(Vector2i(inner.position.x + 1, inner.position.y + 2)), Rpg.make_weapon(randi_range(2, 3)))
+			if i == 0 and randf() < 0.5:
+				drop_loot(cell_pos(Vector2i(inner.position.x + 1, inner.position.y + 2)), Rpg.random_weapon([30, 50, 18, 2]))
 			spread("barrel_top", inner, "E", 2)
 			spread("sack_top", inner, "W", 2)
 			corner_lamps(inner, false)
@@ -4952,7 +5544,7 @@ func populate_dungeon() -> void:
 			if c != Vector2i(-1, -1):
 				var pick: String = ["grave_slab_0", "tomb", "skullpile", "barrel_top", "crate_top", "coffin", "statue_top", "column_top"][randi() % 8]
 				try_place(pick, c)
-		if randf() < 0.45:
+		if randf() < 0.18:
 			var cc := rand_cell(inner)
 			if cc != Vector2i(-1, -1):
 				add_prop("chest", cc)
@@ -5220,6 +5812,7 @@ func enemy_died(e: Enemy) -> void:
 		e.sref["alive"] = false
 		e.sref["node"] = null
 	quest_event("kill", e.kind, e.champ)
+	e.death_trait()
 	if e.kind == "ooze" and not e.is_boss:
 		for i in 2:
 			var sp := spawn_enemy("ooze_small", e.position + Vector2(randf_range(-9, 9), randf_range(-6, 6)), 1.0, false, Color.WHITE)
@@ -5237,7 +5830,7 @@ func enemy_died(e: Enemy) -> void:
 		say("SERIE x%d!" % chain)
 		burst(player.position, Color(1.0, 0.75, 0.3), 24, 60.0, 0.6)
 		snd("level")
-	var gain0 := int(round(e.xp * e.souls_mult * (1.0 + 0.1 * player.r("fortuna") + 0.06 * player.rl("moneta")) * chain_mult() * (2.0 if player.zmode == 1 else 1.0)))
+	var gain0 := int(round(e.xp * e.souls_mult * (1.0 + 0.1 * player.r("fortuna") + 0.02 * player.a("fort") + 0.06 * player.rl("moneta")) * chain_mult() * (2.0 if player.zmode == 1 else 1.0)))
 	run_souls_total += gain0
 	drop(e.position, "soul", gain0)
 	if true:
@@ -5386,7 +5979,7 @@ func try_level_up() -> void:
 	if player.souls < c:
 		say("ANIME INSUFFICIENTI")
 		return
-	picks = Upgrades.roll(player.rk)
+	picks = Stats.options(player.attr)
 	if picks.is_empty():
 		say("HAI RAGGIUNTO LA VETTA")
 		return
@@ -5406,7 +5999,7 @@ func choose(i: int) -> void:
 	var u: Dictionary = picks[i]
 	player.souls -= Upgrades.cost(player.lv)
 	player.lv += 1
-	player.rk[u["id"]] = player.r(u["id"]) + 1
+	player.attr[u["id"]] = player.a(u["id"]) + 1
 	player.apply_stats()
 	player.hp = player.max_hp
 	player.st = player.max_st
@@ -5415,6 +6008,10 @@ func choose(i: int) -> void:
 	snd("level")
 	picks = []
 	save_game()
+	if player.souls >= Upgrades.cost(player.lv):
+		var keep := pick_sel
+		try_level_up()
+		pick_sel = clampi(keep, 0, maxi(0, picks.size() - 1))
 
 
 func grant_grace() -> void:
@@ -5474,6 +6071,8 @@ func drop_loot(pos: Vector2, item: Dictionary) -> void:
 		icon = "relic_" + str(item["id"])
 	elif item["k"] == "shard":
 		icon = "soul"
+	elif item["k"] == "a":
+		icon = "ai_" + str(item["a"]["slot"])
 	elif item["k"] != "tome":
 		icon = str(Rpg.FAM[item["f"]]["icon"])
 	var p := Prop.new()
@@ -5511,6 +6110,51 @@ func loot_tome() -> Dictionary:
 	return {"k": "tome", "s": pool[randi() % pool.size()]}
 
 
+## contenuto di uno scrigno: di solito anime e materiali; armi, reliquie e tomi sono rari
+func chest_loot(p: Prop) -> void:
+	var tier := 0
+	if area == "world":
+		tier = int(Game.BIO[biome_at(int(p.position.x / Game.TS), int(p.position.y / Game.TS))]["tier"])
+	elif not dun.is_empty():
+		tier = int(Game.BIO[int(dun.get("bio", 1))]["tier"])
+	var gold: bool = p.rare
+	var got: Array = []
+	# anime (la moneta del gioco)
+	var souls := int(randi_range(150, 300) if gold else randi_range(40, 90)) * (1.0 + 0.5 * tier)
+	var parts := 5 if gold else 3
+	for i in parts:
+		drop(p.position + Vector2(randf_range(-6, 6), randf_range(2, 8)), "soul", maxi(1, int(souls) / parts))
+	got.append("%d ANIME" % int(souls))
+	# materiali per l'artigianato
+	var kinds: Array = ["erba", "fungo", "legna", "minerale", "pelle", "osso"]
+	kinds.shuffle()
+	for i in (3 if gold else randi_range(1, 2)):
+		var n := randi_range(2, 4) if gold else randi_range(1, 3)
+		add_mat(str(kinds[i]), n)
+		got.append("%d %s" % [n, str(kinds[i]).to_upper()])
+	# a volte un consumabile
+	if randf() < (0.5 if gold else 0.25):
+		var it: String = ["arrosto", "infuso", "pelle", "forza", "fuoco"][randi() % 5]
+		add_item(it, 1)
+		got.append(it.to_upper())
+	# oggetti rari
+	if randf() < (0.4 if gold else 0.07):
+		drop_loot(p.position + Vector2(randf_range(-6, 6), randf_range(2, 8)), Rpg.random_weapon([0, 70, 27, 3] if gold else [65, 30, 5, 0]))
+		got.append("UN'ARMA")
+	if randf() < (0.3 if gold else 0.04):
+		drop_relic(p.position)
+		got.append("UNA RELIQUIA")
+	if randf() < (0.15 if gold else 0.03):
+		var tm := loot_tome()
+		if not tm.is_empty():
+			drop_loot(p.position + Vector2(randf_range(-8, 8), randf_range(2, 10)), tm)
+			got.append("UN TOMO")
+	if gold and randf() < 0.25:
+		grant_grace()
+		return   # la grazia ha gia' il suo messaggio
+	say(("SCRIGNO PREZIOSO: " if gold else "SCRIGNO: ") + ", ".join(got))
+
+
 func maybe_drop(pos: Vector2, w_chance: float, weights: Array, tome_chance: float) -> void:
 	if randf() < w_chance:
 		drop_loot(pos + Vector2(randf_range(-6, 6), randf_range(2, 8)), Rpg.random_weapon(weights))
@@ -5524,10 +6168,10 @@ func take_item(p: Prop) -> void:
 		bind_spirit(str(it["id"]))
 	elif it["k"] == "relic":
 		var rid: String = it["id"]
-		player.relics[rid] = player.rl(rid) + 1
+		relic_gain(rid, 1)
 		var inf: Dictionary = Relics.info(rid)
 		player.apply_stats()
-		say("RELIQUIA: %s  x%d   %s" % [inf["n"], player.rl(rid), inf["d"]])
+		say("RELIQUIA: %s  x%d   %s%s" % [inf["n"], player.relic_own(rid), inf["d"], "" if player.relic_eq.has(rid) else "   (IN BORSA: INDOSSALA CON I)"])
 		snd("level")
 		save_game()
 	elif it["k"] == "tome":
@@ -5536,16 +6180,25 @@ func take_item(p: Prop) -> void:
 			player.known.append(sp)
 		say("MAGIA APPRESA: %s   (al campo: Z / X per assegnarla)" % Rpg.SPELLS[sp]["n"])
 		snd("level")
+	elif it["k"] == "a":
+		if player.bag_free() <= 0:
+			say("BORSA PIENA: LIBERA SPAZIO CON I")
+			return
+		player.bag.append({"k": "a", "a": it["a"]})
+		say("IN BORSA: %s" % str(it["a"]["n"]))
+		snd("page")
 	else:
 		if player.wslots[1] == null:
 			player.wslots[1] = it
 			player.wcur = 1
+			say("EQUIPAGGIATO: %s  [%s]" % [Rpg.wname(it), Rpg.RARITY[int(it["r"])]["n"]])
+		elif player.bag_free() > 0:
+			player.bag.append({"k": "w", "w": it})
+			say("IN BORSA: %s  [%s]   (I PER EQUIPAGGIARE)" % [Rpg.wname(it), Rpg.RARITY[int(it["r"])]["n"]])
 		else:
-			var old: Dictionary = player.wslots[player.wcur]
-			player.wslots[player.wcur] = it
-			drop_loot(player.position + Vector2(0, 10), old)
+			say("BORSA PIENA: LIBERA SPAZIO CON I")
+			return
 		player.refresh_weapon()
-		say("EQUIPAGGIATO: %s  [%s]" % [Rpg.wname(it), Rpg.RARITY[int(it["r"])]["n"]])
 		snd("page")
 	props.erase(p)
 	p.queue_free()
@@ -5617,6 +6270,7 @@ func pick_target(pos: Vector2) -> Node2D:
 
 
 func clear_horde() -> void:
+	horde_age = 0.0
 	for e in enemies.duplicate():
 		if e.horde:
 			burst(e.position, Color(0.8, 0.2, 0.3), 8, 40.0, 0.4)
@@ -5627,15 +6281,17 @@ func clear_horde() -> void:
 func horde_update(real: float) -> void:
 	if player.zmode != 1:
 		return
+	horde_age += real
 	horde_t -= real
 	if horde_t > 0.0:
 		return
-	horde_t = 2.6
+	horde_t = maxf(0.7, 1.6 - horde_age / 60.0)   # ondate sempre piu' fitte
 	var alive := 0
 	for e in enemies:
 		if e.horde:
 			alive += 1
-	if alive >= 34:
+	var cap := mini(110, 45 + int(horde_age / 3.0))
+	if alive >= cap:
 		return
 	var pool: Array = []
 	var tint := Color.WHITE
@@ -5646,10 +6302,17 @@ func horde_update(real: float) -> void:
 		tint = b["tint"]
 	else:
 		pool = Game.BIO[int(dun.get("bio", 1))]["pool"]
-	var n := 3 + player.lv / 10
+	# a gruppi: ogni ondata arriva da una o due direzioni, appena fuori dallo schermo
+	var n := mini(cap - alive, 6 + player.lv / 6 + int(horde_age / 15.0))
+	var dirs: Array = [randf() * TAU]
+	if n > 8:
+		dirs.append(dirs[0] + PI + randf_range(-0.8, 0.8))
 	for i in n:
-		for att in 6:
-			var pos := player.position + Vector2.from_angle(randf() * TAU) * randf_range(190.0, 240.0)
+		var a0: float = dirs[i % dirs.size()]
+		for att in 12:
+			var pos := player.position + Vector2.from_angle(a0 + randf_range(-0.6, 0.6)) * randf_range(250.0, 330.0)
+			if att >= 8:
+				pos = player.position + Vector2.from_angle(randf() * TAU) * randf_range(220.0, 320.0)
 			if free_at(pos, 5.0):
 				var e := spawn_enemy(pool[randi() % pool.size()], pos, 0.55, false, tint)
 				e.horde = true
@@ -5994,6 +6657,13 @@ func _handle_menu_click(pos: Vector2) -> bool:
 		class_sel = clampi(floori((pos.x - 8.0) / 116.0), 0, 3)
 		start_game({}, class_ids[class_sel])
 		return true
+	if state == "pick" and not run_mode:
+		var ri := floori((pos.y - 46.0) / 20.0)
+		if pos.x < 20.0 or pos.x > 300.0 or ri < 0 or ri >= picks.size():
+			return false
+		pick_sel = ri
+		choose(ri)
+		return true
 	if state == "pick":
 		if pos.y < 52.0 or pos.y > 202.0 or pos.x < 14.0 or pos.x > 466.0:
 			return false
@@ -6014,12 +6684,22 @@ func _handle_menu_click(pos: Vector2) -> bool:
 		travel_to(travel_list[index])
 		return true
 	if state == "craft":
-		var row := floori((pos.y - 78.0) / 18.0)
-		if pos.x < 65.0 or pos.x > 415.0 or row < 0 or row >= RECIPES.size() or pos.y >= 96.0 + row * 18.0:
-			return false
-		craft_sel = row
-		craft_do(craft_sel)
-		return true
+		# schede in alto; righe delle scelte a sinistra (meta' sinistra = indietro, destra = avanti); CREA sotto
+		if pos.y >= 70.0 and pos.y < 84.0 and pos.x >= 84.0 and pos.x < 396.0:
+			craft_tab = clampi(floori((pos.x - 84.0) / 78.0), 0, Forge.TABS.size() - 1)
+			craft_row = 0
+			return true
+		var nsl: int = Forge.slots(craft_tab).size()
+		var ri := floori((pos.y - 86.0) / 14.0)
+		if pos.x >= 84.0 and pos.x < 250.0 and ri >= 0 and ri < nsl:
+			craft_row = ri + 1
+			craft_step(1 if pos.x >= 190.0 else -1)
+			return true
+		if pos.x >= 84.0 and pos.x < 250.0 and ri == nsl:
+			craft_row = nsl + 1
+			craft_make()
+			return true
+		return false
 	if state == "controls":
 		state = ctrl_from
 		return true
@@ -6072,6 +6752,27 @@ func launch_editor() -> void:
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10:
 		launch_editor()
+		return
+	if ev is InputEventJoypadButton and ev.button_index == JOY_BUTTON_BACK and state == "play":
+		if ev.pressed:
+			inv_back_t = 0.0
+			inv_back_used = false
+		else:
+			if not inv_back_used:
+				if inv_open:
+					inv_toggle()
+				else:
+					item_cycle()
+			inv_back_t = -1.0
+		return
+	if inv_open:
+		if state != "play":
+			inv_open = false
+		elif inv_input(ev):
+			get_viewport().set_input_as_handled()
+			return
+	if state == "play" and ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_I:
+		inv_toggle()
 		return
 	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
 		if _handle_menu_click(ev.position):
@@ -6165,24 +6866,34 @@ func _unhandled_input(ev: InputEvent) -> void:
 			state = "menu"
 		return
 	if state == "craft":
-		var n: int = RECIPES.size()
+		var nrow: int = Forge.slots(craft_tab).size() + 2
 		if ev.is_action_pressed("ui_up"):
-			craft_sel = (craft_sel + n - 1) % n
+			craft_row = (craft_row + nrow - 1) % nrow
 		elif ev.is_action_pressed("ui_down"):
-			craft_sel = (craft_sel + 1) % n
+			craft_row = (craft_row + 1) % nrow
+		elif ev.is_action_pressed("ui_left"):
+			craft_step(-1)
+		elif ev.is_action_pressed("ui_right"):
+			craft_step(1)
+		elif (ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_Q) or (ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_LEFT_SHOULDER):
+			craft_tab = (craft_tab + Forge.TABS.size() - 1) % Forge.TABS.size()
+			craft_row = mini(craft_row, Forge.slots(craft_tab).size() + 1)
+		elif (ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_E) or (ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_RIGHT_SHOULDER):
+			craft_tab = (craft_tab + 1) % Forge.TABS.size()
+			craft_row = mini(craft_row, Forge.slots(craft_tab).size() + 1)
 		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
-			craft_do(craft_sel)
+			craft_make()
 		elif ev.is_action_pressed("ui_cancel"):
 			state = "menu"
 		return
 	if state == "menu":
 		if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_C:
-			craft_sel = 0
+			craft_row = 0
 			state = "craft"
 			snd("page")
 			return
 		if ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_X:
-			craft_sel = 0
+			craft_row = 0
 			state = "craft"
 			snd("page")
 			return
@@ -6209,10 +6920,10 @@ func _unhandled_input(ev: InputEvent) -> void:
 		elif ev.is_action_pressed("ui_cancel") or ev.is_action_pressed("interact"):
 			state = "play"
 	elif state == "pick":
-		if ev.is_action_pressed("ui_left"):
+		if ev.is_action_pressed("ui_left") or (not run_mode and ev.is_action_pressed("ui_up")):
 			pick_sel = (pick_sel + picks.size() - 1) % picks.size()
 			return
-		if ev.is_action_pressed("ui_right"):
+		if ev.is_action_pressed("ui_right") or (not run_mode and ev.is_action_pressed("ui_down")):
 			pick_sel = (pick_sel + 1) % picks.size()
 			return
 		if ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
@@ -6223,12 +6934,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 				state = "menu"
 			return
 		if ev is InputEventKey and ev.pressed and not ev.echo:
-			if ev.keycode == KEY_1:
-				choose(0)
-			elif ev.keycode == KEY_2:
-				choose(1)
-			elif ev.keycode == KEY_3:
-				choose(2)
+			if ev.keycode >= KEY_1 and ev.keycode <= KEY_7 and ev.keycode - KEY_1 < picks.size():
+				choose(ev.keycode - KEY_1)
 			elif ev.keycode == KEY_ESCAPE and not run_mode:
 				state = "menu"
 
@@ -6362,6 +7069,9 @@ func _selftest3() -> void:
 			print("T3 salvato lv=", d["player"]["lv"], " seed=", d["seed"], " fires=", d["persist"]["fires"].size())
 			player.lv = 1
 			player.rk = {}
+			player.attr = {}
+			player.armor = {}
+			player.brews = {}
 			start_game(d)
 			print("T3 ricaricato lv=", player.lv, " rk=", player.rk, " souls=", player.souls, " area=", area)
 			testing = true
@@ -7266,6 +7976,208 @@ func _process(_dt: float) -> void:
 		if tgs == 240:
 			print("SPIRIT nemici rimasti=", enemies.size(), " uccisi=", player.kills)
 			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--forgetest"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			for k in MAT_ORDER:
+				player.mats[k] = 999
+			var d0 := player.dmg()
+			var hp0 := player.max_hp
+			# tutte le combinazioni d'arma: quante sono?
+			var combos := 1
+			for t in 4:
+				var c := 1
+				for sl in Forge.slots(t):
+					c *= (sl[1] as Array).size()
+				print("FORGE scheda ", Forge.TABS[t], " combinazioni=", c)
+				combos *= c
+			# forgia un'arma a caso per famiglia
+			craft_tab = 0
+			for i in 7:
+				craft_vals[0] = [i, randi() % 4, randi() % 4, randi() % 8, 1 + randi() % 5]
+				craft_make()
+				var w: Dictionary = player.weapon()
+				print("FORGE arma: ", Rpg.wname(w), " r=", w["r"], " b=", snappedf(float(w["b"]), 0.01), " mods=", w.get("mods", {}), " a=", w["a"], " danno=", snappedf(player.dmg(), 0.1))
+			# modifiche ripetute
+			craft_tab = 1
+			for op in [0, 0, 1, 2, 3, 4, 5, 5, 6]:
+				craft_vals[1] = [op, randi() % 7]
+				craft_make()
+			var wm: Dictionary = player.weapon()
+			print("FORGE dopo 9 modifiche: ", Rpg.wdesc(wm), " u=", wm.get("u", 0), " costo x", Forge.mod_cost_mult(wm))
+			# armatura completa
+			craft_tab = 2
+			for pc in 3:
+				craft_vals[2] = [pc, randi() % 4, randi() % 8, 3 + randi() % 3]
+				craft_make()
+			player.apply_stats()
+			print("FORGE armatura: ", player.armor.keys(), " difesa=", snappedf(player.arm("df"), 0.01), " vita ", hp0, ">", player.max_hp, " spine=", snappedf(player.arm("th"), 0.01))
+			# pozioni
+			craft_tab = 3
+			craft_vals[3] = [0, 6, 6, 2]   # infuso di carne x2
+			craft_make()
+			craft_make()
+			craft_vals[3] = [2, 1, 3, 1]
+			craft_make()
+			print("FORGE borsa: ", item_ids(), " nomi=", item_ids().map(func(x): return item_name(x)))
+			player.hp = player.max_hp * 0.5
+			player.item_sel = item_ids().find("b:erba:carne,carne:3") if item_ids().has("b:erba:carne,carne:3") else 0
+			var dd := player.dmg()
+			item_use()
+			print("FORGE pozione usata: vita=", int(player.hp), "/", int(player.max_hp), " buffs=", player.buffs, " bval=", player.bval, " danno ", snappedf(dd, 0.1), ">", snappedf(player.dmg(), 0.1))
+			# salvataggio: le armi create e l'armatura sopravvivono al JSON
+			var js: Variant = JSON.parse_string(JSON.stringify({"w": player.wslots, "a": player.armor}))
+			var w2 := Rpg.clean(js["w"][player.wcur])
+			print("FORGE json arma: ", Rpg.wname(w2), " mods=", w2.get("mods", {}), " u=", w2.get("u", 0))
+			print("FORGE danno iniziale ", snappedf(d0, 0.1), " totale combinazioni (prodotto) ~", combos)
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--invtest"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			for k in MAT_ORDER:
+				player.mats[k] = 200
+			# forgia: due armi (la seconda va in borsa), armature (la seconda dello stesso pezzo in borsa), pozioni
+			craft_tab = 0
+			craft_vals[0] = [1, 0, 2, 1, 4]
+			craft_make()
+			craft_vals[0] = [4, 1, 1, 7, 5]
+			craft_make()
+			craft_vals[0] = [3, 0, 3, 0, 3]
+			craft_make()
+			craft_tab = 2
+			for v in [[0, 2, 1, 3], [1, 1, 1, 4], [2, 0, 7, 4], [0, 0, 2, 2]]:
+				craft_vals[2] = v
+				craft_make()
+			craft_tab = 3
+			for v in [[1, 6, 6, 3], [2, 2, 0, 2], [0, 0, 0, 2], [3, 5, 0, 1], [0, 4, 4, 1]]:
+				craft_vals[3] = v
+				craft_make()
+			for rid in ["pietra", "brace", "catena", "lanterna", "moneta"]:
+				relic_gain(rid, 1)
+			print("INV dopo forgia: armi=", player.wslots.map(func(w): return Rpg.wname(w) if w != null else "-"), " borsa=", player.bag.size(), " usate=", player.bag_used(), "/36 cintura=", player.belt, " reliquie indossate=", player.relic_eq)
+			print("INV rl(moneta) senza indossarla=", player.rl("moneta"), " rl(pietra)=", player.rl("pietra"))
+			inv_toggle()
+			var lst := inv_list(0)
+			print("INV voci TUTTO=", lst.size(), " tipi=", lst.map(func(e): return e["k"]))
+			# equipaggia la prima arma in borsa
+			inv_tab = 1
+			inv_cell = 0
+			var d0 := player.dmg()
+			var w_before := Rpg.wname(player.weapon())
+			inv_action("equip")
+			print("INV equip arma: ", w_before, " -> ", Rpg.wname(player.weapon()), " danno ", snappedf(d0, 0.1), ">", snappedf(player.dmg(), 0.1), " borsa armi=", inv_list(1).size())
+			# armatura: scambio con quella indossata
+			inv_tab = 2
+			inv_cell = 0
+			var df0 := player.arm("df")
+			print("INV confronto armatura: ", inv_compare(inv_list(2)[0]))
+			inv_action("equip")
+			print("INV equip armatura: difesa ", snappedf(df0, 0.01), ">", snappedf(player.arm("df"), 0.01))
+			# reliquie: la quarta non entra
+			inv_tab = 5
+			inv_cell = inv_list(5).map(func(e): return e["id"]).find("moneta")
+			inv_action("equip")
+			print("INV 4a reliquia: indossate=", player.relic_eq, " msg=", msg)
+			inv_cell = 0
+			inv_action("equip")   # toglie la prima
+			inv_cell = inv_list(5).map(func(e): return e["id"]).find("moneta")
+			inv_action("equip")
+			print("INV scambio reliquia: indossate=", player.relic_eq, " rl(moneta)=", player.rl("moneta"))
+			# cintura: la quinta pozione non entra
+			inv_tab = 3
+			print("INV pozioni=", inv_list(3).map(func(e): return [e["id"], e["eq"]]), " cintura=", player.belt)
+			# smonta un'armatura in borsa
+			inv_tab = 2
+			inv_cell = 0
+			var m0 := player.mats.duplicate()
+			print("INV smonta prevede: ", salvage_of(inv_list(2)[0]))
+			inv_action("smonta")
+			var gained := {}
+			for k in player.mats:
+				if int(player.mats[k]) != int(m0.get(k, 0)):
+					gained[k] = int(player.mats[k]) - int(m0.get(k, 0))
+			print("INV smontato: ", gained, " msg=", msg)
+			# getta: serve la conferma
+			inv_tab = 1
+			inv_cell = 0
+			var nb := player.bag.size()
+			inv_action("getta")
+			var nb1 := player.bag.size()
+			inv_action("getta")
+			print("INV getta: borsa ", nb, " > dopo 1 pressione ", nb1, " > dopo 2 ", player.bag.size())
+			# riempi la borsa e prova a raccogliere
+			while player.bag_free() > 0:
+				player.bag.append({"k": "w", "w": Rpg.make_weapon(0)})
+			var pr := Prop.new()
+			pr.item = Rpg.make_weapon(1)
+			props.append(pr)
+			take_item(pr)
+			print("INV borsa piena: usate=", player.bag_used(), " msg=", msg, " ancora a terra=", props.has(pr))
+			# salvataggio: borsa, cintura e reliquie sopravvivono al JSON
+			var js: Variant = JSON.parse_string(JSON.stringify({"bag": player.bag, "belt": player.belt, "relic_eq": player.relic_eq}))
+			print("INV json: borsa=", (js["bag"] as Array).size(), " cintura=", js["belt"], " reliquie=", js["relic_eq"])
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--invshot"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			for k in MAT_ORDER:
+				player.mats[k] = 60
+			craft_tab = 0
+			for v in [[1, 0, 2, 1, 4], [4, 1, 1, 7, 5], [3, 0, 3, 0, 3], [5, 2, 0, 5, 3]]:
+				craft_vals[0] = v
+				craft_make()
+			craft_tab = 2
+			for v in [[0, 2, 1, 3], [1, 1, 1, 4], [2, 0, 7, 4], [0, 0, 2, 2]]:
+				craft_vals[2] = v
+				craft_make()
+			craft_tab = 3
+			for v in [[1, 6, 6, 3], [2, 2, 0, 2], [0, 0, 0, 2], [3, 5, 0, 1], [0, 4, 4, 1]]:
+				craft_vals[3] = v
+				craft_make()
+			for rid in ["pietra", "brace", "catena", "lanterna", "moneta"]:
+				relic_gain(rid, 1)
+			player.apply_stats()
+			inv_toggle()
+			inv_cell = 3
+	if OS.get_cmdline_user_args().has("--uishot"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			for rid in ["pietra", "brace", "catena", "lanterna", "moneta"]:
+				player.relics[rid] = 1 + randi() % 2
+			for k in MAT_ORDER:
+				player.mats[k] = randi_range(1, 9)
+			add_item("arrosto", 2)
+			add_item("infuso", 1)
+			player.buffs["forza"] = 90.0
+			bind_spirit(str(Spirit.DATA.keys()[0]))
+		if tgs == 40:
+			player.mats["legna"] = int(player.mats["legna"]) + 2
+			player.relics["nodo"] = 1
+			say("SCRIGNO: 64 ANIME, 2 LEGNA, 3 OSSO, ARROSTO")
+		if tgs == 45 and OS.get_cmdline_user_args().has("--forgeshot"):
+			for k in MAT_ORDER:
+				player.mats[k] = randi_range(2, 14)
+			craft_tab = int(OS.get_cmdline_user_args()[-1]) if OS.get_cmdline_user_args()[-1].is_valid_int() else 0
+			craft_row = 2
+			craft_vals[0] = [1, 0, 2, 1, 3]
+			state = "craft"
+		if tgs == 50 and OS.get_cmdline_user_args().has("--chests"):
+			var cnt := 0
+			for pr in props:
+				if pr.kind == "chest":
+					cnt += 1
+			print("CHEST scrigni nel mondo caricato=", cnt)
+			var c0 := Vector2i(floori(player.position.x / Game.TS), floori(player.position.y / Game.TS))
+			for rr in [false, true, false]:
+				var ch := add_prop("chest", free_spot(c0 + Vector2i(3, 0), Vector2i(1, 1)))
+				ch.rare = rr
+				chest_loot(ch)
+				print("CHEST prezioso=", rr, " msg=", msg)
+			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--lvtest"):
 		tgs += 1
 		if tgs == 3:
@@ -7277,8 +8189,20 @@ func _process(_dt: float) -> void:
 			print("LV falo: stato=", state, " lv=", lv0)
 			try_level_up()
 			print("LV dopo try: stato=", state, " scelte=", picks.size())
+			if OS.get_cmdline_user_args().has("--shot"):
+				get_tree().create_timer(2.5).timeout.connect(func():
+					try_level_up()
+					pick_sel = 3)
+				return
 			choose(0)
 			print("LV dopo scelta: lv=", player.lv, " anime=", player.souls, " stato=", state, " costo prossimo=", Upgrades.cost(player.lv))
+			var d0 := player.dmg()
+			var h0 := player.max_hp
+			player.souls = 999999
+			for k in 6:
+				try_level_up()
+				choose(2)   # forza
+			print("ATTR ", player.attr, " vita ", h0, ">", player.max_hp, " danno ", d0, ">", player.dmg(), " stato=", state, " scelte=", picks.size())
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--aitest"):
 		tgs += 1
@@ -8344,7 +9268,7 @@ func _process(_dt: float) -> void:
 			var lost: Dictionary = stain_data.get("relics", {})
 			if lost.size() > 0:
 				for rk2 in lost:
-					player.relics[rk2] = player.rl(rk2) + int(lost[rk2])
+					relic_gain(rk2, int(lost[rk2]))
 				player.apply_stats()
 				say("RIPRENDI LE ANIME E LE RELIQUIE PERDUTE")
 			stain.queue_free()
@@ -8373,18 +9297,7 @@ func _process(_dt: float) -> void:
 					poi_bonus(str(p.get_meta("poi")), p.position)
 				p.spr.modulate = Color(0.5, 0.45, 0.55)
 				burst(p.position, Color(1, 0.8, 0.3), 20, 60.0, 0.6)
-				var inside := area.begins_with("int|")
-				if p.rare:
-					grant_grace()
-					maybe_drop(p.position, 1.0, [0, 35, 45, 20], 0.45)
-					drop_relic(p.position)
-				else:
-					say("SCRIGNO!")
-					if randf() < (0.3 if inside else 0.2):
-						drop_relic(p.position)
-					maybe_drop(p.position, 0.45 if inside else 0.25, [30, 45, 20, 5] if inside else [60, 30, 8, 2], 0.1)
-				for i in 4:
-					drop(p.position, "soul", randi_range(15, 30))
+				chest_loot(p)
 	if player != null and state == "play" and area == "world":
 		stream_update()
 		spawn_t -= real
@@ -8411,6 +9324,7 @@ func _process(_dt: float) -> void:
 		collect_pages()
 		update_minimap(real)
 		horde_update(real)
+		inv_pad_update(real)
 	if Engine.get_process_frames() % 2 == 0:
 		for f in flick:
 			f[2] += real * 22.0

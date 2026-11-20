@@ -4,6 +4,7 @@ extends Node2D
 var main
 var cls := "cavaliere"
 var rk := {}                 # gradi dei potenziamenti
+var attr := {}               # attributi scelti ai livelli: vig, res, for, des, int, fed, fort
 var hp := 100.0
 var max_hp := 100.0
 var st := 100.0
@@ -64,6 +65,15 @@ var riposta_cd := 0.0
 var parry_t := 0.0
 var mats := {}
 var buffs := {}
+var bval := {}           # potenza degli effetti delle pozioni create (b_dm, b_df, ...)
+var armor := {}          # pezzi d'armatura indossati: testa, torso, gambe
+var bag: Array = []      # armi e armature trasportate: {"k": "w", "w": arma} / {"k": "a", "a": pezzo}
+var belt: Array = []     # pozioni a portata di Z/X (max 4)
+var relic_eq: Array = [] # reliquie indossate (max 3): solo queste hanno effetto
+const BAG_MAX := 36
+const BELT_MAX := 4
+const RELIC_MAX := 3
+var brews := {}          # ricette delle pozioni create: id -> {n, fx}
 var items := {}         # consumabili creati, da usare a piacere: id -> quantita'
 var item_sel := 0
 var parry_cd := 0.0
@@ -72,14 +82,73 @@ var blade_ang := 0.0
 var blade_hit: Dictionary = {}
 var knife_t := 0.0
 var aim_world := Vector2.ZERO
+var wspr: Sprite2D          # arma impugnata, cambia con l'arma in uso
+var wspr_f := ""
 
 
+## effetto di una reliquia: conta solo se indossata
 func rl(id: String) -> int:
+	return int(relics.get(id, 0)) if relic_eq.has(id) else 0
+
+
+func relic_own(id: String) -> int:
 	return int(relics.get(id, 0))
+
+
+## caselle occupate nella borsa: armi, armature, pozioni e reliquie non indossate (i materiali hanno una sacca a parte)
+func bag_used() -> int:
+	var n := bag.size()
+	for id in items:
+		if int(items[id]) > 0:
+			n += 1
+	for id in relics:
+		if int(relics[id]) > 0 and not relic_eq.has(id):
+			n += 1
+	return n
+
+
+func bag_free() -> int:
+	return BAG_MAX - bag_used()
+
+
+## comandi del giocatore, bloccati mentre la borsa e' aperta (il mondo non si ferma)
+func act(a: String) -> bool:
+	return not main.inv_open and Input.is_action_just_pressed(a)
+
+
+func act_held(a: String) -> bool:
+	return not main.inv_open and Input.is_action_pressed(a)
 
 
 func r(id: String) -> int:
 	return int(rk.get(id, 0))
+
+
+## somma di una statistica su tutti i pezzi d'armatura
+func arm(k: String) -> float:
+	var s := 0.0
+	for pc in armor.values():
+		s += float((pc["st"] as Dictionary).get(k, 0.0))
+	return s
+
+
+## potenza di un effetto di pozione attivo (0 se non attivo)
+func bv(k: String) -> float:
+	return float(bval.get(k, 0.0)) if buffs.has(k) else 0.0
+
+
+func crit_now() -> float:
+	return crit + bv("b_cr")
+
+
+func a(id: String) -> int:
+	return int(attr.get(id, 0))
+
+
+## punti di attributo che contano per l'arma impugnata
+func wscale() -> float:
+	var w: Array = Stats.SCALE.get(str(weapon()["f"]), [0.5, 0.5, 0.0, 0.0])
+	return a("for") * float(w[0]) + a("des") * float(w[1]) + a("int") * float(w[2]) + a("fed") * float(w[3])
 
 
 func weapon() -> Dictionary:
@@ -90,22 +159,22 @@ func weapon() -> Dictionary:
 
 func apply_stats() -> void:
 	var c: Dictionary = Rpg.CLASSES[cls]
-	max_hp = c["hp"] + 15.0 * r("vigor") + 3.0 * float(lv - 1) + 6.0 * rl("pietra")
-	max_st = c["st"] + 12.0 * r("endur")
-	max_mana = c["mana"] + 12.0 * r("mente")
-	max_flasks = 3 + r("fiale")
-	speed = (c["spd"] + 2.0) * (1.0 + 0.04 * rl("lanterna"))
+	max_hp = c["hp"] + 15.0 * r("vigor") + 9.0 * a("vig") + arm("hp") + 3.0 * float(lv - 1) + 6.0 * rl("pietra")
+	max_st = c["st"] + 12.0 * r("endur") + 5.0 * a("res") + arm("st")
+	max_mana = c["mana"] + 12.0 * r("mente") + 4.0 * a("int") + arm("mn")
+	max_flasks = 3 + r("fiale") + a("fed") / 8
+	speed = (c["spd"] + 2.0) * (1.0 + 0.04 * rl("lanterna") + arm("mv"))
 	refresh_weapon()
 
 
 func refresh_weapon() -> void:
-	crit = 0.05 + 0.04 * r("crit") + Rpg.crit_bonus(weapon())
+	crit = 0.05 + 0.04 * r("crit") + 0.004 * a("des") + 0.005 * a("fort") + arm("cr") + Rpg.crit_bonus(weapon())
 
 
 func set_class(id: String) -> void:
 	cls = id
 	var c: Dictionary = Rpg.CLASSES[id]
-	spr.texture = Game.tex(c["spr"])
+	spr.texture = Game.tex(str(c["spr"]) + "_b")
 	wslots = [Rpg.make_weapon(0, c["weapon"]), null]
 	wcur = 0
 	spells = [c["spells"][0], c["spells"][1]]
@@ -123,14 +192,14 @@ func bd() -> float:
 
 
 func dmg() -> float:
-	return bd() * (1.0 + 0.12 * r("forza")) * (1.0 + float(weapon()["b"])) * (1.25 if buffs.has("forza") else 1.0)
+	return bd() * (1.0 + 0.12 * r("forza")) * (1.0 + Stats.PER_POINT * wscale()) * (1.0 + float(weapon()["b"])) * (1.25 if buffs.has("forza") else 1.0) * (1.0 + bv("b_dm"))
 
 
 func spell_pow() -> float:
-	var p := 1.0 + 0.12 * r("incanto") + 0.10 * r("mente")
+	var p := 1.0 + 0.12 * r("incanto") + 0.10 * r("mente") + 0.035 * a("int")
 	if str(weapon()["f"]) == "staff":
 		p *= 1.2
-	return p
+	return p * (1.0 + arm("sp") + bv("b_sp"))
 
 
 func setup(m) -> void:
@@ -139,6 +208,10 @@ func setup(m) -> void:
 	spr.texture = Game.tex("hero")
 	spr.offset = Vector2(0, -8)
 	add_child(spr)
+	wspr = Sprite2D.new()
+	wspr.centered = false
+	wspr.offset = Vector2(-12, -18)   # impugnatura dell'arma sull'origine: ruota attorno alla mano
+	spr.add_child(wspr)
 	apply_stats()
 	hp = max_hp
 	st = max_st
@@ -173,6 +246,33 @@ func setup(m) -> void:
 	set_class("cavaliere")
 
 
+## arma in mano: segue la mano, si specchia con il personaggio e oscilla durante i colpi
+func update_wspr() -> void:
+	var f := str(weapon()["f"])
+	if f != wspr_f:
+		wspr_f = f
+		wspr.texture = Game.tex("hw_" + f)
+	var sg := -1.0 if spr.flip_h else 1.0
+	wspr.flip_h = spr.flip_h
+	wspr.position = Vector2(5.5 * sg, spr.offset.y + 3.0)
+	var rot := 0.18
+	var ranged := f == "bow" or f == "staff"
+	if heavy_t > 0.0 and not ranged:
+		rot = -0.9   # carica il colpo pesante
+	elif atk_t > 0.0 and atk_dur > 0.0:
+		var pr := clampf(1.0 - atk_t / atk_dur, 0.0, 1.0)
+		if ranged:
+			rot = 0.18 - 0.35 * sin(pr * PI)   # rinculo
+		elif f == "spear" or f == "dagger":
+			rot = 1.4                           # affondo in avanti
+			wspr.position += Vector2(sg * 4.0 * sin(pr * PI), 0)
+		else:
+			rot = lerpf(-1.3, 2.0, pr)          # fendente
+	elif cast_t > 0.0:
+		rot = -0.25
+	wspr.rotation = rot * sg
+
+
 func set_limits() -> void:
 	cam.limit_right = Game.MW * Game.TS
 	cam.limit_bottom = Game.MH * Game.TS
@@ -187,7 +287,7 @@ func add_souls(n: int) -> void:
 func spend(c: float) -> bool:
 	if st <= 0.5:
 		return false
-	st = max(0.0, st - c * max(0.5, 1.0 - 0.06 * r("destr")))
+	st = max(0.0, st - c * max(0.4, 1.0 - 0.06 * r("destr") - 0.015 * a("des")))
 	st_delay = 0.75
 	return true
 
@@ -205,9 +305,13 @@ func _process(dt: float) -> void:
 			buffs[bk] = float(buffs[bk]) - dt
 			if float(buffs[bk]) <= 0.0:
 				buffs.erase(bk)
+				bval.erase(bk)
+	var rgn := arm("rg") + bv("b_rg")
+	if rgn > 0.0 and hp > 0.0:
+		hp = minf(max_hp, hp + rgn * dt)
 	parry_t -= dt
 	parry_cd -= dt
-	if Input.is_action_just_pressed("parry") and parry_cd <= 0.0 and parry_t <= 0.0 and atk_t <= 0.0 and dash_t <= 0.0 and drink_t <= 0.0 and spend(10.0):
+	if act("parry") and parry_cd <= 0.0 and parry_t <= 0.0 and atk_t <= 0.0 and dash_t <= 0.0 and drink_t <= 0.0 and spend(10.0):
 		parry_t = 0.26
 		parry_cd = 0.75
 		main.snd("swing")
@@ -226,8 +330,8 @@ func _process(dt: float) -> void:
 		combo = 0
 	st_delay -= dt
 	if st_delay <= 0.0:
-		st = min(max_st, st + 38.0 * (1.0 + 0.15 * r("ritmo")) * dt)
-	mana = min(max_mana, mana + 1.3 * float(Rpg.CLASSES[cls]["regen"]) * (1.0 + 0.1 * r("mente")) * dt)
+		st = min(max_st, st + 38.0 * (1.0 + 0.15 * r("ritmo") + 0.02 * a("res")) * dt)
+	mana = min(max_mana, mana + 1.3 * float(Rpg.CLASSES[cls]["regen"]) * (1.0 + 0.1 * r("mente") + 0.02 * a("int")) * dt)
 	spell_cd[0] = max(0.0, spell_cd[0] - dt)
 	spell_cd[1] = max(0.0, spell_cd[1] - dt)
 	if shield_t > 0.0:
@@ -237,12 +341,14 @@ func _process(dt: float) -> void:
 	if regen_t > 0.0:
 		regen_t -= dt
 		hp = min(max_hp, hp + regen_rate * dt)
-	var dir := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	var dir := Vector2.ZERO if main.inv_open else Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	if bool(main.settings["aim_manual"]):
 		if main.use_pad:
 			var aim := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down")
-			if aim.length() > 0.25:
-				face = aim.normalized()
+			if aim.length() > 0.4:
+				var strength := clampf((aim.length() - 0.4) / 0.6, 0.0, 1.0)
+				var step := (1.5 + 3.5 * strength * strength) * dt
+				face = Vector2.from_angle(face.angle() + clampf(angle_difference(face.angle(), aim.angle()), -step, step))
 			aim_world = position + face * 80.0
 		else:
 			aim_world = get_global_mouse_position()
@@ -255,7 +361,7 @@ func _process(dt: float) -> void:
 	if dir.length() > 0.1 and free and not bool(main.settings["aim_manual"]):
 		face = dir.normalized()
 	# telecamera: V / R3 passa da normale a Orda a Tattica e di nuovo normale
-	if Input.is_action_just_pressed("zoom"):
+	if act("zoom"):
 		cycle_zoom()
 	if zmode > 0 and main.area.begins_with("int|"):
 		set_zmode(0)
@@ -272,54 +378,54 @@ func _process(dt: float) -> void:
 	if zmode == 1:
 		auto_weapons(dt)
 	elif zmode == 2:
-		if Input.is_action_just_pressed("attack"):
+		if act("attack"):
 			var tp := position + face * 100.0
 			if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 				tp = get_global_mouse_position()
 			main.order_rally(tp)
-		if Input.is_action_just_pressed("heavy"):
+		if act("heavy"):
 			main.order_follow()
 	# cambio arma e magie
-	if Input.is_action_just_pressed("swap") and idle() and wslots[1 - wcur] != null:
+	if act("swap") and idle() and wslots[1 - wcur] != null:
 		wcur = 1 - wcur
 		refresh_weapon()
 		main.snd("page")
 		main.say("%s  [%s]" % [Rpg.wname(weapon()), Rpg.RARITY[int(weapon()["r"])]["n"]])
-	if Input.is_action_just_pressed("spell1"):
+	if act("spell1"):
 		cast(0)
-	if Input.is_action_just_pressed("spell2"):
+	if act("spell2"):
 		cast(1)
 	# rotolata
-	if Input.is_action_just_pressed("dash") and dash_cd <= 0.0 and dash_t <= 0.0 and drink_t <= 0.0 and spend(22.0):
+	if act("dash") and dash_cd <= 0.0 and dash_t <= 0.0 and drink_t <= 0.0 and spend(22.0):
 		dash_t = 0.28
 		dash_cd = 0.35
 		heavy_t = 0.0
 		dash_dir = dir.normalized() if dir.length() > 0.1 else face
-		inv = max(inv, 0.22 + 0.03 * r("agile"))
+		inv = max(inv, 0.22 + 0.03 * r("agile") + 0.004 * a("des"))
 		main.snd("roll")
 		main.burst(position, Color(0.6, 0.55, 0.8), 8, 20.0, 0.3)
 	# consumabili: Z cambia, X usa
-	if Input.is_action_just_pressed("item_next"):
+	if act("item_next"):
 		main.item_cycle()
-	if Input.is_action_just_pressed("item_use") and idle():
+	if act("item_use") and idle():
 		main.item_use()
 	# fiala
-	if Input.is_action_just_pressed("flask") and flasks > 0 and hp < max_hp and idle():
+	if act("flask") and flasks > 0 and hp < max_hp and idle():
 		drink_t = 0.85
 	if drink_t > 0.0:
 		drink_t -= dt
 		if drink_t <= 0.0:
 			flasks -= 1
-			hp = min(max_hp, hp + 40.0 + 8.0 * r("elisir"))
+			hp = min(max_hp, hp + 40.0 + 8.0 * r("elisir") + 2.5 * a("fed"))
 			main.snd("drink")
 			main.burst(position, Color(1.0, 0.7, 0.2), 14, 35.0, 0.6)
 			main.popup(position + Vector2(0, -16), "+", Color(1, 0.8, 0.3))
 	# attacchi
 	var w := weapon()
 	var f: Dictionary = Rpg.FAM[w["f"]]
-	if Input.is_action_pressed("attack") and atk_cd <= 0.0 and idle() and st > 0.0 and zmode == 0:
+	if act_held("attack") and atk_cd <= 0.0 and idle() and st > 0.0 and zmode == 0:
 		attack()
-	if Input.is_action_just_pressed("heavy") and idle() and st > 0.0 and zmode == 0 and spend(f["hc"]):
+	if act("heavy") and idle() and st > 0.0 and zmode == 0 and spend(float(f["hc"]) * Rpg.st_mult(w)):
 		heavy_t = f["hw"]
 		var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
 		if near != null and not bool(main.settings["aim_manual"]):
@@ -335,7 +441,7 @@ func _process(dt: float) -> void:
 			if f["ranged"]:
 				fire(w, f, true)
 			else:
-				cur_reach = float(f["reach"]) + 7.0
+				cur_reach = float(f["reach"]) + 7.0 + Rpg.reach_add(w)
 				cur_arc = float(f["arc"]) + 0.2
 				strike(cur_reach, cur_arc, f["hm"], 190.0, true)
 	var vel := Vector2.ZERO
@@ -348,7 +454,7 @@ func _process(dt: float) -> void:
 			slow = 0.3
 		if drink_t > 0.0:
 			slow = 0.35
-		vel = dir * speed * slow
+		vel = dir * speed * slow * (1.0 + bv("b_mv"))
 	if slow_t > 0.0:
 		vel *= 0.55
 	vel += kb
@@ -367,6 +473,7 @@ func _process(dt: float) -> void:
 	elif cast_t > 0.0:
 		tintc = Color(1.2, 1.1, 1.5)
 	spr.self_modulate = tintc
+	update_wspr()
 	spr.visible = not (inv > 0.0 and inv < 0.4 and int(t * 20.0) % 2 == 0 and dash_t <= 0.0)
 	if dash_t > 0.0:
 		spr.modulate = Color(1, 1, 1, 0.55)
@@ -380,7 +487,7 @@ func _process(dt: float) -> void:
 func attack() -> void:
 	var w := weapon()
 	var f: Dictionary = Rpg.FAM[w["f"]]
-	if not spend(float(f["lc"])):
+	if not spend(float(f["lc"]) * Rpg.st_mult(w)):
 		return
 	main.snd("swing")
 	var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
@@ -408,7 +515,7 @@ func attack() -> void:
 	atk_t = atk_dur
 	atk_cd = float(f["lcd"]) * (1.45 if big else 1.0) * cdm
 	kb += face * (110.0 if big else 60.0)
-	cur_reach = float(f["reach"]) * (1.28 if big else 1.0)
+	cur_reach = float(f["reach"]) * (1.28 if big else 1.0) + Rpg.reach_add(w)
 	cur_arc = float(f["arc"]) * (1.4 if big else 1.0)
 	strike(cur_reach, cur_arc, float(f["lm"]) * (1.7 if big else 1.0), 150.0 if big else 95.0, false)
 
@@ -422,7 +529,10 @@ func fire(w: Dictionary, f: Dictionary, heavy: bool) -> void:
 	if heavy:
 		pr = 5 if not magic else 0
 		aoe = 26.0 if magic else 0.0
-	main.spawn_parrow(position + Vector2(0, -6), face, 270.0 if heavy else 230.0, dmg() * mult, 0.9, pr, col, w, aoe, magic)
+	var dirf := face
+	if not magic:
+		dirf = face.rotated(deg_to_rad(randf_range(-1.0, 1.0) * maxf(0.0, 6.0 - 0.4 * a("des")) * (0.5 if heavy else 1.0)))
+	main.spawn_parrow(position + Vector2(0, -6), dirf, 270.0 if heavy else 230.0, dmg() * mult, 0.9, pr, col, w, aoe, magic)
 	kb -= face * 30.0
 
 
@@ -454,6 +564,21 @@ func strike(reach: float, arc: float, mult: float, force: float, heavy: bool) ->
 		main.shake(4.0 if heavy else 1.5)
 
 
+## un fulmine salta dal nemico colpito al piu' vicino
+func chain_from(e: Enemy, d: float) -> void:
+	var best: Enemy = null
+	var bd2 := 4900.0
+	for t in main.enemies:
+		if t != e and t.awake:
+			var d2: float = t.position.distance_squared_to(e.position)
+			if d2 < bd2:
+				bd2 = d2
+				best = t
+	if best != null:
+		best.hurt(d, (best.position - e.position).normalized(), 40.0, false)
+		main.add_bolt(e.position + Vector2(0, -6), best.position + Vector2(0, -6))
+
+
 ## effetti degli affissi e mana per colpo a segno
 func on_hit(e: Enemy, dealt: float, w: Dictionary) -> void:
 	mana = min(max_mana, mana + 0.7)
@@ -463,17 +588,7 @@ func on_hit(e: Enemy, dealt: float, w: Dictionary) -> void:
 		if randf() < 0.10 * rl("brace"):
 			e.apply_status("burn", 3.0, dmg() * 0.22)
 		if randf() < 0.12 * rl("catena"):
-			var best: Enemy = null
-			var bd2 := 4900.0
-			for t in main.enemies:
-				if t != e and t.awake:
-					var d2: float = t.position.distance_squared_to(e.position)
-					if d2 < bd2:
-						bd2 = d2
-						best = t
-			if best != null:
-				best.hurt(dealt * 0.5, (best.position - e.position).normalized(), 40.0, false)
-				main.add_bolt(e.position + Vector2(0, -6), best.position + Vector2(0, -6))
+			chain_from(e, dealt * 0.5)
 	if w.is_empty():
 		return
 	for a in w["a"]:
@@ -484,6 +599,11 @@ func on_hit(e: Enemy, dealt: float, w: Dictionary) -> void:
 				e.apply_status("burn", 3.0, dmg() * 0.22)
 			"sangue":
 				hp = min(max_hp, hp + dealt * 0.05)
+			"veleno":
+				e.apply_status("burn", 5.0, dmg() * 0.12)
+			"tuono":
+				if randf() < 0.25:
+					chain_from(e, dealt * 0.5)
 
 
 func cast(slot: int) -> void:
@@ -541,17 +661,17 @@ func cast(slot: int) -> void:
 		"cura":
 			for al in main.allies:
 				al.heal(0.3)
-			hp = min(max_hp, hp + max_hp * 0.24 * (0.8 + 0.2 * sp))
+			hp = min(max_hp, hp + max_hp * 0.24 * (0.8 + 0.2 * sp) * (1.0 + 0.03 * a("fed")))
 			main.burst(position, Color(0.4, 1.0, 0.5), 24, 40.0, 0.6)
 			main.popup(position + Vector2(0, -16), "+", Color(0.4, 1.0, 0.5))
 			main.snd("drink")
 		"rigenera":
 			regen_t = 8.0
-			regen_rate = max_hp * 0.2 * (0.8 + 0.2 * sp) / 8.0
+			regen_rate = max_hp * 0.2 * (0.8 + 0.2 * sp) * (1.0 + 0.03 * a("fed")) / 8.0
 			main.burst(position, Color(0.4, 1.0, 0.5), 16, 30.0, 0.5)
 			main.snd("drink")
 		"scudo":
-			shield = 30.0 * sp + 2.0 * lv
+			shield = 30.0 * sp * (1.0 + 0.03 * a("fed")) + 2.0 * lv
 			shield_t = 10.0
 			main.burst(position, Color(0.7, 0.9, 1.0), 20, 40.0, 0.5)
 			main.snd("bonfire")
@@ -635,7 +755,7 @@ func hurt(d: float, dir: Vector2, slow := 0.0) -> void:
 	if slow > 0.0:
 		slow_t = max(slow_t, slow)
 	main.chain_break()
-	d *= max(0.3, 1.0 - 0.05 * r("armor") - 0.025 * rl("pietra") - (0.2 if buffs.has("pelle") else 0.0))
+	d *= max(0.3, 1.0 - 0.05 * r("armor") - 0.006 * a("fed") - 0.025 * rl("pietra") - (0.2 if buffs.has("pelle") else 0.0) - arm("df") - bv("b_df"))
 	if shield > 0.0:
 		var ab := minf(shield, d)
 		shield -= ab
@@ -664,7 +784,7 @@ func hurt(d: float, dir: Vector2, slow := 0.0) -> void:
 func dot(d: float, slow := 0.0) -> void:
 	if main.state != "play" or dash_t > 0.0:
 		return
-	d *= max(0.3, 1.0 - 0.05 * r("armor"))
+	d *= max(0.3, 1.0 - 0.05 * r("armor") - 0.006 * a("fed"))
 	if shield > 0.0:
 		var ab := minf(shield, d)
 		shield -= ab
@@ -735,6 +855,8 @@ func auto_weapons(dt: float) -> void:
 		if tg != null:
 			knife_t = maxf(0.35, 0.8 - 0.01 * lv)
 			var dirv := (tg.position - position).normalized()
+			if bool(main.settings["aim_manual"]):
+				dirv = face   # con la mira manuale i pugnali vanno dove punta il mirino
 			var kn := mini(4, 1 + lv / 12)
 			for k in kn:
 				var off := (k - (kn - 1) * 0.5) * 0.2

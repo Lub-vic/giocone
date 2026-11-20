@@ -34,24 +34,24 @@ static var BIO: Array = _mk_bio()
 static func _mk_bio() -> Array:
 	return [
 		{"n": "VILLAGGIO DI CENERE", "g": [T_TERRA], "b": T_ROCCIA, "thr": 0.9, "amb": Color(0.20, 0.19, 0.27),
-			"pool": ["skeleton"], "tint": Color.WHITE, "dec": ["barrel", "deadtree", "gravestone"], "tier": 0},
+			"pool": ["skeleton", "skeleton", "skeleton", "skel_runner", "rat"], "tint": Color.WHITE, "dec": ["barrel", "deadtree", "gravestone"], "tier": 0},
 		{"n": "CIMITERO PIANGENTE", "g": [T_CIMITERO], "b": T_CHIOMA, "thr": 0.42, "amb": Color(0.19, 0.22, 0.40),
-			"pool": ["skeleton", "ghoul", "wraith", "bat", "zombie", "skel_archer", "crow"], "tint": Color(0.9, 0.95, 1.1),
+			"pool": ["skeleton", "ghoul", "wraith", "bat", "zombie", "skel_archer", "crow", "skel_brute", "ghoul_pale", "zombie_bloated"], "tint": Color(0.9, 0.95, 1.1),
 			"dec": ["gravestone", "gravestone", "statue", "deadtree", "tomb"], "tier": 1},
 		{"n": "FORESTA DEGLI IMPICCATI", "g": [T_TERRA, T_CIMITERO], "b": T_CHIOMA, "thr": 0.12, "amb": Color(0.16, 0.20, 0.21),
-			"pool": ["cultist", "bat", "spider", "skeleton", "wolf", "wolf", "rat"], "tint": Color(0.8, 0.95, 0.8),
+			"pool": ["cultist", "bat", "spider", "skeleton", "wolf", "wolf", "rat", "wolf_dire", "spider_brood", "cult_zealot", "bat_blood"], "tint": Color(0.8, 0.95, 0.8),
 			"dec": ["deadtree", "deadtree", "skullpile", "coffin"], "tier": 2},
 		{"n": "PALUDE MARCESCENTE", "g": [T_PALUDE], "b": T_ACQUA, "thr": 0.14, "amb": Color(0.20, 0.32, 0.28),
-			"pool": ["spider", "ooze", "ghoul", "bat", "toad", "rat", "zombie"], "tint": Color(0.85, 1.05, 0.85),
+			"pool": ["spider", "ooze", "ghoul", "bat", "toad", "rat", "zombie", "zombie_bloated", "spider_brood", "ghoul_pale"], "tint": Color(0.85, 1.05, 0.85),
 			"dec": ["deadtree", "skullpile", "deadtree"], "tier": 2},
 		{"n": "CATTEDRALE IN ROVINA", "g": [T_SCACCHI, T_CRIPTA], "b": T_MURO, "thr": 0.28, "amb": Color(0.27, 0.19, 0.30),
-			"pool": ["gargoyle", "cultist", "wraith", "skeleton", "skel_archer", "zombie"], "tint": Color(1.1, 0.95, 1.1),
+			"pool": ["gargoyle", "cultist", "wraith", "skeleton", "skel_archer", "zombie", "gargoyle_obs", "cult_zealot", "skel_brute"], "tint": Color(1.1, 0.95, 1.1),
 			"dec": ["pillar", "pillar", "statue", "candelabra", "tomb"], "tier": 3},
 		{"n": "VETTA GELATA", "g": [T_NEVE], "b": T_ROCCIAG, "thr": 0.26, "amb": Color(0.21, 0.26, 0.40),
-			"pool": ["skeleton", "wraith", "gargoyle", "bat", "wisp", "wolf", "skel_archer"], "tint": Color(0.75, 0.9, 1.4),
+			"pool": ["skeleton", "wraith", "gargoyle", "bat", "wisp", "wolf", "skel_archer", "wolf_dire", "skel_brute", "gargoyle_obs"], "tint": Color(0.75, 0.9, 1.4),
 			"dec": ["statue", "skullpile", "pillar"], "tier": 4},
 		{"n": "QUARTIERE DELLE FONDERIE", "g": [T_LAVA], "b": T_MAGMA, "thr": 0.52, "amb": Color(0.30, 0.21, 0.19),
-			"pool": ["gargoyle", "skeleton", "ooze", "cultist", "imp", "imp", "crow"], "tint": Color(1.2, 0.9, 0.8),
+			"pool": ["gargoyle", "skeleton", "ooze", "cultist", "imp", "imp", "crow", "imp_cinder", "imp_cinder", "skel_brute", "cult_zealot"], "tint": Color(1.2, 0.9, 0.8),
 			"dec": ["barrel", "brazier", "skullpile"], "tier": 4},
 	]
 
@@ -156,7 +156,6 @@ static func setup_input() -> void:
 	_jaxis("spell2", JOY_AXIS_TRIGGER_LEFT, 1.0)
 	_jbtn("zoom", JOY_BUTTON_RIGHT_STICK)
 	_jbtn("parry", JOY_BUTTON_LEFT_STICK)
-	_jbtn("item_next", JOY_BUTTON_BACK)
 	_jaxis("item_use", JOY_AXIS_TRIGGER_LEFT, 1.0)
 	_jbtn("ui_accept", JOY_BUTTON_A)
 	_jbtn("ui_cancel", JOY_BUTTON_B)

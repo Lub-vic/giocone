@@ -192,20 +192,23 @@ func _draw() -> void:
 		_obj_last = obj_key
 		_obj_t = 12.0
 	_obj_t = maxf(0.0, _obj_t - get_process_delta_time())
-	var oa := 1.0 if _obj_t > 0.0 else 0.55
+	var oa := 1.0 if _obj_t > 0.0 else 0.5
 	var oy := 49.0 if main.cycle > 0 else 39.0
-	for ln in _wrap(obj, 30):
+	var olines: Array = _wrap(obj, 30)
+	if _obj_t <= 0.0 and olines.size() > 1:
+		olines = [str(olines[0]) + "..."]
+	for ln in olines:
 		_txt(ln, Vector2(5, oy + 7.0), Color(0.95, 0.8, 0.45, oa))
 		oy += 9.0
 	var ql: Array = main.quest_lines()
-	if ql.size() > 0:
+	if ql.size() > 0 and _obj_t > 0.0:
 		var qs: Array = _wrap(str(ql[0]), 30)
 		_txt(str(qs[0]), Vector2(5, oy + 9.0), Color(0.7, 0.92, 0.85, oa * 0.9))
 		if ql.size() > 1 or qs.size() > 1:
 			_txt("...", Vector2(5 + 6.0 * minf(30.0, str(qs[0]).length()), oy + 9.0), Color(0.7, 0.92, 0.85, oa * 0.9))
 	if p.zmode > 0:
 		_txt("MODALITA ORDA" if p.zmode == 1 else "MODALITA TATTICA", Vector2(0, 20), Color(1.0, 0.6, 0.9) if p.zmode == 1 else Color(0.6, 0.9, 1.0), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-	var overlay: bool = main.state in ["menu", "pick", "travel", "pause", "options", "controls", "dialog", "craft"]
+	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "dialog", "craft"]
 	if not overlay:
 		_equip_panel(p)
 		_item_line(p)
@@ -226,8 +229,8 @@ func _draw() -> void:
 	draw_texture(Game.tex("soul"), Vector2(size.x - 50, size.y - 15), Color(1, 1, 1, 0.9))
 	_txt("%d" % p.souls, Vector2(size.x - 38, size.y - 6), Color(0.62, 1.0, 0.86))
 	if main.msg_t > 0.0 and main.state == "play":
-		var ly := 56.0
-		for ln in _wrap(main.msg, 54):
+		var ly := 96.0   # sotto l'obiettivo, sopra il personaggio
+		for ln in _wrap(main.msg, 54).slice(0, 2):
 			_txt(ln, Vector2(0, ly), Color(0.98, 0.88, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 			ly += 10.0
 	if main.prompt != "" and main.state == "play":
@@ -238,6 +241,8 @@ func _draw() -> void:
 		var bx := size.x / 2 - 100
 		_txt(main.boss.nm, Vector2(0, 21), Color(1, 0.82, 0.82), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		_bar(Vector2(bx, 25), 200, 7, main.boss.hp / main.boss.max_hp, Color(0.7, 0.08, 0.14))
+	if main.inv_open and main.state == "play":
+		_inv(p)
 	match main.state:
 		"craft":
 			_craft(p)
@@ -287,21 +292,84 @@ func _menu(p: Player) -> void:
 	_txt(_k("T", "Y") + "  Viaggio rapido", Vector2(x, y + 118), Color(0.88, 0.88, 0.98))
 	_txt(_k("Z/X", "LB/RB") + "  Magie: %s | %s" % [Rpg.SPELLS[p.spells[0]]["n"], Rpg.SPELLS[p.spells[1]]["n"]], Vector2(x, y + 129), Color(0.62, 0.82, 1.0))
 	draw_rect(Rect2(x, y + 137, r.size.x - 32, 1), GOLD_D)
-	_txt("POTENZIAMENTI", Vector2(x, y + 149), GOLD_L)
+	_txt("ATTRIBUTI", Vector2(x, y + 149), GOLD_L)
 	var yy := y + 161.0
 	var col := 0
+	for u in Stats.LIST:
+		_txt("%s" % u["n"], Vector2(x + col * 140, yy), Color(0.88, 0.85, 0.98))
+		_txt("%d" % p.a(u["id"]), Vector2(x + col * 140, yy), Color(0.62, 1.0, 0.86), 8, HORIZONTAL_ALIGNMENT_RIGHT, 124.0)
+		col += 1
+		if col == 2:
+			col = 0
+			yy += 10.0
+	var gr := 0
 	for u in Upgrades.LIST:
-		var n := p.r(u["id"])
-		if n > 0:
-			_txt("%s %d" % [u["n"], n], Vector2(x + col * 140, yy), Color(0.88, 0.85, 0.98))
-			col += 1
-			if col == 2:
-				col = 0
-				yy += 10.0
-	_txt("Progresso: %d / %d" % [p.lv - 1, Upgrades.total_max()], Vector2(r.position.x, r.end.y - 9), Color(0.6, 0.55, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		gr += p.r(u["id"])
+	yy += 14.0
+	_txt("Danno arma %d   Critico %.0f%%   Grazie %d" % [int(round(p.dmg())), p.crit * 100.0, gr], Vector2(x, yy), Color(0.72, 0.68, 0.84))
+	_txt("Livello %d" % p.lv, Vector2(r.position.x, r.end.y - 9), Color(0.6, 0.55, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+
+
+## valori del personaggio da mostrare (per l'anteprima dell'attributo scelto)
+func _sheet(p: Player) -> Array:
+	return [
+		["VITA", "%d" % int(p.max_hp)],
+		["STAMINA", "%d" % int(p.max_st)],
+		["MANA", "%d" % int(p.max_mana)],
+		["DANNO ARMA", "%.1f" % p.dmg()],
+		["POTERE MAGICO", "%d%%" % int(round(p.spell_pow() * 100.0))],
+		["CRITICO", "%.1f%%" % (p.crit * 100.0)],
+		["FIALE", "%d" % p.max_flasks],
+	]
+
+
+func _attr_pick(p: Player) -> void:
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.78))
+	var c := Upgrades.cost(p.lv)
+	_txt("LIVELLO %d  >  %d      COSTO %d ANIME      ANIME %d" % [p.lv, p.lv + 1, c, p.souls], Vector2(0, 30), Color(1, 0.82, 0.3), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	for i in main.picks.size():
+		var u: Dictionary = main.picks[i]
+		var r := Rect2(20, 46 + i * 20, 280, 18)
+		_frame(r, i == main.pick_sel, 0.97)
+		var v := p.a(u["id"])
+		_txt("%d  %s" % [i + 1, u["n"]], Vector2(r.position.x + 8, r.position.y + 12), Color(1, 0.86, 0.5) if i == main.pick_sel else Color(0.86, 0.84, 0.95))
+		_txt("%d  >  %d" % [v, v + 1], Vector2(r.position.x, r.position.y + 12), Color(0.62, 1.0, 0.86) if i == main.pick_sel else Color(0.7, 0.7, 0.8), 8, HORIZONTAL_ALIGNMENT_RIGHT, r.size.x - 8)
+	if main.picks.is_empty():
+		return
+	var sel: Dictionary = main.picks[clampi(main.pick_sel, 0, main.picks.size() - 1)]
+	var pr := Rect2(310, 46, 154, 196)
+	_panel(pr)
+	_txt(sel["n"], Vector2(pr.position.x, pr.position.y + 14), GOLD_L, 9, HORIZONTAL_ALIGNMENT_CENTER, pr.size.x)
+	var ly := pr.position.y + 28.0
+	for ln in _wrap(sel["d"], 26):
+		_txt(ln, Vector2(pr.position.x + 8, ly), Color(0.86, 0.86, 0.96))
+		ly += 9.0
+	# anteprima: valori attuali e dopo il punto
+	var before := _sheet(p)
+	var id: String = sel["id"]
+	p.attr[id] = p.a(id) + 1
+	p.apply_stats()
+	var after := _sheet(p)
+	p.attr[id] = p.a(id) - 1
+	if p.a(id) <= 0:
+		p.attr.erase(id)
+	p.apply_stats()
+	ly = maxf(ly + 4.0, pr.position.y + 100.0)
+	draw_rect(Rect2(pr.position.x + 8, ly - 7, pr.size.x - 16, 1), GOLD_D)
+	for k in before.size():
+		var changed: bool = before[k][1] != after[k][1]
+		_txt(before[k][0], Vector2(pr.position.x + 8, ly + 4), Color(0.7, 0.68, 0.82))
+		_txt(before[k][1] + ("  >  " + after[k][1] if changed else ""), Vector2(pr.position.x, ly + 4),
+			Color(0.62, 1.0, 0.86) if changed else Color(0.86, 0.86, 0.96), 8, HORIZONTAL_ALIGNMENT_RIGHT, pr.size.x - 8)
+		ly += 11.0
+	_txt(_k("SU/GIU + INVIO  oppure  1-7", "SU/GIU  +  A"), Vector2(0, size.y - 22), Color(0.8, 0.78, 0.9), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	_txt(_k("ESC", "B") + "  indietro", Vector2(0, size.y - 11), Color(0.65, 0.65, 0.75), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 
 
 func _pick(p: Player) -> void:
+	if not main.run_mode:
+		_attr_pick(p)
+		return
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.72))
 	_txt("SCEGLI UN POTENZIAMENTO", Vector2(0, 36), Color(1, 0.82, 0.3), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 	for i in main.picks.size():
@@ -463,44 +531,300 @@ func _title() -> void:
 
 
 func _spirit_row(p: Player) -> void:
-	var x := 6.0
-	var y := size.y - 72.0
+	var x := size.x - 18.0
+	var y := size.y - 32.0
 	for sp in p.spirits:
 		var d: Dictionary = Spirit.DATA[sp["k"]]
-		draw_texture_rect(Game.tex(str(d["spr"])), Rect2(x, y, 16, 16), false, Color(0.6, 1.0, 1.4))
-		_txt("%d" % int(sp["lv"]), Vector2(x + 11, y + 15), Color(0.7, 1.0, 1.0))
-		x += 20.0
+		draw_texture_rect(Game.tex(str(d["spr"])), Rect2(x, y, 12, 12), false, Color(0.6, 1.0, 1.4, 0.85))
+		_txt("%d" % int(sp["lv"]), Vector2(x + 8, y + 13), Color(0.7, 1.0, 1.0, 0.85))
+		x -= 16.0
 
 
 func _craft(p: Player) -> void:
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.7))
-	var r := Rect2(size.x / 2 - 170, 14, 340, 244)
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.74))
+	var r := Rect2(size.x / 2 - 170, 14, 340, 246)
 	_panel(r)
-	_txt("ARTIGIANATO", Vector2(r.position.x, r.position.y + 26), Color(1, 0.78, 0.38), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	_txt("FORGIA", Vector2(r.position.x, r.position.y + 20), Color(1, 0.78, 0.38), 12, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 	var x := r.position.x + 14
 	var mx := x
 	for mid in main.MAT_ORDER:
-		draw_texture(Game.tex("mat_" + str(mid)) if mid in ["pelle", "carne", "osso"] else Game.tex("res_" + str(mid)), Vector2(mx, r.position.y + 36), Color.WHITE)
-		_txt("%d" % int(p.mats.get(mid, 0)), Vector2(mx + 13, r.position.y + 48), Color(0.9, 0.95, 0.8))
+		draw_texture(Game.tex("mat_" + str(mid)) if mid in ["pelle", "carne", "osso"] else Game.tex("res_" + str(mid)), Vector2(mx, r.position.y + 26), Color.WHITE)
+		_txt("%d" % int(p.mats.get(mid, 0)), Vector2(mx + 13, r.position.y + 38), Color(0.9, 0.95, 0.8))
 		mx += 46.0
-	draw_rect(Rect2(x, r.position.y + 56, r.size.x - 28, 1), GOLD_D)
-	var y := r.position.y + 70.0
-	for i in main.RECIPES.size():
-		var rc: Dictionary = main.RECIPES[i]
-		var sel: bool = i == main.craft_sel
-		var ok: bool = main.can_craft(rc)
-		_txt(("> " if sel else "  ") + str(rc["n"]), Vector2(x, y), (Color(1, 0.92, 0.5) if ok else Color(0.7, 0.55, 0.55)) if sel else (Color(0.9, 0.9, 1.0) if ok else Color(0.5, 0.48, 0.58)))
-		var ctext := ""
-		for k in rc["cost"]:
-			ctext += "%d %s  " % [main.craft_cost(rc, str(k)), str(main.MAT_NAMES[k]).substr(0, 4)]
-		_txt(ctext, Vector2(x + 150, y), Color(0.75, 0.9, 0.7) if ok else Color(0.55, 0.45, 0.45))
-		y += 18.0
-	var dsel: Dictionary = main.RECIPES[main.craft_sel]
-	draw_rect(Rect2(x, y - 2, r.size.x - 28, 1), GOLD_D)
-	_txt(str(dsel["d"]), Vector2(x, y + 11), Color(0.85, 0.82, 0.95))
-	if str(dsel["id"]) == "affila":
-		_txt("AFFILATURA ATTUALE: %d / 5" % int(p.weapon().get("u", 0)), Vector2(x, y + 23), Color(0.7, 0.8, 1.0))
-	_txt(_k("SU/GIU SCEGLI   INVIO REALIZZA   ESC TORNA", "SU/GIU SCEGLI   A REALIZZA   B TORNA"), Vector2(r.position.x, r.end.y - 9), Color(0.6, 0.58, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	# schede
+	var ty := r.position.y + 66.0
+	for i in Forge.TABS.size():
+		var on: bool = i == main.craft_tab
+		var tx := r.position.x + 14 + i * 78.0
+		if on:
+			draw_rect(Rect2(tx - 2, ty - 10, 76, 13), Color(0.35, 0.22, 0.08, 0.9 if main.craft_row == 0 else 0.55))
+		_txt(Forge.TABS[i], Vector2(tx, ty), GOLD_L if on else Color(0.6, 0.58, 0.7), 8, HORIZONTAL_ALIGNMENT_CENTER, 72)
+	draw_rect(Rect2(x, ty + 5, r.size.x - 28, 1), GOLD_D)
+	# scelte (sinistra)
+	var sl: Array = Forge.slots(main.craft_tab)
+	var ids: Array = main.craft_ids()
+	var y := r.position.y + 82.0
+	for i in sl.size():
+		var sel: bool = main.craft_row == i + 1
+		var opts: Array = sl[i][1]
+		var vi: int = clampi(int(main.craft_vals[main.craft_tab][i]), 0, opts.size() - 1)
+		var dim: bool = main.craft_tab == 1 and i == 1 and str(ids[0]) != "infondi"
+		if sel:
+			draw_rect(Rect2(x - 3, y - 9, 168, 12), Color(0.3, 0.2, 0.08, 0.8))
+		_txt(str(sl[i][0]), Vector2(x, y), Color(0.7, 0.68, 0.82) if not dim else Color(0.4, 0.4, 0.48))
+		var val := str(opts[vi][1])
+		_txt(("< %s >" % val) if sel else val, Vector2(x + 66, y), (Color(1, 0.92, 0.5) if sel else Color(0.92, 0.9, 1.0)) if not dim else Color(0.4, 0.4, 0.48), 8, HORIZONTAL_ALIGNMENT_CENTER, 100)
+		y += 14.0
+	var pv: Dictionary = main.craft_preview()
+	var cost: Dictionary = pv["cost"]
+	var ok: bool = main.craft_afford(cost) and str(pv.get("err", "")) == ""
+	var csel: bool = main.craft_row == sl.size() + 1
+	y += 4.0
+	_frame(Rect2(x, y - 9, 162, 14), csel, 0.9)
+	_txt("CREA" if ok else "CREA (MANCANO MATERIALI)", Vector2(x, y + 1), (Color(1, 0.92, 0.5) if ok else Color(0.8, 0.45, 0.45)) if csel else (Color(0.85, 0.85, 0.95) if ok else Color(0.6, 0.4, 0.4)), 8, HORIZONTAL_ALIGNMENT_CENTER, 162)
+	# costo
+	y += 20.0
+	_txt("COSTO", Vector2(x, y), GOLD_L)
+	y += 10.0
+	var col := 0
+	for k in cost:
+		var have := int(p.mats.get(k, 0))
+		var need := int(cost[k])
+		_txt("%d %s" % [need, str(main.MAT_NAMES[k])], Vector2(x + col * 82, y), Color(0.75, 0.9, 0.7) if have >= need else Color(0.9, 0.45, 0.45))
+		col += 1
+		if col == 2:
+			col = 0
+			y += 10.0
+	if cost.is_empty():
+		_txt("NESSUNO", Vector2(x, y), Color(0.6, 0.6, 0.7))
+	# anteprima (destra)
+	var rx := r.position.x + 188
+	var ry := r.position.y + 82.0
+	draw_rect(Rect2(rx - 8, ry - 10, 1, 160), GOLD_D)
+	var lines: Array = pv["lines"]
+	for li in lines.size():
+		for ln in _wrap(str(lines[li]), 24):
+			if ry > r.end.y - 22:
+				break
+			_txt(ln, Vector2(rx, ry), GOLD_L if li == 0 else Color(0.86, 0.86, 0.96))
+			ry += 10.0
+	if str(pv.get("err", "")) != "":
+		_txt(str(pv["err"]), Vector2(rx, ry + 4), Color(0.9, 0.45, 0.45))
+	if main.craft_tab == 2 and p.armor.size() > 0:
+		ry += 6.0
+		_txt("INDOSSATI: %d / 3" % p.armor.size(), Vector2(rx, ry), Color(0.6, 0.8, 1.0))
+	_txt(_k("Q/E SCHEDA  SU/GIU RIGA  SIN/DES SCEGLI  INVIO CREA", "LB/RB SCHEDA  SU/GIU  SIN/DES  A CREA  B ESCI"), Vector2(r.position.x, r.end.y - 6), Color(0.6, 0.58, 0.72), 8, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+
+
+# ---------------------------------------------------------------- borsa ed equipaggiamento
+const ARM_COL := {"pelle": Color(0.78, 0.56, 0.36), "osso": Color(0.92, 0.9, 0.78), "minerale": Color(0.72, 0.78, 0.9), "legna": Color(0.62, 0.44, 0.28)}
+const BREW_COL := {"erba": Color(0.5, 1.0, 0.55), "carne": Color(1.0, 0.45, 0.45), "fungo": Color(0.6, 0.6, 1.2), "osso": Color(1.0, 0.95, 0.8)}
+const QCOL := [Color(0.78, 0.78, 0.84), Color(0.78, 0.78, 0.84), Color(0.4, 0.65, 1.0), Color(0.4, 0.65, 1.0), Color(0.75, 0.45, 1.0), Color(1.0, 0.75, 0.25)]
+
+
+## posizioni condivise fra disegno e clic: slot del personaggio, schede, caselle della borsa
+func inv_layout() -> Dictionary:
+	var lx := 14.0
+	var slots: Array = [Rect2(lx + 4, 40, 22, 22), Rect2(lx + 4, 68, 22, 22),
+		Rect2(lx + 122, 30, 22, 22), Rect2(lx + 122, 56, 22, 22), Rect2(lx + 122, 82, 22, 22)]
+	for i in 4:
+		slots.append(Rect2(lx + 4 + i * 26, 124, 22, 22))
+	for i in 3:
+		slots.append(Rect2(lx + 4 + i * 26, 220, 22, 22))
+	var bx := lx + 170.0
+	var tabs: Array = []
+	for i in main.INV_TABS.size():
+		tabs.append(Rect2(bx + i * 47.0 - 2, 11, 45, 12))
+	var cells: Array = []
+	for i in 36:
+		cells.append(Rect2(bx + (i % 12) * 23.0, 28 + (i / 12) * 23.0, 21, 21))
+	return {"lx": lx, "bx": bx, "slots": slots, "tabs": tabs, "cells": cells}
+
+
+func inv_hit(pos: Vector2) -> Array:
+	var L := inv_layout()
+	for i in (L["tabs"] as Array).size():
+		if (L["tabs"][i] as Rect2).has_point(pos):
+			return ["tab", i]
+	for i in (L["slots"] as Array).size():
+		if (L["slots"][i] as Rect2).grow(1).has_point(pos):
+			return ["slot", i]
+	for i in (L["cells"] as Array).size():
+		if (L["cells"][i] as Rect2).has_point(pos):
+			return ["cell", i]
+	return []
+
+
+func _icon(e: Dictionary, r: Rect2, a := 1.0) -> void:
+	match str(e["k"]):
+		"w":
+			draw_texture_rect(Game.tex(Rpg.FAM[e["w"]["f"]]["icon"]), r, false, Color(1, 1, 1, a))
+		"a":
+			draw_texture_rect(Game.tex("ai_" + str(e["a"]["slot"])), r, false, ARM_COL.get(str(e["a"].get("m", "pelle")), Color.WHITE) * Color(1, 1, 1, a))
+		"b":
+			draw_texture_rect(Game.tex("flask"), r, false, BREW_COL.get(main.brew_base(str(e["id"])), Color.WHITE) * Color(1, 1, 1, a))
+		"m":
+			var mid := str(e["id"])
+			draw_texture_rect(Game.tex("mat_" + mid) if mid in ["pelle", "carne", "osso"] else Game.tex("res_" + mid), r, false, Color(1, 1, 1, a))
+		"r":
+			draw_texture_rect(Game.tex("relic_" + str(e["id"])), r, false, Color(1, 1, 1, a))
+
+
+func _rcol(e: Dictionary) -> Color:
+	match str(e["k"]):
+		"w":
+			return Rpg.RARITY[int(e["w"]["r"])]["c"]
+		"a":
+			return QCOL[clampi(int(e["a"].get("q", 1)), 0, 5)]
+		"r":
+			return Color(1.0, 0.75, 0.25)
+	return Color(0.86, 0.86, 0.96)
+
+
+func _slot(r: Rect2, label: String, e, sel := false) -> void:
+	draw_rect(r.grow(1), OUTLINE)
+	draw_rect(r, Color(0.09, 0.06, 0.13, 0.95))
+	if e == null:
+		_txt(label, Vector2(r.position.x, r.position.y + r.size.y / 2 + 3), Color(0.36, 0.33, 0.45), 8, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	else:
+		draw_rect(Rect2(r.position, Vector2(r.size.x, 1)), _rcol(e) * Color(1, 1, 1, 0.8))
+		_icon(e, Rect2(r.position + (r.size - Vector2(16, 16)) / 2, Vector2(16, 16)))
+		if e.has("n") and str(e["k"]) == "b":
+			_txt("%d" % int(e["n"]), Vector2(r.position.x + 14, r.end.y - 1), Color(1, 0.9, 0.6))
+	if sel:
+		draw_rect(r.grow(2), GOLD_L, false, 1.0)
+
+
+func _inv(p: Player) -> void:
+	var L := inv_layout()
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.01, 0.0, 0.03, 0.72))   # il mondo resta visibile: non e' una pausa
+	var r := Rect2(6, 6, size.x - 12, size.y - 12)
+	_panel(r)
+	var lx: float = L["lx"]
+	var sl: Array = L["slots"]
+	var s0: bool = main.inv_side == 0
+	# ---- personaggio
+	_txt("EQUIPAGGIAMENTO", Vector2(lx, 18), GOLD_L)
+	var cx := lx + 74.0
+	draw_texture_rect(Game.tex(str(Rpg.CLASSES[p.cls]["spr"]) + "_b"), Rect2(cx - 30, 34, 60, 60), false)
+	draw_set_transform(Vector2(cx + 16, 73), 0.18, Vector2(2.4, 2.4))
+	draw_texture(Game.tex("hw_" + str(p.weapon()["f"])), Vector2(-12, -18))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	var labels := ["ARMA", "ARMA", "ELMO", "TORSO", "GAMBE", "-", "-", "-", "-", "-", "-", "-"]
+	for i in 12:
+		_slot(sl[i], labels[i], main.inv_slot_entry(i), s0 and main.inv_slot == i)
+	_txt("1" if p.wcur != 0 else ">", Vector2(lx - 4, 54), Color(0.6, 0.58, 0.7) if p.wcur != 0 else GOLD_L)
+	_txt("2" if p.wcur != 1 else ">", Vector2(lx - 4, 82), Color(0.6, 0.58, 0.7) if p.wcur != 1 else GOLD_L)
+	_txt("CINTURA  (Z / X)", Vector2(lx, 119), Color(0.7, 0.68, 0.82))
+	_txt("RELIQUIE  (MAX 3)", Vector2(lx, 215), Color(0.7, 0.68, 0.82))
+	var sy := 160.0
+	draw_rect(Rect2(lx, sy - 6, 150, 1), GOLD_D)
+	var stats: Array = [["VITA", "%d" % int(p.max_hp)], ["STAMINA", "%d" % int(p.max_st)], ["MANA", "%d" % int(p.max_mana)],
+		["DIFESA", "%d%%" % int(round(p.arm("df") * 100.0))], ["DANNO", "%.1f" % p.dmg()], ["CRITICO", "%.0f%%" % (p.crit * 100.0)],
+		["VELOCITA'", "%+d%%" % int(round(p.arm("mv") * 100.0))], ["SPINE", "%d%%" % int(round(p.arm("th") * 100.0))]]
+	for i in stats.size():
+		var px := lx + (i % 2) * 78.0
+		_txt(stats[i][0], Vector2(px, sy + 4 + (i / 2) * 11), Color(0.66, 0.64, 0.78))
+		_txt(stats[i][1], Vector2(px, sy + 4 + (i / 2) * 11), Color(0.92, 0.92, 1.0), 8, HORIZONTAL_ALIGNMENT_RIGHT, 72)
+	draw_rect(Rect2(lx + 160, r.position.y + 6, 1, r.size.y - 12), GOLD_D)
+	# ---- borsa
+	var bx: float = L["bx"]
+	for i in main.INV_TABS.size():
+		var tr: Rect2 = L["tabs"][i]
+		var on: bool = i == main.inv_tab
+		if on:
+			draw_rect(tr, Color(0.35, 0.22, 0.08, 0.9))
+		_txt(main.INV_TABS[i], Vector2(tr.position.x, tr.position.y + 9), GOLD_L if on else Color(0.6, 0.58, 0.7), 8, HORIZONTAL_ALIGNMENT_CENTER, tr.size.x)
+	var lst: Array = main.inv_list(main.inv_tab)
+	for i in 36:
+		var cr: Rect2 = L["cells"][i]
+		var li: int = i + main.inv_scroll * 12
+		draw_rect(cr, Color(0.07, 0.05, 0.11, 0.9))
+		draw_rect(cr, Color(0.25, 0.19, 0.3, 0.8), false, 1.0)
+		if li < lst.size():
+			var e: Dictionary = lst[li]
+			draw_rect(Rect2(cr.position.x, cr.end.y - 2, cr.size.x, 2), _rcol(e) * Color(1, 1, 1, 0.7))
+			_icon(e, Rect2(cr.position + Vector2(2.5, 2), Vector2(16, 16)), 0.55 if str(e["k"]) == "m" else 1.0)
+			if e.has("n") and int(e["n"]) > 1:
+				_txt("%d" % int(e["n"]), Vector2(cr.position.x + 1, cr.end.y - 1), Color(1, 0.95, 0.8), 8, HORIZONTAL_ALIGNMENT_RIGHT, 19)
+			if e.get("eq", false):
+				_txt("E", Vector2(cr.position.x + 2, cr.position.y + 8), Color(0.55, 1.0, 0.7))
+		if li == main.inv_cell and not s0:
+			draw_rect(cr.grow(1), GOLD_L, false, 1.0)
+	var dy: float = (L["cells"][35] as Rect2).end.y + 9.0
+	var more: int = lst.size() - (main.inv_scroll + 3) * 12
+	_txt(("ALTRO SOTTO (%d)   " % more if more > 0 else "") + "BORSA %d / %d" % [p.bag_used(), p.BAG_MAX], Vector2(bx, dy - 1),
+		Color(0.9, 0.5, 0.45) if p.bag_free() <= 0 else Color(0.5, 0.48, 0.6), 8, HORIZONTAL_ALIGNMENT_RIGHT, r.end.x - bx - 8)
+	dy += 4
+	var dr := Rect2(bx - 2, dy, r.end.x - bx - 6, r.end.y - dy - 18)
+	_frame(dr, true, 0.92)
+	var sel = main.inv_selected()
+	if sel != null:
+		_detail(p, sel, dr)
+	var hint := "INVIO EQUIPAGGIA" if not s0 else "INVIO TOGLI"
+	_txt(_k(hint + "  X SMONTA  G GETTA  Q/E SCHEDA  TAB LATO  I CHIUDI",
+		"A EQUIPAGGIA  X SMONTA  Y GETTA  LB/RB SCHEDA  B CHIUDI"), Vector2(r.position.x, r.end.y - 5), Color(0.62, 0.6, 0.74), 8, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+
+
+func _detail(p: Player, e: Dictionary, dr: Rect2) -> void:
+	_icon(e, Rect2(dr.position + Vector2(6, 6), Vector2(16, 16)))
+	var lines: Array = []
+	var title := ""
+	var sub := ""
+	match str(e["k"]):
+		"w":
+			title = Rpg.wname(e["w"]).to_upper()
+			sub = "%s  -  %s" % [str(Rpg.FAM[e["w"]["f"]]["n"]).to_upper(), Rpg.RARITY[int(e["w"]["r"])]["n"]]
+			lines = Forge.wlines(e["w"])
+		"a":
+			title = str(e["a"]["n"])
+			sub = "%s  -  QUALITA' %d" % [Forge.PIECE_N[e["a"]["slot"]], int(e["a"].get("q", 1))]
+			lines = Forge.alines(e["a"]["st"])
+		"b":
+			var id := str(e["id"])
+			title = main.item_name(id)
+			sub = "POZIONE  x%d%s" % [int(e["n"]), "   (NELLA CINTURA)" if e.get("eq", false) else ""]
+			if p.brews.has(id):
+				lines = Forge.brew_lines(p.brews[id]["fx"])
+			else:
+				for rc in main.RECIPES:
+					if rc["id"] == id:
+						lines = [str(rc["d"])]
+		"r":
+			var inf: Dictionary = Relics.info(str(e["id"]))
+			title = str(inf["n"]).to_upper()
+			sub = "RELIQUIA  x%d   %s" % [int(e["n"]), "INDOSSATA" if e.get("eq", false) else "NON ATTIVA"]
+			lines = _wrap(str(inf["d"]).to_upper(), 40)
+		"m":
+			title = str(main.MAT_NAMES[e["id"]])
+			sub = "MATERIALE  x%d" % int(e["n"])
+			lines = ["SI USA ALLA FORGIA DEL FALO' (C)", "NON OCCUPA SPAZIO NELLA BORSA"]
+	_txt(title, Vector2(dr.position.x + 28, dr.position.y + 12), _rcol(e))
+	_txt(sub, Vector2(dr.position.x + 28, dr.position.y + 22), Color(0.6, 0.58, 0.72))
+	var ly := dr.position.y + 36.0
+	for ln in lines:
+		if ly > dr.end.y - 4:
+			break
+		_txt(str(ln), Vector2(dr.position.x + 8, ly), Color(0.88, 0.88, 0.98))
+		ly += 10.0
+	if main.inv_side == 1 and str(e["k"]) in ["w", "a"]:
+		var cmp: Array = main.inv_compare(e)
+		var cxx := dr.position.x + 140
+		_txt("RISPETTO ALL'INDOSSATO", Vector2(cxx, dr.position.y + 36), Color(0.6, 0.58, 0.72))
+		var cy := dr.position.y + 46.0
+		if cmp.is_empty():
+			_txt("UGUALE", Vector2(cxx, cy), Color(0.7, 0.7, 0.8))
+		for c in cmp:
+			if cy > dr.end.y - 4:
+				break
+			var up: bool = float(c[1]) >= 0.0
+			_txt(str(c[0]) + "  " + str(c[2]), Vector2(cxx, cy), Color(0.5, 1.0, 0.6) if up else Color(1.0, 0.45, 0.45))
+			cy += 10.0
+		var sv: Dictionary = main.salvage_of(e)
+		var parts: Array = []
+		for k in sv:
+			parts.append("%d %s" % [int(sv[k]), str(main.MAT_NAMES[k])])
+		_txt("SMONTANDO: " + (", ".join(parts) if not parts.is_empty() else "NULLA"), Vector2(dr.position.x + 8, dr.end.y - 4), Color(0.6, 0.75, 0.6))
 
 
 func _mat_row(p: Player) -> void:
@@ -514,7 +838,7 @@ func _mat_row(p: Player) -> void:
 	_mat_t = maxf(0.0, _mat_t - get_process_delta_time())
 	var ma := clampf(_mat_t / 1.0, 0.0, 1.0)
 	var x := 6.0
-	var y := size.y - 86.0
+	var y := size.y - 66.0
 	for mid in main.MAT_ORDER:
 		if ma <= 0.0:
 			break
@@ -527,9 +851,9 @@ func _mat_row(p: Player) -> void:
 	var bx := 0.0
 	var bt := ""
 	for bk in p.buffs:
-		bt += "%s %d:%02d   " % [str(bk).to_upper(), int(p.buffs[bk]) / 60, int(p.buffs[bk]) % 60]
+		bt += "%s %d:%02d   " % [Forge.buff_name(str(bk)), int(p.buffs[bk]) / 60, int(p.buffs[bk]) % 60]
 	if bt != "":
-		_txt(bt, Vector2(0, size.y - 36), Color(0.7, 1.0, 0.85), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		_txt(bt.strip_edges(), Vector2(0, 81), Color(0.7, 1.0, 0.85), 8, HORIZONTAL_ALIGNMENT_RIGHT, size.x - 6)
 
 
 func _dialog() -> void:
@@ -553,16 +877,30 @@ func _dialog() -> void:
 	_txt(_k("INVIO CONFERMA  ESC CHIUDI", "A CONFERMA  B CHIUDI"), Vector2(r.end.x - 150, r.end.y - 12), Color(0.55, 0.55, 0.68))
 
 
-func _relic_row(p: Player) -> void:
+var _rel_sig := ""
+var _rel_t := 0.0
+
+
+func _relic_row(p: Player, y := -1.0, always := false) -> void:
+	var sig := str(p.relics)
+	if sig != _rel_sig:
+		if _rel_sig != "":
+			_rel_t = 4.0
+		_rel_sig = sig
+	_rel_t = maxf(0.0, _rel_t - get_process_delta_time())
+	var ra := 1.0 if always else clampf(_rel_t, 0.0, 1.0)
+	if ra <= 0.0:
+		return
 	var x := 6.0
-	var y := size.y - 68.0
+	if y < 0.0:
+		y = size.y - 86.0
 	for rr in Relics.LIST:
 		var n := p.rl(str(rr["id"]))
 		if n <= 0:
 			continue
-		draw_texture(Game.tex("relic_" + str(rr["id"])), Vector2(x, y))
+		draw_texture(Game.tex("relic_" + str(rr["id"])), Vector2(x, y), Color(1, 1, 1, ra))
 		if n > 1:
-			_txt("x%d" % n, Vector2(x + 11, y + 14), Color(1.0, 0.9, 0.6))
+			_txt("x%d" % n, Vector2(x + 11, y + 14), Color(1.0, 0.9, 0.6, ra))
 		x += 26.0 if n > 1 else 16.0
 
 
@@ -574,7 +912,7 @@ func _item_line(p: Player) -> void:
 	var n: int = main.item_ids().size()
 	if n > 1:
 		txt += "  (+%d)" % (n - 1)
-	_txt(txt, Vector2(5, size.y - 40), Color(0.78, 0.95, 0.82, 0.55 if id == "" else 0.95))
+	_txt(txt, Vector2(5, size.y - 39), Color(0.78, 0.95, 0.82, 0.8))
 
 
 func _equip_panel(p: Player) -> void:
@@ -653,6 +991,16 @@ func _pause() -> void:
 		_txt(("> " if sel else "  ") + items[i], Vector2(r.position.x + 28, r.position.y + 54 + i * 14),
 			Color(1, 0.92, 0.5) if sel else Color(0.78, 0.76, 0.88))
 	_txt(_k("SU/GIU  INVIO  ESC", "SU/GIU  A  B"), Vector2(r.position.x, r.end.y - 10), Color(0.6, 0.6, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	if main.player != null:
+		_relic_row(main.player, size.y - 48.0, true)
+		var x := 6.0
+		for mid in main.MAT_ORDER:
+			var n := int(main.player.mats.get(mid, 0))
+			if n <= 0:
+				continue
+			draw_texture(Game.tex("mat_" + str(mid)) if mid in ["pelle", "carne", "osso"] else Game.tex("res_" + str(mid)), Vector2(x, size.y - 26.0))
+			_txt("%d" % n, Vector2(x + 12, size.y - 14.0), Color(0.9, 0.95, 0.8))
+			x += 26.0
 
 
 func _options() -> void:
@@ -698,7 +1046,7 @@ func _controls() -> void:
 		["ROTOLATA", "SHIFT / K", "B"],
 		["PARATA (TEMPISMO)", "C", "L3 (STICK SX)"],
 		["FIALA", "Q / F", "X"],
-		["OGGETTO: CAMBIA / USA", "Z / X", "SELECT / LT"],
+		["OGGETTO: CAMBIA / USA", "Z / X", "SELECT / LT"], ["BORSA ED EQUIPAGGIAMENTO", "I", "SELECT (TIENI)"],
 		["MAGIA 1 / 2", "1 / 2  (R / G)", "LB / LT"],
 		["CAMBIA ARMA", "TAB", "Y"],
 		["INTERAGISCI", "E", "A"],
@@ -712,7 +1060,7 @@ func _controls() -> void:
 		["CAMPO: VIAGGIO", "T", "Y"],
 	]
 	for i in rows.size():
-		var y: float = r.position.y + 60.0 + i * 11.0
+		var y: float = r.position.y + 58.0 + i * 10.4
 		_txt(rows[i][0], Vector2(x, y), Color(0.85, 0.83, 0.95))
 		_txt(rows[i][1], Vector2(x + 96, y), Color(0.7, 0.85, 1.0))
 		_txt(rows[i][2], Vector2(x + 262, y), Color(0.7, 1.0, 0.8))

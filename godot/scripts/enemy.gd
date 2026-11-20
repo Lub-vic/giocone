@@ -46,6 +46,24 @@ const CHAMPS := {
 	"plague_doc": {"spr": "plague_doc", "hp": 180.0, "spd": 34.0, "r": 7.0, "souls": 130, "dmg": 18.0, "scale": 1.25,
 		"name": "MEDICO DELLA PESTE", "atk": ["poison", "fan"], "kite": true},
 }
+# varianti: stesso comportamento di un tipo base ma con statistiche, taglia, colore e tratto diversi
+const VARIANTS := {
+	"skel_brute": {"b": "skeleton", "hp": 2.6, "spd": 0.75, "dmg": 1.4, "sc": 1.3, "tint": Color(1.0, 0.78, 0.7), "trait": ""},
+	"skel_runner": {"b": "skeleton", "hp": 0.7, "spd": 1.7, "dmg": 0.8, "sc": 0.9, "tint": Color(0.8, 1.0, 0.8), "trait": ""},
+	"ghoul_pale": {"b": "ghoul", "hp": 0.8, "spd": 1.4, "dmg": 1.0, "sc": 0.95, "tint": Color(1.25, 1.25, 1.3), "trait": ""},
+	"cult_zealot": {"b": "cultist", "hp": 1.6, "spd": 1.0, "dmg": 1.2, "sc": 1.1, "tint": Color(1.4, 0.7, 0.7), "trait": ""},
+	"wolf_dire": {"b": "wolf", "hp": 2.2, "spd": 0.9, "dmg": 1.4, "sc": 1.35, "tint": Color(0.75, 0.75, 0.9), "trait": ""},
+	"bat_blood": {"b": "bat", "hp": 1.6, "spd": 1.1, "dmg": 1.3, "sc": 1.15, "tint": Color(1.5, 0.6, 0.6), "trait": ""},
+	"zombie_bloated": {"b": "zombie", "hp": 1.2, "spd": 1.0, "dmg": 1.0, "sc": 1.2, "tint": Color(0.8, 1.3, 0.6), "trait": "esplosivo"},
+	"spider_brood": {"b": "spider", "hp": 1.3, "spd": 0.9, "dmg": 1.0, "sc": 1.25, "tint": Color(0.9, 0.7, 1.3), "trait": "prolifico"},
+	"gargoyle_obs": {"b": "gargoyle", "hp": 1.7, "spd": 0.9, "dmg": 1.2, "sc": 1.15, "tint": Color(0.6, 0.6, 0.75), "trait": ""},
+	"imp_cinder": {"b": "imp", "hp": 1.2, "spd": 1.2, "dmg": 1.1, "sc": 1.0, "tint": Color(1.6, 0.8, 0.4), "trait": "esplosivo"},
+}
+const TRAITS := {
+	"veloce": Color(0.75, 1.25, 1.0), "corazzato": Color(0.8, 0.85, 1.05),
+	"esplosivo": Color(1.5, 0.85, 0.5), "prolifico": Color(1.1, 0.8, 1.3),
+}
+var trait_ := ""
 const TEL := {"charge": 0.75, "slam": 0.85, "spin": 0.7, "summon": 0.9, "nova": 0.75, "fan": 0.55, "poison": 0.85, "blink": 0.5}
 const LUNGE := {"wolf": [0.3, 200.0], "toad": [0.4, 230.0]}
 
@@ -102,6 +120,9 @@ var pat_seen := {}
 
 func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE) -> void:
 	main = m
+	var vr: Dictionary = VARIANTS.get(k, {})
+	if not vr.is_empty():
+		k = str(vr["b"])
 	kind = k
 	var cyc: int = m.cycle
 	var sprite_name := ""
@@ -177,6 +198,27 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 		dmg *= 1.25
 		spr.modulate = tint * Color(1.5, 1.25, 0.6)
 		spr.scale = Vector2(1.25, 1.25)
+	if not vr.is_empty():
+		hp *= float(vr["hp"])
+		speed *= float(vr["spd"])
+		dmg *= float(vr["dmg"])
+		xp = int(xp * (1.0 + 0.5 * (float(vr["hp"]) - 1.0)))
+		spr.scale *= float(vr["sc"])
+		spr.modulate = spr.modulate * (vr["tint"] as Color)
+		trait_ = str(vr["trait"])
+	elif not (is_boss or champ or elite) and k != "rat" and k != "ooze_small" and randf() < 0.22:
+		trait_ = (TRAITS.keys() as Array).pick_random()
+		match trait_:
+			"veloce":
+				speed *= 1.4
+				hp *= 0.85
+				spr.scale *= 0.92
+			"corazzato":
+				hp *= 1.9
+				speed *= 0.85
+				spr.scale *= 1.12
+		spr.modulate = spr.modulate * (TRAITS[trait_] as Color)
+		xp = int(xp * 1.4)
 	max_hp = hp
 	base_speed = speed
 	cd = randf_range(0.6, 1.8)
@@ -727,7 +769,7 @@ func _draw() -> void:
 
 
 func hurt(d: float, dir: Vector2, force: float, heavy := false) -> void:
-	var crit: bool = randf() < main.player.crit
+	var crit: bool = randf() < main.player.crit_now()
 	if crit:
 		d *= 2.0
 	if recover_t > 0.0:
@@ -754,6 +796,22 @@ func hurt(d: float, dir: Vector2, force: float, heavy := false) -> void:
 		main.enemy_died(self)
 
 
+func death_trait() -> void:
+	match trait_:
+		"esplosivo":
+			main.burst(position, Color(1.0, 0.55, 0.2), 22, 90.0, 0.5)
+			main.shake(3.0)
+			main.snd("kill")
+			var pl: Node2D = main.player
+			if pl.position.distance_to(position) < 34.0:
+				pl.hurt(dmg * 0.8, (pl.position - position).normalized(), 0.0)
+		"prolifico":
+			for i in 2:
+				var sp: Enemy = main.spawn_enemy("rat", position + Vector2(randf_range(-8, 8), randf_range(-5, 5)), 1.0, false, Color.WHITE)
+				sp.awake = true
+				sp.set_process(true)
+
+
 func apply_status(kind_: String, dur: float, val: float) -> void:
 	if kind_ == "slow":
 		slow_t = maxf(slow_t, dur * (0.4 if is_boss else 1.0))
@@ -767,5 +825,8 @@ func _hit_target(tgt: Node2D, u: Vector2, slow: float) -> void:
 		return
 	if tgt == main.player:
 		main.player.hurt(dmg, u, slow)
+		var th: float = main.player.arm("th")
+		if th > 0.0 and not dying:
+			hurt(dmg * th, -u, 30.0)   # spine dell'armatura
 	else:
 		(tgt as Ally).hurt(dmg * 0.8)

@@ -21,6 +21,7 @@ const AFF := {
 	"fuoco": {"n": "di Fuoco", "d": "brucia"}, "gelo": {"n": "del Gelo", "d": "rallenta"},
 	"sangue": {"n": "di Sangue", "d": "ruba vita"}, "acuta": {"n": "Acuminata", "d": "+8% critico"},
 	"rapida": {"n": "Rapida", "d": "colpi piu' veloci"},
+	"tuono": {"n": "del Tuono", "d": "fulmini a catena"}, "veleno": {"n": "Velenosa", "d": "avvelena"},
 }
 const ADJ := [["Semplice", "Pesante", "Comune", "Resistente"], ["Affilata", "Temprata", "Solida"], ["Maledetta", "Sacra", "Antica"],
 	["dell'Eclissi", "del Re Pallido", "delle Ceneri"]]
@@ -75,6 +76,8 @@ static func random_weapon(weights: Array) -> Dictionary:
 
 
 static func wname(w: Dictionary) -> String:
+	if w.has("nm"):
+		return str(w["nm"])
 	var r: int = int(w["r"])
 	var adj: Array = ADJ[r]
 	var s: String = FAM[w["f"]]["n"] + " " + adj[int(w.get("adj", 0)) % adj.size()]
@@ -84,15 +87,11 @@ static func wname(w: Dictionary) -> String:
 
 
 static func wdesc(w: Dictionary) -> String:
-	var parts: Array = []
-	parts.append("DANNO +%d%%" % int(round(float(w["b"]) * 100.0)))
-	for a in w["a"]:
-		parts.append(str(AFF[a]["d"]).to_upper())
-	return "  ".join(parts)
+	return "  ".join(Forge.wlines(w))
 
 
 const SHORT := {"dardo": "DARDO", "nova": "NOVA", "fulmine": "FULMINE", "gelo": "GELO", "cura": "CURA", "rigenera": "RIGENERA", "scudo": "SCUDO"}
-const ASHORT := {"fuoco": "FUOCO", "gelo": "GELO", "sangue": "SANGUE", "acuta": "CRIT", "rapida": "VELOCE"}
+const ASHORT := {"fuoco": "FUOCO", "gelo": "GELO", "sangue": "SANGUE", "acuta": "CRIT", "rapida": "VELOCE", "tuono": "TUONO", "veleno": "VELENO"}
 
 
 static func wshort(w: Dictionary) -> String:
@@ -107,7 +106,7 @@ static func cd_mult(w: Dictionary) -> float:
 	for a in w["a"]:
 		if a == "rapida":
 			n += 1
-	return pow(0.88, n)
+	return maxf(0.45, pow(0.88, n) * (1.0 - float((w.get("mods", {}) as Dictionary).get("sp", 0.0))))
 
 
 static func crit_bonus(w: Dictionary) -> float:
@@ -115,7 +114,16 @@ static func crit_bonus(w: Dictionary) -> float:
 	for a in w["a"]:
 		if a == "acuta":
 			n += 1
-	return 0.08 * n
+	return 0.08 * n + float((w.get("mods", {}) as Dictionary).get("cr", 0.0))
+
+
+## portata in piu' e moltiplicatore del costo in stamina dati dalle modifiche
+static func reach_add(w: Dictionary) -> float:
+	return float((w.get("mods", {}) as Dictionary).get("rc", 0.0))
+
+
+static func st_mult(w: Dictionary) -> float:
+	return maxf(0.4, 1.0 + float((w.get("mods", {}) as Dictionary).get("st", 0.0)))
 
 
 static func clean(w) -> Dictionary:
@@ -123,4 +131,32 @@ static func clean(w) -> Dictionary:
 	var out := {"k": "w", "f": str(w["f"]), "r": int(w["r"]), "b": float(w["b"]), "a": [], "adj": int(w.get("adj", 0))}
 	for a in w["a"]:
 		out["a"].append(str(a))
+	if w.has("mods"):
+		var m := {}
+		for k in w["mods"]:
+			m[str(k)] = float(w["mods"][k])
+		out["mods"] = m
+	if w.has("u"):
+		out["u"] = int(w["u"])
+	if w.has("nm"):
+		out["nm"] = str(w["nm"])
+	if w.has("rc"):
+		var rc := {}
+		for k in w["rc"]:
+			rc[str(k)] = int(w["rc"][k])
+		out["rc"] = rc
+	return out
+
+
+## pezzo d'armatura riletto dal salvataggio: tipi corretti
+static func clean_piece(pc) -> Dictionary:
+	var st := {}
+	for k in pc["st"]:
+		st[str(k)] = float(pc["st"][k])
+	var out := {"slot": str(pc["slot"]), "n": str(pc["n"]), "st": st, "q": int(pc.get("q", 1)), "m": str(pc.get("m", "pelle"))}
+	if pc.has("rc"):
+		var rc := {}
+		for k in pc["rc"]:
+			rc[str(k)] = int(pc["rc"][k])
+		out["rc"] = rc
 	return out
