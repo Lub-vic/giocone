@@ -134,6 +134,15 @@ for fam, rows in ART.items():
     hd = held(base)
     hd.save(os.path.join(OUT, "hw_%s.png" % fam))
     made += [ic, hd]
+# mazza da baseball in mano (arma forgiata dagli oggetti evocati, non e' una vera arma da fuoco)
+PAL['t'] = (216, 176, 112)
+PAL['T'] = (160, 118, 64)
+BAT = ["............tttt.",
+       "..........ttttttt",
+       "ddTTTTTTTtttttttt",
+       "..........TTTTTTT",
+       "............TTTT."]
+held(build(BAT)).save(os.path.join(OUT, "hw_bat.png"))
 if PREV:
     k = 8
     pv = Image.new("RGBA", (len(made) * 26 * k // 2 + 10, 26 * k), (40, 36, 48, 255))

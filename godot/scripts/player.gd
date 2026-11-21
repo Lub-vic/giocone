@@ -267,9 +267,10 @@ func setup(m) -> void:
 ## arma in mano: segue la mano, si specchia con il personaggio e oscilla durante i colpi
 func update_wspr() -> void:
 	var f := str(weapon()["f"])
-	if f != wspr_f:
-		wspr_f = f
-		wspr.texture = Game.tex("hw_" + f)
+	var hs := str(weapon().get("hs", "hw_" + f))
+	if hs != wspr_f:
+		wspr_f = hs
+		wspr.texture = Game.tex(hs)
 	var sg := -1.0 if spr.flip_h else 1.0
 	wspr.flip_h = spr.flip_h
 	wspr.position = Vector2(5.5 * sg, spr.offset.y + 3.0)

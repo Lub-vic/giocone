@@ -3083,7 +3083,7 @@ func journey_update() -> void:
 				if po.get("built", false):
 					var left := 0
 					for en in po.get("spawns", []):
-						if en.get("alive", true):
+						if en.get("alive", true) and spawn_present(en):
 							left += 1
 					if left == 0:
 						journey_advance("LUOGO LIBERATO! HAI TROVATO UN'ARMA NEL BOTTINO", 120, 0, 2)
@@ -3235,6 +3235,15 @@ func quest_event(typ: String, kind: String, champ: bool) -> void:
 				popup(player.position + Vector2(0, -26), "%d/%d" % [int(q[qid]["p"]), int(d["n"])], Color(0.7, 1.0, 0.85))
 
 
+## nemici ancora vivi di un luogo (solo quelli che compaiono davvero al livello attuale)
+func poi_left(po: Dictionary) -> int:
+	var left := 0
+	for en in po.get("spawns", []):
+		if en.get("alive", true) and spawn_present(en):
+			left += 1
+	return left
+
+
 func quest_update() -> void:
 	var q: Dictionary = qp()
 	for qid in q:
@@ -3257,7 +3266,7 @@ func quest_update() -> void:
 			if po2.get("built", false):
 				var left := 0
 				for en in po2["spawns"]:
-					if en.get("alive", true):
+					if en.get("alive", true) and spawn_present(en):
 						left += 1
 				if left == 0:
 					q[qid]["p"] = 1
@@ -3627,6 +3636,8 @@ func use_brew(fx: Dictionary) -> bool:
 	var v := float(fx["v"])
 	var bf: Dictionary = fx.get("buffs", {})
 	match base:
+		"chrono":
+			Chrono._use(self, str(fx["cid"]))
 		"heal":
 			if player.hp >= player.max_hp - 1.0 and bf.is_empty():
 				say("SEI GIA' IN SALUTE")
@@ -3805,6 +3816,20 @@ func _give_brew(it: Dictionary) -> bool:
 	player.items[id] = int(player.items.get(id, 0)) + 1
 	belt_auto(id)
 	say("%s IN BORSA%s" % [str(it["n"]), ": Z CAMBIA, X USA" if player.belt.has(id) else " (CINTURA PIENA: AGGIUNGILA CON I)"])
+	return true
+
+
+## oggetto utile evocato: va in borsa come consumabile (stesso sistema delle pozioni); false se non c'e' posto
+func stock_chrono(cid: String, nm: String) -> bool:
+	var id := "b:chrono:%s" % cid
+	if int(player.items.get(id, 0)) >= 9:
+		return false
+	if int(player.items.get(id, 0)) == 0 and player.bag_free() <= 0:
+		return false
+	player.brews[id] = {"n": nm, "fx": {"base": "chrono", "cid": cid, "v": 0.0, "dur": 0.0, "buffs": {}}}
+	player.items[id] = int(player.items.get(id, 0)) + 1
+	belt_auto(id)
+	say("%s IN BORSA%s" % [nm, ": Z CAMBIA, X USA" if player.belt.has(id) else " (CINTURA PIENA: AGGIUNGILA CON I)"])
 	return true
 
 
@@ -5279,7 +5304,10 @@ func obj_targets() -> Array:
 							if a["def"]["id"] == d["target"]:
 								tp = a["pos"]
 			if tp != null:
-				out.append({"p": tp, "c": green, "n": str(d["giver"]) if quest_complete(qid) else str(d["txt"])})
+				var tn := str(d["giver"]) if quest_complete(qid) else str(d["txt"])
+				if not quest_complete(qid) and d["type"] == "poi_clear" and pois[int(d["poi_id"])].get("built", false):
+					tn += " (RIMASTI %d)" % poi_left(pois[int(d["poi_id"])])
+				out.append({"p": tp, "c": green, "n": tn})
 	elif DUNS.has(area):
 		if boss_kind != "" and not persist["bosses"].has(boss_kind):
 			out.append({"p": boss_pos, "c": gold, "n": "CUSTODE"})
@@ -6477,7 +6505,7 @@ func drop_loot(pos: Vector2, item: Dictionary) -> void:
 	elif item["k"] == "a":
 		icon = "ai_" + str(item["a"]["slot"])
 	elif item["k"] != "tome":
-		icon = str(Rpg.FAM[item["f"]]["icon"])
+		icon = Rpg.wicon(item)
 	var p := Prop.new()
 	var cc := Vector2i(floori(pos.x / Game.TS), floori(pos.y / Game.TS))
 	p.setup_top(icon, cc, Vector2i(1, 1))
@@ -7335,7 +7363,11 @@ func _unhandled_input(ev: InputEvent) -> void:
 			craft_tab = (craft_tab + 1) % Forge.TABS.size()
 			craft_row = mini(craft_row, Forge.slots(craft_tab).size() + 1)
 		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
-			craft_make()
+			# si crea solo sulla riga CREA; sulle altre righe A/INVIO scorre la scelta
+			if craft_row == Forge.slots(craft_tab).size() + 1:
+				craft_make()
+			else:
+				craft_step(1)
 		elif ev.is_action_pressed("ui_cancel"):
 			state = "menu"
 		return

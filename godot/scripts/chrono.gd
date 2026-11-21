@@ -5,6 +5,7 @@ extends RefCounted
 
 const MAX_E := 100.0        # carica massima del Cronotone
 const COST := 100.0         # costo di un'evocazione
+const GUN_P := 0.12         # probabilita' fissa che esca un'arma dal futuro (se ce n'e' una sbloccata)
 const PITY_MAX := 3         # dopo tanti oggetti inutili di fila, il prossimo e' garantito utile
 
 static var owned := {}      # oggetti inutili in possesso: id -> quantita'
@@ -33,7 +34,7 @@ const JACKPOT := {
 
 # --- armi dal futuro: si impugnano subito (come le armi forgiate). f famiglia (rpg.gd), b bonus, a affissi
 const GUN := {
-	"pistola": {"n": "PISTOLA", "era": "f", "lv": 3, "w": 5, "d": "colpi precisi", "f": "pistol", "b": 0.08, "a": []},
+	"pistola": {"n": "PISTOLA", "era": "f", "lv": 1, "w": 5, "d": "colpi precisi", "f": "pistol", "b": 0.08, "a": []},
 	"pompa": {"n": "FUCILE A POMPA", "era": "f", "lv": 6, "w": 4, "d": "rosa di pallini a bruciapelo", "f": "shotgun", "b": 0.14, "a": []},
 	"mitra": {"n": "MITRA", "era": "f", "lv": 8, "w": 4, "d": "raffica rapidissima", "f": "smg", "b": 0.12, "a": []},
 	"motosega": {"n": "MOTOSEGA", "era": "f", "lv": 9, "w": 4, "d": "taglia tutto, anche gli alberi", "f": "chainsaw", "b": 0.18, "a": ["sangue"]},
@@ -50,7 +51,7 @@ const JUNK := {
 	"racchetta": {"n": "RACCHETTA DA TENNIS", "era": "f", "w": 8, "out": {"t": "w", "f": "sword", "b": 0.10, "a": ["rapida"], "mods": {"cr": 0.04, "sp": 0.06}, "nm": "Racchetta Rimbalzante"}},
 	"ombrello": {"n": "OMBRELLO", "era": "f", "w": 7, "out": {"t": "a", "slot": "torso", "n": "MANTELLO PARAPIOGGIA", "st": {"df": 0.09, "mv": 0.04}, "m": "pelle"}},
 	"pentola": {"n": "PENTOLA", "era": "p", "w": 7, "out": {"t": "a", "slot": "testa", "n": "ELMO A PENTOLA", "st": {"df": 0.10, "hp": 10.0}, "m": "minerale"}},
-	"mazza": {"n": "MAZZA DA BASEBALL", "era": "f", "w": 7, "out": {"t": "w", "f": "hammer", "b": 0.20, "a": [], "mods": {"st": -0.05}, "nm": "Mazza da Fuoricampo"}},
+	"mazza": {"n": "MAZZA DA BASEBALL", "era": "f", "w": 7, "out": {"t": "w", "f": "hammer", "b": 0.20, "a": [], "mods": {"st": -0.05}, "nm": "Mazza da Fuoricampo", "hs": "hw_bat"}},
 	"frullatore": {"n": "FRULLATORE", "era": "f", "w": 6, "out": {"t": "w", "f": "dagger", "b": 0.10, "a": ["rapida", "sangue"], "mods": {}, "nm": "Sega Rotante"}},
 	"batteria": {"n": "BATTERIA STILO", "era": "f", "w": 7, "out": {"t": "b", "n": "BATTERIA RICARICATA", "fx": {"base": "mana", "v": 0.5, "dur": 150.0, "buffs": {"b_sp": 0.2}}}},
 	"cuscino": {"n": "CUSCINO", "era": "p", "w": 7, "out": {"t": "a", "slot": "gambe", "n": "SCHINIERI IMBOTTITI", "st": {"hp": 20.0, "df": 0.04}, "m": "pelle"}},
@@ -151,6 +152,19 @@ static func reset() -> void:
 
 ## estrazione pesata. pity = oggetti inutili usciti di fila
 static func roll(lv: int, pity: int) -> Dictionary:
+	# un'arma dal futuro ogni ~8 evocazioni, qualunque sia il resto del pool
+	if randf() < GUN_P:
+		var gp: Array = []
+		var gt := 0.0
+		for gid in GUN:
+			if lv >= int(GUN[gid]["lv"]):
+				gp.append([gid, float(GUN[gid]["w"])])
+				gt += float(GUN[gid]["w"])
+		var gr := randf() * gt
+		for ge in gp:
+			gr -= float(ge[1])
+			if gr <= 0.0:
+				return {"cls": "gun", "id": ge[0]}
 	var pool: Array = []
 	var tot := 0.0
 	for id in USE:
@@ -236,7 +250,10 @@ static func apply(main, r: Dictionary) -> void:
 			main.shake(4.0)
 			return
 	main.popup(pl.position + Vector2(0, -26), nm, col)
-	main.say("EVOCATO: %s" % nm)
+	# gli oggetti utili finiscono in borsa (Z cambia, X usa); se non c'e' posto fanno effetto subito
+	if main.stock_chrono(str(r["id"]), nm):
+		return
+	main.say("EVOCATO: %s (BORSA PIENA: USATO SUBITO)" % nm)
 	_use(main, str(r["id"]))
 
 

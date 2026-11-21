@@ -186,6 +186,9 @@ static func _make_junk(v: Array) -> Dictionary:
 			var mods: Dictionary = (o["mods"] as Dictionary).duplicate()
 			it = {"k": "w", "f": o["f"], "r": 0, "b": float(o["b"]), "a": (o["a"] as Array).duplicate(), "adj": 0, "mods": mods, "u": 0, "nm": o["nm"], "rc": {}}
 			it["r"] = rarity_of(it)
+			it["ic"] = "ch_" + id                      # l'arma conserva l'icona dell'oggetto da cui nasce
+			if o.has("hs"):
+				it["hs"] = o["hs"]
 			lines.append("ARMA: %s" % str(Rpg.FAM[o["f"]]["n"]).to_upper())
 			lines.append_array(wlines(it))
 		"a":
@@ -395,6 +398,8 @@ static func _make_brew(v: Array) -> Dictionary:
 static func brew_lines(fx: Dictionary) -> Array:
 	var out: Array = []
 	match str(fx["base"]):
+		"chrono":
+			out.append(str(Chrono.USE[str(fx["cid"])]["d"]).to_upper())
 		"heal":
 			out.append("CURA %d%% DELLA VITA" % int(round(float(fx["v"]) * 100.0)))
 		"mana":

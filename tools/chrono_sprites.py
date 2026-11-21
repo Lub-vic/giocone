@@ -186,12 +186,21 @@ def pentola():
     return g, P()
 
 
-def mazza():
+def mazza():  # mazza da baseball: legno chiaro, manico sottile, fusto che si allarga, pomello
     g = G(16)
-    g.l(2, 14, 10, 6, 'a'); g.l(3, 14, 11, 6, 'a'); g.p(1, 15, 'd'); g.p(2, 15, 'd')
-    g.l(10, 4, 14, 8, 'b'); g.l(9, 5, 13, 9, 'b'); g.l(10, 5, 14, 9, 'b'); g.l(11, 4, 15, 8, 'w')
-    g.p(12, 6, 'r')
-    return g, P(a='#b88a50', b='#d8d8d0', d='#3a2a1a', r='#c04040')
+    for i in range(14):
+        x, y = 1 + i, 14 - i
+        w = 0 if i < 5 else (1 if i < 9 else 2)
+        g.p(x, y, 'a')
+        for k in range(1, w + 1):
+            g.p(x + k, y, 'a'); g.p(x, y - k, 'a')
+        if w >= 1:
+            g.p(x + 1, y - 1, 'a')
+    g.p(0, 15, 'd'); g.p(1, 15, 'd'); g.p(0, 14, 'd'); g.p(1, 14, 'd')               # pomello
+    for x, y in ((6, 9), (7, 8)):
+        g.p(x, y, 'e')                                                               # fascia di nastro sul manico
+    g.p(11, 4, 'h'); g.p(12, 3, 'h'); g.p(10, 5, 'h'); g.p(13, 2, 'e'); g.p(14, 1, 'e')
+    return g, P(a='#d8b070', d='#8a6838', e='#b88a50', h='#f4dca0')
 
 
 def frullatore():  # frullatore: brocca di vetro, coperchio, base con pulsante

@@ -83,6 +83,11 @@ static func make_weapon(rar: int, fam := "") -> Dictionary:
 	return {"k": "w", "f": f, "r": rar, "b": b, "a": a, "adj": randi() % 4}
 
 
+## icona dell'arma: quelle nate dagli oggetti evocati hanno la loro (es. la mazza da baseball, non un martello)
+static func wicon(w: Dictionary) -> String:
+	return str(w.get("ic", FAM[w["f"]]["icon"]))
+
+
 static func random_weapon(weights: Array) -> Dictionary:
 	return make_weapon(roll_rarity(weights))
 

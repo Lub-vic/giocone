@@ -852,10 +852,13 @@ func inv_hit(pos: Vector2) -> Array:
 func _icon(e: Dictionary, r: Rect2, a := 1.0) -> void:
 	match str(e["k"]):
 		"w":
-			draw_texture_rect(Game.tex(Rpg.FAM[e["w"]["f"]]["icon"]), r, false, Color(1, 1, 1, a))
+			draw_texture_rect(Game.tex(Rpg.wicon(e["w"])), r, false, Color(1, 1, 1, a))
 		"a":
 			draw_texture_rect(Game.tex("ai_" + str(e["a"]["slot"])), r, false, ARM_COL.get(str(e["a"].get("m", "pelle")), Color.WHITE) * Color(1, 1, 1, a))
 		"b":
+			if str(e["id"]).begins_with("b:chrono:"):
+				draw_texture_rect(Game.tex("ch_" + str(e["id"]).substr(9)), r, false, Color(1, 1, 1, a))
+				return
 			draw_texture_rect(Game.tex("flask"), r, false, BREW_COL.get(main.brew_base(str(e["id"])), Color.WHITE) * Color(1, 1, 1, a))
 		"m":
 			var mid := str(e["id"])
@@ -902,7 +905,7 @@ func _inv(p: Player) -> void:
 	var cx := lx + 74.0
 	draw_texture_rect(Game.tex(str(Rpg.CLASSES[p.cls]["spr"]) + "_b"), Rect2(cx - 30, 34, 60, 60), false)
 	draw_set_transform(Vector2(cx + 16, 73), 0.18, Vector2(2.4, 2.4))
-	draw_texture(Game.tex("hw_" + str(p.weapon()["f"])), Vector2(-12, -18))
+	draw_texture(Game.tex(str(p.weapon().get("hs", "hw_" + str(p.weapon()["f"])))), Vector2(-12, -18))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	var labels := ["ARMA", "ARMA", "ELMO", "TORSO", "GAMBE", "-", "-", "-", "-", "-", "-", "-"]
 	for i in 12:
@@ -1125,11 +1128,11 @@ func _equip_panel(p: Player) -> void:
 	bw = (pw - 9.0) / 2.0
 	var r := Rect2(3, size.y - 35, pw + 4.0, 32)
 	_frame(r, true, 0.6)
-	draw_texture(Game.tex(Rpg.FAM[w["f"]]["icon"]), Vector2(r.position.x + 5, r.position.y + 3), Color(1, 1, 1, 0.95))
+	draw_texture(Game.tex(Rpg.wicon(w)), Vector2(r.position.x + 5, r.position.y + 3), Color(1, 1, 1, 0.95))
 	_txt(nm, Vector2(r.position.x + 24, r.position.y + 12), rc)
 	if p.wslots[1 - p.wcur] != null:
 		var w2: Dictionary = p.wslots[1 - p.wcur]
-		draw_texture(Game.tex(Rpg.FAM[w2["f"]]["icon"]), Vector2(r.end.x - 17, r.position.y - 13), Color(1, 1, 1, 0.5))
+		draw_texture(Game.tex(Rpg.wicon(w2)), Vector2(r.end.x - 17, r.position.y - 13), Color(1, 1, 1, 0.5))
 	for i in 2:
 		var id: String = p.spells[i]
 		var sd: Dictionary = Rpg.SPELLS[id]
@@ -1226,13 +1229,13 @@ func _options() -> void:
 func _controls() -> void:
 	if not main.in_title_menu:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.78))
-	var r := Rect2(size.x / 2 - 190, 4, 380, 264)
+	var r := Rect2(size.x / 2 - 230, 4, 460, 264)
 	_panel(r)
 	_txt("COMANDI", Vector2(r.position.x, r.position.y + 28), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 	var x := r.position.x + 14
 	_txt("AZIONE", Vector2(x, r.position.y + 46), GOLD_L)
-	_txt("TASTIERA", Vector2(x + 96, r.position.y + 46), GOLD_L)
-	_txt("CONTROLLER", Vector2(x + 262, r.position.y + 46), GOLD_L)
+	_txt("TASTIERA", Vector2(x + 152, r.position.y + 46), GOLD_L)
+	_txt("CONTROLLER", Vector2(x + 290, r.position.y + 46), GOLD_L)
 	var rows := [
 		["MUOVERSI", "WASD / FRECCE", "STICK SX / CROCE"],
 		["COLPO LEGGERO", "SPAZIO / J / CLICK", "RB"],
@@ -1251,12 +1254,12 @@ func _controls() -> void:
 		["AGGANCIA NEMICO", "Y", "R3"],
 		["TATTICA: INVIA", "CLICK / SPAZIO", "RB"],
 		["TATTICA: RICHIAMA", "L / CLICK DESTRO", "RT"],
-		["CAMPO: MAGIE", "Z / X", "LB / RB"],
-		["CAMPO: VIAGGIO", "T", "Y"],
+		["CAMPO: MAGIE / VIAGGIO", "Z / X / T", "LB / RB / Y"],
+		["CRONOTONE: BOLLA", "N", "SELECT"],
 	]
 	for i in rows.size():
-		var y: float = r.position.y + 58.0 + i * 9.8
+		var y: float = r.position.y + 58.0 + i * 8.9
 		_txt(rows[i][0], Vector2(x, y), Color(0.85, 0.83, 0.95))
-		_txt(rows[i][1], Vector2(x + 96, y), Color(0.7, 0.85, 1.0))
-		_txt(rows[i][2], Vector2(x + 262, y), Color(0.7, 1.0, 0.8))
+		_txt(rows[i][1], Vector2(x + 152, y), Color(0.7, 0.85, 1.0))
+		_txt(rows[i][2], Vector2(x + 290, y), Color(0.7, 1.0, 0.8))
 	_txt(_k("ESC / INVIO per tornare", "A / B per tornare"), Vector2(r.position.x, r.end.y - 9), Color(0.6, 0.6, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
