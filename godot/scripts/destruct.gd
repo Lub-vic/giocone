@@ -5,10 +5,10 @@ extends RefCounted
 
 # efficienza dell'arma (famiglia) contro il materiale
 const EFF := {
-	"legno": {"sword": 1.0, "greatsword": 1.6, "spear": 0.7, "hammer": 1.0, "dagger": 0.45, "bow": 0.1, "staff": 0.1},
-	"molle": {"sword": 1.0, "greatsword": 1.2, "spear": 1.0, "hammer": 0.9, "dagger": 0.8, "bow": 0.1, "staff": 0.1},
-	"pietra": {"sword": 0.12, "greatsword": 0.35, "spear": 0.10, "hammer": 1.0, "dagger": 0.05, "bow": 0.02, "staff": 0.02},
-	"metallo": {"sword": 0.08, "greatsword": 0.15, "spear": 0.05, "hammer": 0.6, "dagger": 0.03, "bow": 0.01, "staff": 0.01},
+	"legno": {"sword": 1.0, "greatsword": 1.6, "spear": 0.7, "hammer": 1.0, "dagger": 0.45, "bow": 0.1, "staff": 0.1, "pistol": 0.15, "smg": 0.2, "shotgun": 0.5, "chainsaw": 2.5, "laserpistol": 0.3, "lightsaber": 1.8, "rocket": 1.0, "plasma": 0.6},
+	"molle": {"sword": 1.0, "greatsword": 1.2, "spear": 1.0, "hammer": 0.9, "dagger": 0.8, "bow": 0.1, "staff": 0.1, "pistol": 0.15, "smg": 0.2, "shotgun": 0.5, "chainsaw": 2.0, "laserpistol": 0.3, "lightsaber": 2.0, "rocket": 1.0, "plasma": 0.6},
+	"pietra": {"sword": 0.12, "greatsword": 0.35, "spear": 0.10, "hammer": 1.0, "dagger": 0.05, "bow": 0.02, "staff": 0.02, "pistol": 0.03, "smg": 0.04, "shotgun": 0.1, "chainsaw": 0.4, "laserpistol": 0.1, "lightsaber": 0.5, "rocket": 2.0, "plasma": 0.5},
+	"metallo": {"sword": 0.08, "greatsword": 0.15, "spear": 0.05, "hammer": 0.6, "dagger": 0.03, "bow": 0.01, "staff": 0.01, "pistol": 0.02, "smg": 0.03, "shotgun": 0.05, "chainsaw": 0.2, "laserpistol": 0.08, "lightsaber": 0.4, "rocket": 1.5, "plasma": 0.4},
 }
 const TOOL := {"legno": "UNA LAMA PESANTE", "molle": "QUALSIASI ARMA", "pietra": "UN MARTELLO", "metallo": "UN MARTELLO"}
 const COL := {

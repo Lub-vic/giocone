@@ -26,9 +26,21 @@ const JACKPOT := {
 	"drone": {"n": "DRONE D'ATTACCO", "era": "f", "lv": 4, "w": 3, "d": "combatte per te per 25s"},
 	"golem": {"n": "GOLEM DI PIETRA", "era": "p", "lv": 8, "w": 3, "d": "alleato corazzato per 30s"},
 	# mezzi: ci sali a bordo. hp base + hpl per livello, t durata, spd velocita', dm danno del colpo (x danno base), cd attesa, pr perforazione, aoe area, crush speronamento
-	"carro": {"n": "CARRO DA GUERRA", "era": "p", "lv": 10, "w": 3, "d": "balista perforante e speronamento", "hp": 120.0, "hpl": 8.0, "t": 35.0, "spd": 1.0, "dm": 2.4, "cd": 0.55, "pr": 4, "crush": 1.2},
-	"tank": {"n": "CARRARMATO", "era": "f", "lv": 14, "w": 3, "d": "cannone ad area, lento e corazzato", "hp": 200.0, "hpl": 10.0, "t": 40.0, "spd": 0.75, "dm": 3.5, "cd": 0.8, "aoe": 34.0, "crush": 1.5},
-	"ufo": {"n": "MINI-UFO", "era": "f", "lv": 20, "w": 2, "d": "veloce, raffica di colpi", "hp": 140.0, "hpl": 6.0, "t": 30.0, "spd": 1.5, "dm": 0.8, "cd": 0.13},
+	"carro": {"n": "CARRO DA GUERRA", "era": "p", "lv": 10, "w": 3, "d": "balista perforante; COLPO PESANTE: catapulta", "hp": 120.0, "hpl": 8.0, "t": 35.0, "spd": 1.0, "dm": 2.4, "cd": 0.55, "cd2": 4.0, "pr": 4, "crush": 1.2},
+	"tank": {"n": "CARRARMATO", "era": "f", "lv": 14, "w": 3, "d": "mitragliatrice; COLPO PESANTE: cannonata", "hp": 200.0, "hpl": 10.0, "t": 40.0, "spd": 0.75, "dm": 0.45, "cd": 0.09, "cd2": 1.2, "crush": 1.5},
+	"ufo": {"n": "MINI-UFO", "era": "f", "lv": 20, "w": 2, "d": "laser a raffica; COLPO PESANTE: onda elettrica", "hp": 140.0, "hpl": 6.0, "t": 30.0, "spd": 1.5, "dm": 0.8, "cd": 0.13, "cd2": 6.0},
+}
+
+# --- armi dal futuro: si impugnano subito (come le armi forgiate). f famiglia (rpg.gd), b bonus, a affissi
+const GUN := {
+	"pistola": {"n": "PISTOLA", "era": "f", "lv": 3, "w": 5, "d": "colpi precisi", "f": "pistol", "b": 0.08, "a": []},
+	"pompa": {"n": "FUCILE A POMPA", "era": "f", "lv": 6, "w": 4, "d": "rosa di pallini a bruciapelo", "f": "shotgun", "b": 0.14, "a": []},
+	"mitra": {"n": "MITRA", "era": "f", "lv": 8, "w": 4, "d": "raffica rapidissima", "f": "smg", "b": 0.12, "a": []},
+	"motosega": {"n": "MOTOSEGA", "era": "f", "lv": 9, "w": 4, "d": "taglia tutto, anche gli alberi", "f": "chainsaw", "b": 0.18, "a": ["sangue"]},
+	"laserpistol": {"n": "PISTOLA LASER", "era": "f", "lv": 12, "w": 3, "d": "raggi veloci", "f": "laserpistol", "b": 0.16, "a": ["rapida"]},
+	"spadalaser": {"n": "SPADA LASER", "era": "f", "lv": 15, "w": 3, "d": "lama di luce", "f": "lightsaber", "b": 0.24, "a": ["acuta"]},
+	"bazooka": {"n": "LANCIARAZZI", "era": "f", "lv": 18, "w": 2, "d": "razzi esplosivi", "f": "rocket", "b": 0.22, "a": ["fuoco"]},
+	"fucileplasma": {"n": "FUCILE AL PLASMA", "era": "f", "lv": 22, "w": 2, "d": "globi di plasma", "f": "plasma", "b": 0.30, "a": ["tuono"]},
 }
 
 # --- oggetti inutili: vanno alla forgia e diventano arma, armatura o pozione in base all'oggetto
@@ -44,6 +56,20 @@ const JUNK := {
 	"cuscino": {"n": "CUSCINO", "era": "p", "w": 7, "out": {"t": "a", "slot": "gambe", "n": "SCHINIERI IMBOTTITI", "st": {"hp": 20.0, "df": 0.04}, "m": "pelle"}},
 	"lampadario": {"n": "LAMPADARIO", "era": "p", "w": 6, "out": {"t": "w", "f": "staff", "b": 0.14, "a": ["tuono"], "mods": {}, "nm": "Lampadario Fulminante"}},
 	"aspirapolvere": {"n": "ASPIRAPOLVERE", "era": "f", "w": 6, "out": {"t": "a", "slot": "torso", "n": "ZAINO ASPIRANTE", "st": {"rg": 0.5, "mn": 12.0}, "m": "minerale"}},
+	"mattarello": {"n": "MATTARELLO", "era": "p", "w": 7, "out": {"t": "w", "f": "hammer", "b": 0.10, "a": [], "mods": {"sp": 0.06}, "nm": "Mattarello da Battaglia"}},
+	"padella": {"n": "PADELLA", "era": "p", "w": 7, "out": {"t": "w", "f": "sword", "b": 0.12, "a": [], "mods": {"cr": 0.03}, "nm": "Padellone Maledetto"}},
+	"ferrostiro": {"n": "FERRO DA STIRO", "era": "f", "w": 6, "out": {"t": "w", "f": "hammer", "b": 0.16, "a": ["fuoco"], "mods": {"st": 0.05}, "nm": "Ferro Rovente"}},
+	"phon": {"n": "PHON", "era": "f", "w": 6, "out": {"t": "w", "f": "staff", "b": 0.12, "a": ["fuoco"], "mods": {"sp": 0.05}, "nm": "Phon Infernale"}},
+	"chitarra": {"n": "CHITARRA ELETTRICA", "era": "f", "w": 5, "out": {"t": "w", "f": "staff", "b": 0.16, "a": ["tuono"], "mods": {}, "nm": "Chitarra Distorta"}},
+	"asta_selfie": {"n": "ASTA PER SELFIE", "era": "f", "w": 6, "out": {"t": "w", "f": "spear", "b": 0.12, "a": [], "mods": {"cr": 0.03}, "nm": "Asta Telescopica"}},
+	"candeliere": {"n": "CANDELIERE", "era": "p", "w": 6, "out": {"t": "w", "f": "staff", "b": 0.12, "a": ["fuoco"], "mods": {}, "nm": "Candelabro Ardente"}},
+	"casco_moto": {"n": "CASCO DA MOTO", "era": "f", "w": 6, "out": {"t": "a", "slot": "testa", "n": "CASCO INTEGRALE", "st": {"df": 0.13, "mv": -0.02}, "m": "minerale"}},
+	"giubbotto": {"n": "GIUBBOTTO DI PELLE", "era": "f", "w": 6, "out": {"t": "a", "slot": "torso", "n": "GIUBBOTTO BORCHIATO", "st": {"df": 0.11, "hp": 8.0}, "m": "pelle"}},
+	"stivali": {"n": "STIVALI DI GOMMA", "era": "f", "w": 6, "out": {"t": "a", "slot": "gambe", "n": "STIVALI ANTIPIOGGIA", "st": {"df": 0.06, "mv": 0.05}, "m": "pelle"}},
+	"skateboard": {"n": "SKATEBOARD", "era": "f", "w": 5, "out": {"t": "a", "slot": "gambe", "n": "SCHINIERI A ROTELLE", "st": {"df": 0.02, "mv": 0.12}, "m": "legna"}},
+	"secchio": {"n": "SECCHIO", "era": "p", "w": 6, "out": {"t": "a", "slot": "testa", "n": "ELMO A SECCHIO", "st": {"df": 0.07, "hp": 6.0}, "m": "minerale"}},
+	"caffe": {"n": "TAZZA DI CAFFE'", "era": "f", "w": 6, "out": {"t": "b", "n": "ESPRESSO DOPPIO", "fx": {"base": "mana", "v": 0.3, "dur": 120.0, "buffs": {"b_mv": 0.2}}}},
+	"energy": {"n": "ENERGY DRINK", "era": "f", "w": 6, "out": {"t": "b", "n": "ENERGY DRINK", "fx": {"base": "heal", "v": 0.2, "dur": 120.0, "buffs": {"b_dm": 0.12}}}},
 }
 
 
@@ -133,6 +159,9 @@ static func roll(lv: int, pity: int) -> Dictionary:
 	for id in JACKPOT:
 		if lv >= int(JACKPOT[id]["lv"]):
 			pool.append(["jackpot", id, float(JACKPOT[id]["w"]) + minf(4.0, 0.15 * lv)])
+	for id in GUN:
+		if lv >= int(GUN[id]["lv"]):
+			pool.append(["gun", id, float(GUN[id]["w"])])
 	if pity < PITY_MAX:
 		for id in JUNK:
 			pool.append(["junk", id, float(JUNK[id]["w"])])
@@ -152,6 +181,8 @@ static func name_of(r: Dictionary) -> String:
 			return str(USE[r["id"]]["n"])
 		"jackpot":
 			return str(JACKPOT[r["id"]]["n"])
+		"gun":
+			return str(GUN[r["id"]]["n"])
 	return str(JUNK[r["id"]]["n"])
 
 
@@ -161,6 +192,8 @@ static func era_of(r: Dictionary) -> String:
 			return str(USE[r["id"]]["era"])
 		"jackpot":
 			return str(JACKPOT[r["id"]]["era"])
+		"gun":
+			return "f"
 	return str(JUNK[r["id"]]["era"])
 
 
@@ -180,12 +213,22 @@ static func apply(main, r: Dictionary) -> void:
 		main.say("NUOVA ERA - %s. %s" % [era_name(), str(ERA_MSG[era()])])
 		main.shake(6.0)
 	var nm := name_of(r)
+	_icon(main, pl.position + Vector2(0, -22), str(r["id"]), str(r["cls"]) != "junk" and str(r["cls"]) != "use")
 	match str(r["cls"]):
 		"junk":
 			var id := str(r["id"])
 			owned[id] = int(owned.get(id, 0)) + 1
 			main.popup(pl.position + Vector2(0, -26), nm, Color(0.8, 0.8, 0.85))
 			main.say("EVOCATO: %s... FORSE SERVE ALLA FORGIA (ANACRONISMI)" % nm)
+			return
+		"gun":
+			var gd: Dictionary = GUN[str(r["id"])]
+			var it := {"k": "w", "f": gd["f"], "r": 0, "b": float(gd["b"]), "a": (gd["a"] as Array).duplicate(), "adj": 0, "mods": {}, "u": 0, "nm": str(gd["n"]).capitalize(), "rc": {}}
+			it["r"] = maxi(1, Forge.rarity_of(it))
+			main.popup(pl.position + Vector2(0, -26), nm + "!", Color(0.5, 0.95, 1.0))
+			main.say("ARMA DAL FUTURO: %s - %s" % [nm, str(gd["d"])])
+			main.shake(3.0)
+			main._give_weapon(it, "EVOCATO")
 			return
 		"jackpot":
 			_jackpot(main, str(r["id"]))
@@ -196,6 +239,22 @@ static func apply(main, r: Dictionary) -> void:
 	main.popup(pl.position + Vector2(0, -26), nm, col)
 	main.say("EVOCATO: %s" % nm)
 	_use(main, str(r["id"]))
+
+
+## l'oggetto evocato appare come icona che sale e svanisce sopra il giocatore
+static func _icon(main, pos: Vector2, id: String, big: bool) -> void:
+	var sp := Sprite2D.new()
+	sp.texture = Game.tex("ch_" + id)
+	sp.position = pos
+	sp.scale = Vector2(0.2, 0.2)
+	sp.z_index = 50
+	main.fx.add_child(sp)
+	var k := (38.0 if big else 26.0) / maxf(sp.texture.get_width(), sp.texture.get_height())
+	var tw: Tween = main.create_tween()
+	tw.tween_property(sp, "scale", Vector2(k, k), 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(sp, "position:y", pos.y - 16.0, 0.9)
+	tw.parallel().tween_property(sp, "modulate:a", 0.0, 0.9).set_delay(0.35)
+	tw.tween_callback(sp.queue_free)
 
 
 static func _near(main, pos: Vector2, rad: float) -> Array:
@@ -242,11 +301,11 @@ static func _use(main, id: String) -> void:
 			pl.shield = 35.0 + 3.0 * pl.lv
 			pl.shield_t = 15.0
 		"mina":
-			_delayed(main, pl.position + pl.face * 28.0, 1.2, 50.0, 3.2, Color(0.5, 0.85, 1.0))
+			delayed(main, pl.position + pl.face * 28.0, 1.2, 50.0, 3.2, Color(0.5, 0.85, 1.0))
 		"catapulta":
 			var t = _closest(main, pl.position, 170.0)
 			var p: Vector2 = t.position if t != null else pl.position + pl.face * 70.0
-			_delayed(main, p, 0.9, 46.0, 4.5, Color(1.0, 0.75, 0.35))
+			delayed(main, p, 0.9, 46.0, 4.5, Color(1.0, 0.75, 0.35))
 		"ariete":
 			for e in main.enemies.duplicate():
 				var to: Vector2 = e.position - pl.position
@@ -258,7 +317,7 @@ static func _use(main, id: String) -> void:
 
 
 ## esplosione ritardata con avviso a terra
-static func _delayed(main, pos: Vector2, delay: float, rad: float, mult: float, col: Color) -> void:
+static func delayed(main, pos: Vector2, delay: float, rad: float, mult: float, col: Color) -> void:
 	main.player.shock(pos, int(rad * 0.6), col)
 	var tm: SceneTreeTimer = main.get_tree().create_timer(delay)
 	tm.timeout.connect(func():

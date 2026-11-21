@@ -24,6 +24,9 @@ const SCALE := {
 	"dagger": [0.15, 0.85, 0.0, 0.0],
 	"bow": [0.1, 0.9, 0.0, 0.0],
 	"staff": [0.0, 0.0, 0.85, 0.15],
+	"pistol": [0.0, 0.8, 0.2, 0.0], "smg": [0.0, 0.7, 0.3, 0.0], "shotgun": [0.3, 0.7, 0.0, 0.0],
+	"chainsaw": [0.8, 0.2, 0.0, 0.0], "laserpistol": [0.0, 0.5, 0.5, 0.0], "lightsaber": [0.3, 0.4, 0.3, 0.0],
+	"rocket": [0.3, 0.3, 0.4, 0.0], "plasma": [0.0, 0.3, 0.7, 0.0],
 }
 const PER_POINT := 0.035   # danno in piu' per ogni punto di attributo pesato
 

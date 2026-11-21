@@ -3759,16 +3759,16 @@ func craft_make() -> void:
 
 
 ## consegna al giocatore gli oggetti ottenuti dagli anacronismi (false se la borsa e' piena)
-func _give_weapon(w: Dictionary) -> bool:
+func _give_weapon(w: Dictionary, how := "TRASFORMATO") -> bool:
 	w.erase("t")
 	w.erase("junk")
 	if player.wslots[1] == null:
 		player.wslots[1] = w
 		player.wcur = 1
-		say("TRASFORMATO E IMPUGNATO: %s" % str(w["nm"]).to_upper())
+		say("%s E IMPUGNATO: %s" % [how, str(w["nm"]).to_upper()])
 	elif player.bag_free() > 0:
 		player.bag.append({"k": "w", "w": w})
-		say("TRASFORMATO, IN BORSA: %s   (I PER EQUIPAGGIARE)" % str(w["nm"]).to_upper())
+		say("%s, IN BORSA: %s   (I PER EQUIPAGGIARE)" % [how, str(w["nm"]).to_upper()])
 	else:
 		say("BORSA PIENA: LIBERA SPAZIO CON I")
 		return false

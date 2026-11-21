@@ -10,6 +10,15 @@ const FAM := {
 	"dagger": {"n": "Pugnali", "reach": 22.0, "arc": 1.2, "lm": 0.6, "hm": 1.4, "lc": 10.0, "hc": 24.0, "lcd": 0.18, "hcd": 0.45, "hw": 0.25, "ranged": false, "icon": "w_dagger"},
 	"bow": {"n": "Arco", "reach": 0.0, "arc": 0.0, "lm": 1.0, "hm": 2.4, "lc": 14.0, "hc": 30.0, "lcd": 0.45, "hcd": 0.8, "hw": 0.5, "ranged": true, "icon": "w_bow"},
 	"staff": {"n": "Bastone", "reach": 0.0, "arc": 0.0, "lm": 0.9, "hm": 2.0, "lc": 10.0, "hc": 26.0, "lcd": 0.42, "hcd": 0.8, "hw": 0.4, "ranged": true, "icon": "w_staff"},
+	# armi dal futuro: solo dal Cronotone (mod), mai nel bottino normale
+	"pistol": {"n": "Pistola", "reach": 0.0, "arc": 0.0, "lm": 1.0, "hm": 2.2, "lc": 8.0, "hc": 22.0, "lcd": 0.26, "hcd": 0.7, "hw": 0.2, "ranged": true, "icon": "w_pistol", "mod": true},
+	"smg": {"n": "Mitra", "reach": 0.0, "arc": 0.0, "lm": 0.5, "hm": 1.4, "lc": 4.0, "hc": 18.0, "lcd": 0.09, "hcd": 0.5, "hw": 0.2, "ranged": true, "icon": "w_smg", "mod": true},
+	"shotgun": {"n": "Fucile a Pompa", "reach": 0.0, "arc": 0.0, "lm": 2.4, "hm": 4.0, "lc": 16.0, "hc": 30.0, "lcd": 0.75, "hcd": 1.1, "hw": 0.3, "ranged": true, "icon": "w_shotgun", "mod": true},
+	"chainsaw": {"n": "Motosega", "reach": 25.0, "arc": 0.9, "lm": 0.5, "hm": 2.0, "lc": 6.0, "hc": 28.0, "lcd": 0.1, "hcd": 0.7, "hw": 0.3, "ranged": false, "icon": "w_chainsaw", "mod": true},
+	"laserpistol": {"n": "Pistola Laser", "reach": 0.0, "arc": 0.0, "lm": 0.9, "hm": 2.2, "lc": 7.0, "hc": 22.0, "lcd": 0.2, "hcd": 0.7, "hw": 0.2, "ranged": true, "icon": "w_laserpistol", "mod": true},
+	"lightsaber": {"n": "Spada Laser", "reach": 33.0, "arc": 1.2, "lm": 1.15, "hm": 2.7, "lc": 14.0, "hc": 30.0, "lcd": 0.24, "hcd": 0.5, "hw": 0.3, "ranged": false, "icon": "w_lightsaber", "mod": true},
+	"rocket": {"n": "Lanciarazzi", "reach": 0.0, "arc": 0.0, "lm": 3.0, "hm": 4.8, "lc": 24.0, "hc": 40.0, "lcd": 1.1, "hcd": 1.5, "hw": 0.45, "ranged": true, "icon": "w_rocket", "mod": true},
+	"plasma": {"n": "Fucile al Plasma", "reach": 0.0, "arc": 0.0, "lm": 1.5, "hm": 3.4, "lc": 12.0, "hc": 32.0, "lcd": 0.38, "hcd": 0.9, "hw": 0.3, "ranged": true, "icon": "w_plasma", "mod": true},
 }
 const RARITY := [
 	{"n": "COMUNE", "c": Color(0.78, 0.78, 0.84), "b": 0.0, "aff": 0},
@@ -60,7 +69,10 @@ static func roll_rarity(w: Array) -> int:
 
 
 static func make_weapon(rar: int, fam := "") -> Dictionary:
-	var fams := FAM.keys()
+	var fams: Array = []
+	for k in FAM:
+		if not bool(FAM[k].get("mod", false)):
+			fams.append(k)
 	var f: String = fam if fam != "" else fams[randi() % fams.size()]
 	var b: float = RARITY[rar]["b"] * randf_range(0.8, 1.25)
 	var pool := AFF.keys()

@@ -274,7 +274,7 @@ func update_wspr() -> void:
 	wspr.flip_h = spr.flip_h
 	wspr.position = Vector2(5.5 * sg, spr.offset.y + 3.0)
 	var rot := 0.18
-	var ranged := f == "bow" or f == "staff"
+	var ranged: bool = bool(Rpg.FAM[f]["ranged"])
 	if heavy_t > 0.0 and not ranged:
 		rot = -0.9   # carica il colpo pesante
 	elif atk_t > 0.0 and atk_dur > 0.0:
@@ -321,7 +321,7 @@ func board(id: String) -> void:
 	if not veh.is_empty():
 		veh_exit(false)
 	var mh := float(d["hp"]) + float(d["hpl"]) * lv
-	veh = {"id": id, "hp": mh, "max": mh, "t": float(d["t"]), "cd": 0.0, "crush": 0.0}
+	veh = {"id": id, "hp": mh, "max": mh, "t": float(d["t"]), "cd": 0.0, "cd2": 0.0, "crush": 0.0}
 	inv = maxf(inv, 0.6)
 	drink_t = 0.0
 	heavy_t = 0.0
@@ -377,53 +377,65 @@ func veh_tick(dt: float) -> void:
 		if float(veh["crush"]) <= 0.0:
 			veh["crush"] = 0.4
 			for e in main.enemies.duplicate():
-				if e.position.distance_to(position) < 13.0 + e.radius:
+				if e.position.distance_to(position) < 18.0 + e.radius:
 					e.hurt(dmg() * float(d["crush"]), (e.position - position).normalized(), 170.0, false)
+	veh["cd2"] = float(veh["cd2"]) - dt
+	var id := str(veh["id"])
+	var near: Enemy = main.nearest_enemy(position, 170.0)
 	if act_held("attack") and float(veh["cd"]) <= 0.0 and not main.inv_open:
-		var near: Enemy = main.nearest_enemy(position, 170.0)
 		if near != null and not bool(main.settings["aim_manual"]):
 			face = (near.position - position).normalized()
 		veh["cd"] = float(d["cd"])
-		var aoe := float(d.get("aoe", 0.0))
-		var spread := randf_range(-0.14, 0.14) if str(veh["id"]) == "ufo" else 0.0
-		var col := Color(0.6, 0.95, 1.0) if aoe <= 0.0 and str(veh["id"]) == "ufo" else (Color(1.0, 0.8, 0.4) if aoe > 0.0 else Color(0.85, 0.7, 0.45))
-		main.spawn_parrow(position + Vector2(0, -6), face.rotated(spread), 300.0, dmg() * float(d["dm"]), 0.9, int(d.get("pr", 0)), col, weapon(), aoe, aoe > 0.0 or str(veh["id"]) == "ufo")
-		main.snd("slam" if aoe > 0.0 else "swing")
-		if aoe > 0.0:
-			kb -= face * 70.0
-			main.shake(2.0)
+		match id:
+			"tank":    # mitragliatrice: raffica di proiettili rapidi
+				var sp := randf_range(-0.09, 0.09)
+				main.spawn_parrow(position + face * 16.0, face.rotated(sp), 360.0, dmg() * float(d["dm"]), 0.7, 1, Color(1.0, 0.9, 0.5), weapon(), 0.0, false)
+				main.snd("swing")
+			"ufo":     # raffica laser
+				main.spawn_parrow(position + Vector2(0, -6), face.rotated(randf_range(-0.14, 0.14)), 300.0, dmg() * float(d["dm"]), 0.9, 0, Color(0.6, 0.95, 1.0), weapon(), 0.0, true)
+				main.snd("swing")
+			_:         # carro: balista perforante
+				main.spawn_parrow(position + Vector2(0, -6), face, 300.0, dmg() * float(d["dm"]), 0.9, int(d.get("pr", 0)), Color(0.85, 0.7, 0.45), weapon(), 0.0, false)
+				main.snd("swing")
+	# arma secondaria dell'epoca (tasto colpo pesante): masso, cannonata, onda elettrica
+	if act("heavy") and float(veh["cd2"]) <= 0.0:
+		if near != null and not bool(main.settings["aim_manual"]):
+			face = (near.position - position).normalized()
+		veh["cd2"] = float(d["cd2"])
+		match id:
+			"carro":   # catapulta: masso lanciato, cade dopo un attimo sul nemico piu' vicino
+				var tgt: Vector2 = near.position if near != null else position + face * 90.0
+				Chrono.delayed(main, tgt, 0.7, 40.0, 4.0, Color(1.0, 0.75, 0.35))
+				main.snd("swing")
+			"tank":    # cannonata ad area
+				main.spawn_parrow(position + face * 18.0, face, 280.0, dmg() * 3.5, 0.9, 0, Color(1.0, 0.8, 0.4), weapon(), 34.0, true)
+				kb -= face * 80.0
+				main.shake(3.0)
+				main.snd("slam")
+			"ufo":     # onda d'urto elettrica tutto intorno
+				for e in main.enemies.duplicate():
+					if e.position.distance_to(position) < 64.0 + e.radius:
+						e.hurt(dmg() * 2.0, (e.position - position).normalized(), 120.0, true)
+						e.stun = maxf(e.stun, 0.6)
+				shock(position, 64, Color(0.6, 0.95, 1.0))
+				main.burst(position, Color(0.6, 0.95, 1.0), 36, 90.0, 0.5)
+				main.snd("slam")
 
 
 func _veh_draw() -> void:
 	var id := str(veh["id"])
-	var ang := face.angle()
+	var tx: Texture2D = Game.tex("veh_" + id)
+	var sz := tx.get_size()
 	if id == "ufo":
-		draw_set_transform(Vector2(0, -10), 0.0, Vector2(1, 0.55))
-		draw_circle(Vector2.ZERO, 11.0, Color(0.62, 0.66, 0.74))
-		draw_circle(Vector2.ZERO, 8.0, Color(0.82, 0.86, 0.94))
-		draw_set_transform(Vector2(0, -14), 0.0, Vector2.ONE)
-		draw_circle(Vector2.ZERO, 5.0, Color(0.4, 0.9, 1.0, 0.85))
-		for i in 3:
-			var a := t * 3.0 + i * TAU / 3.0
-			draw_circle(Vector2(cos(a) * 9.0, 4.0 + sin(a) * 2.0), 1.2, Color(1.0, 0.9, 0.4))
-	elif id == "tank":
-		draw_set_transform(Vector2(0, -5), ang, Vector2.ONE)
-		draw_rect(Rect2(-11, -9, 22, 5), Color(0.18, 0.2, 0.2))
-		draw_rect(Rect2(-11, 4, 22, 5), Color(0.18, 0.2, 0.2))
-		draw_rect(Rect2(-10, -5, 20, 10), Color(0.42, 0.5, 0.4))
-		draw_circle(Vector2.ZERO, 5.0, Color(0.5, 0.58, 0.46))
-		draw_line(Vector2.ZERO, Vector2(15, 0), Color(0.25, 0.28, 0.26), 3.0)
+		# il disco non ruota: ondeggia e fluttua
+		draw_set_transform(Vector2(0, -12.0 + sin(t * 4.0) * 1.5), 0.0, Vector2.ONE)
 	else:
-		draw_set_transform(Vector2(0, -5), ang, Vector2.ONE)
-		draw_rect(Rect2(-9, -6, 18, 12), Color(0.5, 0.34, 0.2))
-		draw_rect(Rect2(-9, -6, 18, 2), Color(0.35, 0.22, 0.12))
-		draw_circle(Vector2(-4, -8), 3.0, Color(0.2, 0.14, 0.1))
-		draw_circle(Vector2(-4, 8), 3.0, Color(0.2, 0.14, 0.1))
-		draw_line(Vector2(0, 0), Vector2(14, 0), Color(0.75, 0.65, 0.45), 2.0)
+		draw_set_transform(Vector2(0, -5), face.angle(), Vector2.ONE)
+	draw_texture(tx, -sz * 0.5)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	var fr := clampf(float(veh["hp"]) / float(veh["max"]), 0.0, 1.0)
-	draw_rect(Rect2(-9, -26, 18, 3), Color(0, 0, 0, 0.85))
-	draw_rect(Rect2(-8, -25, 16.0 * fr, 1), Color(1.0, 0.6, 0.25))
+	draw_rect(Rect2(-9, -32, 18, 3), Color(0, 0, 0, 0.85))
+	draw_rect(Rect2(-8, -31, 16.0 * fr, 1), Color(1.0, 0.6, 0.25))
 
 
 func _process(dt: float) -> void:
@@ -671,6 +683,8 @@ func attack() -> void:
 
 
 func fire(w: Dictionary, f: Dictionary, heavy: bool) -> void:
+	if bool(f.get("mod", false)) and _fire_mod(w, f, heavy):
+		return
 	var magic: bool = str(w["f"]) == "staff"
 	var col := Color(0.75, 0.5, 1.0) if magic else Color(0.95, 0.88, 0.6)
 	var mult: float = float(f["hm"]) if heavy else float(f["lm"])
@@ -684,6 +698,47 @@ func fire(w: Dictionary, f: Dictionary, heavy: bool) -> void:
 		dirf = face.rotated(deg_to_rad(randf_range(-1.0, 1.0) * maxf(0.0, 6.0 - 0.4 * a("des")) * (0.5 if heavy else 1.0)))
 	main.spawn_parrow(position + Vector2(0, -6), dirf, 270.0 if heavy else 230.0, dmg() * mult, 0.9, pr, col, w, aoe, magic)
 	kb -= face * 30.0
+
+
+## armi dal futuro a distanza: ognuna ha il suo colpo
+func _fire_mod(w: Dictionary, f: Dictionary, heavy: bool) -> bool:
+	var fam := str(w["f"])
+	var mult: float = float(f["hm"]) if heavy else float(f["lm"])
+	var d := dmg() * mult
+	var o := position + Vector2(0, -6) + face * 8.0
+	match fam:
+		"pistol":
+			main.spawn_parrow(o, face.rotated(randf_range(-0.03, 0.03)), 340.0, d, 0.8, 1 if heavy else 0, Color(1.0, 0.9, 0.55), w, 0.0, false)
+			main.snd("swing")
+		"smg":
+			var n := 6 if heavy else 1
+			for i in n:
+				main.spawn_parrow(o, face.rotated(randf_range(-0.12, 0.12)), 330.0, d / (3.0 if heavy else 1.0), 0.7, 0, Color(1.0, 0.85, 0.45), w, 0.0, false)
+			main.snd("swing")
+		"shotgun":
+			var pel := 9 if heavy else 6
+			for i in pel:
+				main.spawn_parrow(o, face.rotated(randf_range(-0.30, 0.30)), randf_range(240.0, 300.0), d / 3.0, 0.32, 1, Color(1.0, 0.8, 0.4), w, 0.0, false)
+			kb -= face * (90.0 if heavy else 55.0)
+			main.shake(2.5)
+			main.snd("slam")
+		"laserpistol":
+			var sh := 3 if heavy else 1
+			for i in sh:
+				main.spawn_parrow(o, face.rotated((i - (sh - 1) * 0.5) * 0.12), 380.0, d / (1.5 if heavy else 1.0), 0.8, 2 if heavy else 0, Color(0.4, 0.95, 1.0), w, 0.0, true)
+			main.snd("swing")
+		"rocket":
+			main.spawn_parrow(o, face, 190.0, d, 1.4, 0, Color(1.0, 0.6, 0.25), w, 44.0 if heavy else 34.0, true)
+			kb -= face * 110.0
+			main.shake(4.0)
+			main.snd("slam")
+		"plasma":
+			main.spawn_parrow(o, face, 250.0, d, 1.0, 3 if heavy else 1, Color(0.55, 1.0, 0.5), w, 18.0 if heavy else 12.0, true)
+			kb -= face * 35.0
+			main.snd("swing")
+		_:
+			return false
+	return true
 
 
 func strike(reach: float, arc: float, mult: float, force: float, heavy: bool) -> void:
@@ -884,7 +939,7 @@ func _draw_slash() -> void:
 
 func _draw() -> void:
 	draw_set_transform(Vector2(0, 1), 0.0, Vector2(1, 0.4))
-	draw_circle(Vector2.ZERO, 6.5 if veh.is_empty() else 11.0, Color(0, 0, 0, 0.5))
+	draw_circle(Vector2.ZERO, 6.5 if veh.is_empty() else 15.0, Color(0, 0, 0, 0.5))
 	if not veh.is_empty():
 		_veh_draw()
 
