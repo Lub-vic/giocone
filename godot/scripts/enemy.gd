@@ -329,7 +329,7 @@ func _process(dt: float) -> void:
 			if tel > 0.0:
 				tel -= dt
 				if tel <= 0.0:
-					main.spawn_projectile(position + Vector2(0, -6), u, 98.0, dmg)
+					_shoot(position + Vector2(0, -6), u, 98.0, dmg)
 			elif cd <= 0.0 and d < 170.0:
 				tel = 0.4
 				cd = 2.2
@@ -340,7 +340,7 @@ func _process(dt: float) -> void:
 				tel -= dt
 				if tel <= 0.0:
 					for i in range(-1, 2):
-						main.spawn_projectile(position + Vector2(0, -6), u.rotated(i * 0.22), 118.0, dmg)
+						_shoot(position + Vector2(0, -6), u.rotated(i * 0.22), 118.0, dmg)
 			elif cd <= 0.0 and d < 190.0:
 				tel = 0.5
 				cd = 2.1
@@ -404,7 +404,7 @@ func _process(dt: float) -> void:
 				tel -= dt
 				if tel <= 0.0:
 					for i in range(-1, 2):
-						main.spawn_projectile(position + Vector2(0, -6), u.rotated(i * 0.3), 90.0, dmg)
+						_shoot(position + Vector2(0, -6), u.rotated(i * 0.3), 90.0, dmg)
 					recover_t = 0.5
 			elif recover_t > 0.0:
 				recover_t -= dt
@@ -449,7 +449,7 @@ func _process(dt: float) -> void:
 				tel -= dt
 				if tel <= 0.0:
 					if atk == "web":
-						main.spawn_projectile(position + Vector2(0, -4), u, 105.0, dmg * 0.5, 1.5)
+						_shoot(position + Vector2(0, -4), u, 105.0, dmg * 0.5, 1.5)
 						recover_t = 0.45
 						cd = 1.4
 					else:
@@ -480,8 +480,8 @@ func _process(dt: float) -> void:
 			elif tel > 0.0:
 				tel -= dt
 				if tel <= 0.0:
-					main.spawn_projectile(position + Vector2(0, -6), u.rotated(-0.12), 100.0, dmg)
-					main.spawn_projectile(position + Vector2(0, -6), u.rotated(0.12), 100.0, dmg)
+					_shoot(position + Vector2(0, -6), u.rotated(-0.12), 100.0, dmg)
+					_shoot(position + Vector2(0, -6), u.rotated(0.12), 100.0, dmg)
 					recover_t = 0.7
 					cd = 1.7
 			else:
@@ -659,11 +659,11 @@ func _champ_exec(u: Vector2) -> void:
 			main.burst(position, Color(0.8, 0.3, 1.0), 20, 50.0, 0.5)
 		"nova":
 			for i in 16:
-				main.spawn_projectile(position + Vector2(0, -6), Vector2.from_angle(i * TAU / 16.0), 62.0, dmg * 0.8, slow_f)
+				_shoot(position + Vector2(0, -6), Vector2.from_angle(i * TAU / 16.0), 62.0, dmg * 0.8, slow_f)
 			main.snd("roar")
 		"fan":
 			for i in range(-2, 3):
-				main.spawn_projectile(position + Vector2(0, -6), u.rotated(i * 0.24), 92.0, dmg * 0.8, slow_f)
+				_shoot(position + Vector2(0, -6), u.rotated(i * 0.24), 92.0, dmg * 0.8, slow_f)
 		"blink":
 			var tp: Vector2 = main.player.position - main.player.face * 26.0
 			if main.free_at(tp, radius):
@@ -673,18 +673,44 @@ func _champ_exec(u: Vector2) -> void:
 			main.spawn_hazard(position, 36.0, 0.35, 0.12, dmg, 0.0, Color(0.5, 1.0, 0.8))
 
 
+## aspetto dei proiettili in base a chi li lancia
+func shot_style(sl := 0.0) -> String:
+	match kind:
+		"skel_archer", "goblin_archer":
+			return "arrow"
+		"goblin", "orc":
+			return "knife"
+		"cultist", "goblin_shaman", "summoner":
+			return "dark"
+		"spider":
+			return "web"
+		"frost_mage", "boss_yeti":
+			return "ice"
+		"plague_doc":
+			return "poison"
+		"boss_wraith", "wraith":
+			return "soul"
+		"vampire":
+			return "blood"
+	return "fire"
+
+
+func _shoot(pos: Vector2, dir: Vector2, spd: float, d: float, sl := 0.0) -> void:
+	main.spawn_projectile(pos, dir, spd, d, sl, shot_style(sl))
+
+
 func _boss_attack(u: Vector2) -> void:
 	main.snd("roar")
 	var p := position + Vector2(0, -8)
 	match pattern:
 		0:
 			for i in 14:
-				main.spawn_projectile(p, Vector2.from_angle(i * TAU / 14.0 + t), 70.0, dmg)
+				_shoot(p, Vector2.from_angle(i * TAU / 14.0 + t), 70.0, dmg)
 			main.shake(5.0)
 		1:
 			var n := 3 if hp > max_hp * 0.5 else 5
 			for i in range(-n, n + 1):
-				main.spawn_projectile(p, u.rotated(i * 0.24), 85.0, dmg)
+				_shoot(p, u.rotated(i * 0.24), 85.0, dmg)
 		2:
 			lunge = 0.3
 			lunge_dir = u
@@ -710,8 +736,8 @@ func _boss_attack(u: Vector2) -> void:
 		5:
 			# doppio ventaglio incrociato
 			for i in range(-4, 5):
-				main.spawn_projectile(p, u.rotated(i * 0.2), 80.0, dmg)
-				main.spawn_projectile(p, u.rotated(i * 0.2 + 0.1), 105.0, dmg)
+				_shoot(p, u.rotated(i * 0.2), 80.0, dmg)
+				_shoot(p, u.rotated(i * 0.2 + 0.1), 105.0, dmg)
 
 
 ## mossa firma: ogni boss ha un attacco tutto suo
@@ -755,7 +781,7 @@ func _boss_signature(u: Vector2) -> void:
 				main.spawn_hazard(pl.position + Vector2.from_angle(randf() * TAU) * 40.0, 26.0, 0.6, 4.0, dmg * 0.25, 0.5, Color(0.4, 0.9, 0.3), 0.5)
 		"boss_yeti":
 			for i in 16:
-				main.spawn_projectile(position + Vector2(0, -8), Vector2.from_angle(i * TAU / 16.0), 62.0, dmg * 0.7, 1.5)
+				_shoot(position + Vector2(0, -8), Vector2.from_angle(i * TAU / 16.0), 62.0, dmg * 0.7, 1.5)
 			main.spawn_hazard(position, 60.0, 0.8, 0.2, dmg, 0.0, Color(0.6, 0.85, 1.0))
 		"boss_forge":
 			for i in 6:

@@ -4617,6 +4617,25 @@ func gate_try(p: Prop) -> void:
 	save_game()
 
 
+## Godot disegna al massimo ~16 luci per oggetto: con decine di torce nel villaggio le altre sparivano
+## e comparivano blocchi neri. Teniamo accese solo le piu' vicine al giocatore.
+const LIGHT_BUDGET := 10
+
+
+func cull_lights() -> void:
+	var cand: Array = []
+	var lim := 340.0 / maxf(0.3, player.cam.zoom.x)
+	for f in flick:
+		var l: PointLight2D = f[0]
+		if not is_instance_valid(l):
+			continue
+		var d2: float = l.global_position.distance_squared_to(player.position)
+		cand.append([d2, l])
+	cand.sort_custom(func(a, b): return a[0] < b[0])
+	for i in cand.size():
+		(cand[i][1] as PointLight2D).enabled = i < LIGHT_BUDGET and float(cand[i][0]) < lim * lim
+
+
 func add_gate(dest: String, c: Vector2i, col: Color) -> void:
 	var p := add_prop("portal", c)
 	if p == null:
@@ -6027,9 +6046,9 @@ func spawn_enemy(k: String, pos: Vector2, mult := 1.0, elite := false, tint := C
 	return e
 
 
-func spawn_projectile(pos: Vector2, dir: Vector2, spd: float, d: float, slow := 0.0) -> void:
+func spawn_projectile(pos: Vector2, dir: Vector2, spd: float, d: float, slow := 0.0, style := "fire") -> void:
 	var p := Projectile.new()
-	p.setup(self, dir, spd, d, slow)
+	p.setup(self, dir, spd, d, slow, style)
 	p.position = pos
 	fx.add_child(p)
 
@@ -8750,6 +8769,10 @@ func _process(_dt: float) -> void:
 			if OS.get_cmdline_user_args().has("--vil"):
 				ensure_area(cell_pos(SEEDS[0]), 3)
 				player.position = cell_pos(SEEDS[0] + Vector2i(5, 7))
+				for arg in OS.get_cmdline_user_args():
+					if arg.begins_with("--off="):
+						var xy := arg.substr(6).split(",")
+						player.position = cell_pos(SEEDS[0] + Vector2i(int(xy[0]), int(xy[1])))
 			player.cam.reset_smoothing()
 			player.zmode = 0
 			print("CATH ingresso=", g, " cattedrale=", world_has_cathedral, " villaggio=", SEEDS[0])
@@ -10010,3 +10033,5 @@ func _process(_dt: float) -> void:
 		for f in flick:
 			f[2] += real * 22.0
 			(f[0] as PointLight2D).energy = f[1] * (1.0 + sin(f[2]) * 0.07 + sin(f[2] * 2.7) * 0.05 + randf() * 0.04)
+	if Engine.get_process_frames() % 6 == 0 and player != null:
+		cull_lights()
