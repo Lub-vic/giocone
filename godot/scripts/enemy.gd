@@ -21,10 +21,10 @@ const DEFS := {
 	"ooze_small": ["ooze", 14.0, 46.0, "chase", 4.0, 4, 8],
 	"crow": ["crow", 10.0, 72.0, "bat", 4.0, 5, 8],
 	# nemici fantasy classici
-	"goblin": ["goblin", 22.0, 56.0, "skirmish", 5.0, 9, 12],
+	"goblin": ["goblin", 22.0, 48.0, "skirmish", 5.0, 9, 12],
 	"goblin_archer": ["goblin_archer", 20.0, 38.0, "archer", 5.0, 11, 11],
 	"goblin_shaman": ["goblin_shaman", 24.0, 34.0, "caster", 5.0, 16, 14],
-	"kobold": ["kobold", 12.0, 66.0, "chase", 4.0, 4, 8],
+	"kobold": ["kobold", 12.0, 56.0, "chase", 4.0, 4, 8],
 	"orc": ["orc", 62.0, 40.0, "duelist", 6.0, 24, 24],
 	"troll": ["troll", 150.0, 26.0, "tank", 8.0, 60, 32],
 	"ogre": ["ogre", 185.0, 23.0, "tank", 9.0, 70, 40],
@@ -133,7 +133,8 @@ var dive_pos := Vector2.ZERO
 var phase_n := 0
 var pat_seen := {}
 var col = null   # Colossus a cui appartiene questa parte (null per i nemici normali)
-var last_hit_t := -99.0   # il troll si rigenera se non lo colpisci per un po'
+var last_hit_t := -99.0
+var fer := 1.0   # ferocia (0.68 ai primi livelli -> 1.0)   # il troll si rigenera se non lo colpisci per un po'
 
 
 func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE) -> void:
@@ -237,6 +238,9 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 				spr.scale *= 1.12
 		spr.modulate = spr.modulate * (TRAITS[trait_] as Color)
 		xp = int(xp * 1.4)
+	fer = m.ferocity(is_boss or champ)
+	speed *= 0.55 + 0.45 * fer       # piu' lenti...
+	dmg *= 0.8 + 0.2 * fer           # ...colpiscono un po' meno...
 	max_hp = hp
 	base_speed = speed
 	cd = randf_range(0.6, 1.8)
@@ -280,7 +284,7 @@ func _process(dt: float) -> void:
 	var u: Vector2 = to / maxf(d, 0.001)
 	spr.flip_h = to.x < 0.0
 	if not awake:
-		if d < 110.0:
+		if d < 80.0 + 30.0 * fer:        # ai primi livelli ti notano un po' piu' tardi
 			awake = true
 			main.beast_note(kind)
 		return
@@ -295,7 +299,7 @@ func _process(dt: float) -> void:
 	if stun > 0.0:
 		stun -= dt
 		return
-	cd -= dt
+	cd -= dt * fer                   # ...e attaccano meno spesso, finche' il giocatore e' di livello basso
 	match ai:
 		"chase":
 			main.move_body(self, u * speed * dt, radius)

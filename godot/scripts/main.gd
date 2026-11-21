@@ -2445,10 +2445,29 @@ func spawn_tick() -> void:
 						enemies.erase(node)
 						node.queue_free()
 						e["node"] = null
-				elif e["alive"] and d2 < 490000.0:
+				elif e["alive"] and d2 < 490000.0 and spawn_present(e):
 					var en := spawn_enemy(e["k"], e["pos"], e["mult"], e["elite"], e["tint"])
 					en.sref = e
 					e["node"] = en
+
+
+## quanti nemici popolano il mondo cresce col livello: all'inizio circa la meta', poi tutti (dal livello ~14).
+## La scelta e' fissa per ogni posto (non cambia avvicinandosi e allontanandosi).
+func spawn_present(e: Dictionary) -> bool:
+	if run_mode:
+		return true
+	var keep := clampf(0.5 + 0.04 * float(player.lv - 1), 0.5, 1.0)
+	var p: Vector2 = e["pos"]
+	var h := absi(int(p.x) * 73856093 ^ int(p.y) * 19349663) % 1000
+	return h < int(keep * 1000.0)
+
+
+## ferocia dei nemici: piu' lenti e meno aggressivi ai primi livelli, a pieno regime verso il livello 13
+func ferocity(boss: bool) -> float:
+	if run_mode or player == null:
+		return 1.0
+	var lvf := float(player.lv - 1)
+	return clampf(0.85 + 0.0125 * lvf, 0.85, 1.0) if boss else clampf(0.68 + 0.027 * lvf, 0.68, 1.0)
 
 
 func spawn_all() -> void:
@@ -8503,6 +8522,22 @@ func _process(_dt: float) -> void:
 			print("LOCK distanze in ordine=", seq, " face verso bersaglio=", player.face.dot((player.lock.position - player.position).normalized()) > 0.9 if player.lock else false)
 		if tgs == 8:
 			print("LOCK face=", snappedf(player.face.dot((player.lock.position - player.position).normalized()), 0.01), " zoom tasto=", InputMap.action_get_events("zoom").size(), " lock tasto=", InputMap.action_get_events("lock").size())
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--difftest"):
+		tgs += 1
+		if tgs == 3:
+			for lv in [1, 5, 10, 15]:
+				player.lv = lv
+				var tot := 0
+				var pres := 0
+				for k in spawn_buckets:
+					for e in spawn_buckets[k]:
+						tot += 1
+						pres += int(spawn_present(e))
+				var g := spawn_enemy("goblin", player.position, 1.0, false, Color.WHITE)
+				print("DIFF lv=", lv, " nemici presenti=", pres, "/", tot, " ferocia=", snappedf(ferocity(false), 0.01), " goblin vel=", int(g.speed), " danno=", snappedf(g.dmg, 0.1))
+				enemies.erase(g)
+				g.queue_free()
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--maptest"):
 		tgs += 1
