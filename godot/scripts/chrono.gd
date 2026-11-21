@@ -115,7 +115,7 @@ static func tune_enemy(e, strong: bool) -> void:
 	e.spr.modulate = e.spr.modulate * (ERA_FOE[n] as Color)
 	if strong or e.trait_ != "" or e.kind == "rat" or e.kind == "ooze_small":
 		return
-	var chance := [0.0, 0.12, 0.2, 0.3][n]
+	var chance: float = [0.0, 0.12, 0.2, 0.3][n]
 	if randf() >= chance:
 		return
 	var pool: Array = [["esplosivo"], ["esplosivo"], ["esplosivo", "corazzato"], ["corazzato", "veloce", "esplosivo"]][n]
