@@ -374,6 +374,9 @@ func _process(dt: float) -> void:
 	else:
 		focus = minf(MAX_FOCUS, focus + 2.5 * dt)
 	var zt := ZOOM_FAR if zmode > 0 else 1.0
+	var col = main.colossus
+	if col != null and is_instance_valid(col) and not col.dead and col.state != "sleep":
+		zt = minf(zt, 0.8)   # contro i colossi la visuale si allarga
 	cam.zoom = cam.zoom.lerp(Vector2(zt, zt), 1.0 - exp(-dt * 7.0))
 	if zmode == 1:
 		auto_weapons(dt)
@@ -633,6 +636,8 @@ func cast(slot: int) -> void:
 					e.hurt(bd() * 2.2 * sp, (e.position - position).normalized(), 130.0, false)
 					e.apply_status("burn", 3.0, bd() * 0.25 * sp)
 			main.burst(position, Color(1.0, 0.5, 0.15), 50, 95.0, 0.6)
+			shock(position, 60, Color(1.0, 0.55, 0.2))
+			shock(position, 40, Color(1.0, 0.85, 0.4))
 			main.shake(3.0)
 			main.snd("slam")
 		"fulmine":
@@ -657,6 +662,7 @@ func cast(slot: int) -> void:
 					e.hurt(bd() * 1.2 * sp, v.normalized(), 40.0, false)
 					e.apply_status("slow", 3.5, 0.0)
 			main.burst(position + aim * 36.0, Color(0.6, 0.9, 1.0), 30, 60.0, 0.5)
+			shock(position + aim * 36.0, 30, Color(0.6, 0.9, 1.0))
 			main.snd("swing")
 		"cura":
 			for al in main.allies:
@@ -675,6 +681,15 @@ func cast(slot: int) -> void:
 			shield_t = 10.0
 			main.burst(position, Color(0.7, 0.9, 1.0), 20, 40.0, 0.5)
 			main.snd("bonfire")
+
+
+## onda d'urto in pixel art degli incantesimi
+func shock(pos: Vector2, r: int, c: Color) -> void:
+	var s := Hazard.Shock.new()
+	s.r = r
+	s.c = c
+	s.position = pos
+	main.fx.add_child(s)
 
 
 func _draw_slash() -> void:

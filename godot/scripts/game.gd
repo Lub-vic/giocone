@@ -34,28 +34,38 @@ static var BIO: Array = _mk_bio()
 static func _mk_bio() -> Array:
 	return [
 		{"n": "VILLAGGIO DI CENERE", "g": [T_TERRA], "b": T_ROCCIA, "thr": 0.9, "amb": Color(0.20, 0.19, 0.27),
-			"pool": ["skeleton", "skeleton", "skeleton", "skel_runner", "rat"], "tint": Color.WHITE, "dec": ["barrel", "deadtree", "gravestone"], "tier": 0},
+			"pool": ["goblin", "goblin", "kobold", "kobold", "goblin_archer", "skeleton", "skel_runner", "rat", "wolf"], "tint": Color.WHITE, "dec": ["barrel", "deadtree", "gravestone"], "tier": 0},
 		{"n": "CIMITERO PIANGENTE", "g": [T_CIMITERO], "b": T_CHIOMA, "thr": 0.42, "amb": Color(0.19, 0.22, 0.40),
-			"pool": ["skeleton", "ghoul", "wraith", "bat", "zombie", "skel_archer", "crow", "skel_brute", "ghoul_pale", "zombie_bloated"], "tint": Color(0.9, 0.95, 1.1),
+			"pool": ["skeleton", "ghoul", "wraith", "bat", "zombie", "skel_archer", "crow", "ghoul_pale", "zombie_bloated", "goblin_shaman", "harpy"], "tint": Color(0.9, 0.95, 1.1),
 			"dec": ["gravestone", "gravestone", "statue", "deadtree", "tomb"], "tier": 1},
 		{"n": "FORESTA DEGLI IMPICCATI", "g": [T_TERRA, T_CIMITERO], "b": T_CHIOMA, "thr": 0.12, "amb": Color(0.16, 0.20, 0.21),
-			"pool": ["cultist", "bat", "spider", "skeleton", "wolf", "wolf", "rat", "wolf_dire", "spider_brood", "cult_zealot", "bat_blood"], "tint": Color(0.8, 0.95, 0.8),
+			"pool": ["goblin", "goblin", "goblin_archer", "goblin_shaman", "troll", "wolf", "wolf_dire", "spider", "spider_brood", "cultist", "orc", "goblin_boss"], "tint": Color(0.8, 0.95, 0.8),
 			"dec": ["deadtree", "deadtree", "skullpile", "coffin"], "tier": 2},
 		{"n": "PALUDE MARCESCENTE", "g": [T_PALUDE], "b": T_ACQUA, "thr": 0.14, "amb": Color(0.20, 0.32, 0.28),
-			"pool": ["spider", "ooze", "ghoul", "bat", "toad", "rat", "zombie", "zombie_bloated", "spider_brood", "ghoul_pale"], "tint": Color(0.85, 1.05, 0.85),
+			"pool": ["lizardman", "lizardman", "troll", "ooze", "toad", "spider", "zombie_bloated", "kobold", "ghoul", "harpy"], "tint": Color(0.85, 1.05, 0.85),
 			"dec": ["deadtree", "skullpile", "deadtree"], "tier": 2},
 		{"n": "CATTEDRALE IN ROVINA", "g": [T_SCACCHI, T_CRIPTA], "b": T_MURO, "thr": 0.28, "amb": Color(0.27, 0.19, 0.30),
-			"pool": ["gargoyle", "cultist", "wraith", "skeleton", "skel_archer", "zombie", "gargoyle_obs", "cult_zealot", "skel_brute"], "tint": Color(1.1, 0.95, 1.1),
+			"pool": ["orc", "orc", "orc_warlord", "harpy", "gargoyle", "cultist", "wraith", "skel_archer", "gargoyle_obs", "cult_zealot", "ogre"], "tint": Color(1.1, 0.95, 1.1),
 			"dec": ["pillar", "pillar", "statue", "candelabra", "tomb"], "tier": 3},
 		{"n": "VETTA GELATA", "g": [T_NEVE], "b": T_ROCCIAG, "thr": 0.26, "amb": Color(0.21, 0.26, 0.40),
-			"pool": ["skeleton", "wraith", "gargoyle", "bat", "wisp", "wolf", "skel_archer", "wolf_dire", "skel_brute", "gargoyle_obs"], "tint": Color(0.75, 0.9, 1.4),
+			"pool": ["troll_frost", "troll_frost", "ogre", "harpy", "wolf", "wolf_dire", "wisp", "wraith", "skel_brute", "gargoyle_obs"], "tint": Color(0.75, 0.9, 1.4),
 			"dec": ["statue", "skullpile", "pillar"], "tier": 4},
 		{"n": "QUARTIERE DELLE FONDERIE", "g": [T_LAVA], "b": T_MAGMA, "thr": 0.52, "amb": Color(0.30, 0.21, 0.19),
-			"pool": ["gargoyle", "skeleton", "ooze", "cultist", "imp", "imp", "crow", "imp_cinder", "imp_cinder", "skel_brute", "cult_zealot"], "tint": Color(1.2, 0.9, 0.8),
+			"pool": ["orc", "orc_warlord", "ogre", "kobold", "kobold", "imp", "imp_cinder", "gargoyle", "cultist", "cult_zealot", "skel_brute"], "tint": Color(1.2, 0.9, 0.8),
 			"dec": ["barrel", "brazier", "skullpile"], "tier": 4},
 	]
 
 static var _cache := {}
+static var _tones := {}
+
+
+## tono di colore del bioma per gli oggetti di scena (meta' strada tra bianco e la tinta del bioma)
+static func tone(b: int) -> Color:
+	if not _tones.has(b):
+		var t: Color = BIO[clampi(b, 0, BIO.size() - 1)]["tint"]
+		_tones[b] = Color.WHITE.lerp(t, 0.6)
+	return _tones[b]
+static var photo := false      # grafica FOTO (prova): sprite da assets/sprites_photo, se presenti
 static var _light: Texture2D
 
 
@@ -87,7 +97,10 @@ static func font() -> Font:
 static func tex(n: String) -> Texture2D:
 	if not _cache.has(n):
 		var path := "res://assets/sprites/%s.png" % n
-		if ResourceLoader.exists(path):
+		var ph := "res://assets/sprites_photo/%s.png" % n
+		if photo and ResourceLoader.exists(ph):
+			_cache[n] = load(ph)
+		elif ResourceLoader.exists(path):
 			_cache[n] = load(path)
 		else:
 			# sprite aggiunti con l'editor: PNG grezzi in assets/custom (o user://sprites)
@@ -98,6 +111,17 @@ static func tex(n: String) -> Texture2D:
 					break
 			_cache[n] = ImageTexture.create_from_image(img) if img != null else load(path)
 	return _cache[n]
+
+
+## parametri del terreno fotografico per lo shader del suolo
+static func photo_ground(mat: ShaderMaterial) -> void:
+	var on := photo and ResourceLoader.exists("res://assets/photo/ground_a.png")
+	mat.set_shader_parameter("photo_on", on)
+	if on:
+		for k in [["photo_ga", "ground_a"], ["photo_ma", "ground_b"], ["photo_path", "path_cem"], ["photo_cob", "cobble"]]:
+			var path := "res://assets/photo/%s.png" % k[1]
+			if ResourceLoader.exists(path):
+				mat.set_shader_parameter(k[0], load(path))
 
 
 static func light_tex() -> Texture2D:

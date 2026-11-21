@@ -61,6 +61,7 @@ func build(grid: PackedByteArray, biome: PackedByteArray, road: PackedByteArray,
 	mat.set_shader_parameter("data", tex)
 	mat.set_shader_parameter("map_size", Vector2(w, h))
 	mat.set_shader_parameter("force_biome", force_biome)
+	Game.photo_ground(mat)
 	var px := CH * Game.TS
 	for cy in range(0, ceili(h / float(CH))):
 		for cx in range(0, ceili(w / float(CH))):
@@ -196,6 +197,7 @@ func init_stream(main_node, w: int, h: int) -> void:
 	mat.set_shader_parameter("data", s_tex)
 	mat.set_shader_parameter("map_size", Vector2(w, h))
 	mat.set_shader_parameter("force_biome", -1)
+	Game.photo_ground(mat)
 	s_trees = {
 		"forest": [], "gloom": [], "sick": [], "dead": [],
 	}
@@ -308,7 +310,7 @@ func add_chunk(cx: int, cy: int, upd := true) -> void:
 						kind = "forest" if q < 0.5 else ("gloom" if q < 0.75 else ("sick" if q < 0.9 else "dead"))
 					var arr: Array = s_trees[kind]
 					var t: Texture2D = arr[rng.randi() % arr.size()]
-					var tcol := Game.tint(x, y, 0.1)
+					var tcol := Game.tint(x, y, 0.1) * Game.tone(b)
 					var pos := Vector2(x * Game.TS + 8 + rng.randf_range(-5, 5), y * Game.TS + 8 + rng.randf_range(-5, 5))
 					if tchunk == null:
 						tchunk = TreeChunk.new()
@@ -361,7 +363,7 @@ func add_chunk(cx: int, cy: int, upd := true) -> void:
 					cchunk = TreeChunk.new()
 					cchunk.z_index = -6
 					add_child(cchunk)
-				cchunk.items.append([s_cache[ck], cpos, 2 if rng.randf() < 0.5 else 1, Game.tint(x, y, 0.14)])
+				cchunk.items.append([s_cache[ck], cpos, 2 if rng.randf() < 0.5 else 1, Game.tint(x, y, 0.14) * Game.tone(b)])
 	m.fin_prof[3] += Time.get_ticks_usec() - tP
 	for tc in [tchunk, cchunk]:
 		if tc != null:

@@ -208,7 +208,7 @@ func _draw() -> void:
 			_txt("...", Vector2(5 + 6.0 * minf(30.0, str(qs[0]).length()), oy + 9.0), Color(0.7, 0.92, 0.85, oa * 0.9))
 	if p.zmode > 0:
 		_txt("MODALITA ORDA" if p.zmode == 1 else "MODALITA TATTICA", Vector2(0, 20), Color(1.0, 0.6, 0.9) if p.zmode == 1 else Color(0.6, 0.9, 1.0), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "dialog", "craft"]
+	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "dialog", "craft", "map", "bestiary"]
 	if not overlay:
 		_equip_panel(p)
 		_item_line(p)
@@ -244,6 +244,10 @@ func _draw() -> void:
 	if main.inv_open and main.state == "play":
 		_inv(p)
 	match main.state:
+		"map":
+			_map()
+		"bestiary":
+			_bestiary()
 		"craft":
 			_craft(p)
 		"dialog":
@@ -389,12 +393,15 @@ func _pick(p: Player) -> void:
 
 
 func _edge_markers() -> void:
-	if main.area != "world" or main.state != "play":
+	if main.state != "play":
 		return
-	var jt: Variant = main.journey_target()
-	if jt != null:
-		_edge_arrow(jt as Vector2, Color(1.0, 0.85, 0.25))
-	if main.ev_chest != null:
+	var n := 0
+	for tg in main.obj_targets():
+		if n >= 3:
+			break
+		_edge_arrow(tg["p"] as Vector2, tg["c"] as Color)
+		n += 1
+	if main.area == "world" and main.ev_chest != null:
 		_edge_arrow(main.ev_pos, Color(0.4, 0.9, 1.0))
 
 
@@ -403,6 +410,13 @@ func _edge_arrow(wp: Vector2, col: Color) -> void:
 	var sp: Vector2 = main.get_canvas_transform() * wp
 	var inner := Rect2(10, 10, size.x - 20, size.y - 20)
 	if inner.has_point(sp):
+		if wp.distance_to(main.player.position) > 36.0:
+			var bob := sin(Time.get_ticks_msec() / 180.0) * 2.0
+			var m := sp + Vector2(0, -22 + bob)
+			var dia := PackedVector2Array([m + Vector2(0, -4), m + Vector2(3, 0), m + Vector2(0, 4), m + Vector2(-3, 0)])
+			var big := PackedVector2Array([m + Vector2(0, -6), m + Vector2(5, 0), m + Vector2(0, 6), m + Vector2(-5, 0)])
+			draw_colored_polygon(big, OUTLINE)
+			draw_colored_polygon(dia, col)
 		return
 	var cen := size / 2.0
 	var dv := sp - cen
@@ -471,14 +485,14 @@ func _minimap() -> void:
 			draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), Color(0.85, 0.45, 1.0))
 		elif pr.kind == "npc":
 			draw_rect(Rect2(pos, Vector2(2, 2)), Color(0.4, 1.0, 0.6))
-	var jt: Variant = main.journey_target()
-	if jt != null:
-		var jc := Vector2(floori((jt as Vector2).x / Game.TS), floori((jt as Vector2).y / Game.TS))
+	for tg in main.obj_targets():
+		var tw: Vector2 = tg["p"]
+		var jc := Vector2(floori(tw.x / Game.TS), floori(tw.y / Game.TS))
 		var jp := (dst.position + (jc - Vector2(ox, oy)) * sc).floor()
 		jp = Vector2(clampf(jp.x, dst.position.x + 2, dst.end.x - 3), clampf(jp.y, dst.position.y + 2, dst.end.y - 3))
 		if fmod(Time.get_ticks_msec() / 1000.0, 1.0) < 0.65:
 			draw_rect(Rect2(jp - Vector2(2, 2), Vector2(5, 5)), OUTLINE)
-			draw_rect(Rect2(jp - Vector2(1, 1), Vector2(3, 3)), Color(1.0, 0.85, 0.25))
+			draw_rect(Rect2(jp - Vector2(1, 1), Vector2(3, 3)), tg["c"] as Color)
 	if main.ev_chest != null:
 		var ec := Vector2(floori(main.ev_pos.x / Game.TS), floori(main.ev_pos.y / Game.TS))
 		var ep := (dst.position + (ec - Vector2(ox, oy)) * sc).floor()
@@ -488,6 +502,166 @@ func _minimap() -> void:
 	var pp := (dst.position + (Vector2(pc) - Vector2(ox, oy)) * sc).floor()
 	draw_rect(Rect2(pp - Vector2(2, 2), Vector2(5, 5)), OUTLINE)
 	draw_rect(Rect2(pp - Vector2(1, 1), Vector2(3, 3)), Color(1, 1, 1))
+
+
+## BESTIARIO: griglia dei nemici (sagome scure se non ancora incontrati) e scheda del selezionato
+func _bestiary() -> void:
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.01, 0.04, 0.95))
+	var book: Dictionary = main.persist.get("bestiary", {})
+	var E: Array = Bestiary.ENTRIES
+	var found := 0
+	for en in E:
+		if book.has(en[0]):
+			found += 1
+	_txt("BESTIARIO", Vector2(14, 18), Color(1, 0.82, 0.4), 9)
+	_txt("SCOPERTI %d / %d" % [found, E.size()], Vector2(0, 18), Color(0.75, 0.7, 0.85), 9, HORIZONTAL_ALIGNMENT_RIGHT, 228)
+	for i in E.size():
+		var cell := Rect2(14 + (i % 8) * 27, 34 + (i / 8) * 27, 25, 25)
+		var sel: bool = i == main.beast_sel
+		draw_rect(cell, Color(0.10, 0.08, 0.14) if not sel else Color(0.28, 0.2, 0.1))
+		draw_rect(cell, GOLD if sel else GOLD_D, false, 1.0)
+		var st: Dictionary = Bestiary.stats(E[i][0])
+		if st.is_empty():
+			continue
+		var t: Texture2D = Game.tex(str(st["spr"]))
+		var k := minf(1.0, 21.0 / maxf(t.get_width(), t.get_height()))
+		var sz := Vector2(t.get_width(), t.get_height()) * k
+		draw_texture_rect(t, Rect2(cell.position + (cell.size - sz) / 2.0, sz), false,
+			Color.WHITE if book.has(E[i][0]) else Color(0, 0, 0, 0.85))
+	# scheda
+	var en: Array = E[main.beast_sel]
+	var known: bool = book.has(en[0])
+	var r := Rect2(244, 30, size.x - 256, size.y - 50)
+	_frame(r, true, 0.92)
+	var st2: Dictionary = Bestiary.stats(en[0])
+	if not st2.is_empty():
+		var t2: Texture2D = Game.tex(str(st2["spr"]))
+		var k2 := minf(3.0, 64.0 / maxf(t2.get_width(), t2.get_height()))
+		var sz2 := Vector2(t2.get_width(), t2.get_height()) * k2
+		draw_texture_rect(t2, Rect2(Vector2(r.position.x + r.size.x / 2.0 - sz2.x / 2.0, r.position.y + 8), sz2), false,
+			Color.WHITE if known else Color(0, 0, 0, 0.9))
+	var y := r.position.y + 80.0
+	_txt(str(en[1]) if known else "???", Vector2(r.position.x, y), Color(1, 0.86, 0.5), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	y += 13.0
+	if not known:
+		_txt("NON ANCORA INCONTRATO", Vector2(r.position.x, y), Color(0.6, 0.58, 0.7), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+		return
+	for ln in _wrap(str(en[2]), 34):
+		_txt(ln, Vector2(r.position.x + 8, y), Color(0.86, 0.84, 0.95))
+		y += 9.5
+	y += 4.0
+	_txt("DOVE: " + str(en[3]), Vector2(r.position.x + 8, y), Color(0.7, 0.85, 1.0))
+	y += 12.0
+	var lines := [
+		["VITA", "%d" % int(st2["hp"])], ["DANNO", "%d" % int(st2["dmg"])], ["VELOCITA'", Bestiary.speed_txt(float(st2["spd"]))],
+		["STILE", str(Bestiary.AI_TXT.get(str(st2["ai"]), ""))], ["ANIME", "%d" % int(st2["souls"])], ["UCCISI", "%d" % int(book[en[0]])]]
+	for ln2 in lines:
+		_txt(str(ln2[0]), Vector2(r.position.x + 8, y), Color(0.75, 0.7, 0.85))
+		_txt(str(ln2[1]), Vector2(r.position.x + 8, y), Color(0.95, 0.92, 0.8), 9, HORIZONTAL_ALIGNMENT_RIGHT, r.size.x - 16)
+		y += 10.0
+	_txt(_k("FRECCE SCEGLI   B / ESC CHIUDI", "CROCE SCEGLI   B CHIUDI"), Vector2(0, size.y - 8), Color(0.6, 0.6, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+
+
+## MAPPA: solo le zone gia' esplorate; intera oppure ingrandita attorno al giocatore (si scorre col movimento)
+func _map() -> void:
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.01, 0.04, 0.95))
+	var W: int = Game.MW
+	var H: int = Game.MH
+	var box := Rect2(14, 24, size.x - 28, size.y - 50)
+	var title := "MAPPA DEL MONDO" if main.area == "world" else (str(main.dun["n"]) if main.dun.has("n") else "MAPPA")
+	_txt(title, Vector2(0, 16), Color(1, 0.82, 0.4), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	var pc: Vector2 = main.player.position / Game.TS
+	var fit := minf(box.size.x / W, box.size.y / H)
+	var sc := fit
+	var src := Rect2(0, 0, W, H)
+	if main.map_zoom == 1:
+		sc = maxf(1.0, fit * 3.0)
+		var vw := box.size / sc
+		var cen: Vector2 = pc + main.map_pan / sc
+		cen.x = clampf(cen.x, vw.x / 2.0, maxf(vw.x / 2.0, W - vw.x / 2.0))
+		cen.y = clampf(cen.y, vw.y / 2.0, maxf(vw.y / 2.0, H - vw.y / 2.0))
+		main.map_pan = (cen - pc) * sc
+		src = Rect2(cen - vw / 2.0, vw).intersection(Rect2(0, 0, W, H))
+	var dst := Rect2(box.position + (box.size - src.size * sc) / 2.0, src.size * sc)
+	_frame(dst.grow(4), true, 0.9)
+	draw_rect(dst, Color(0.05, 0.04, 0.07))
+	draw_texture_rect_region(main.mm_tex, dst, src)
+	var to_s := func(cell: Vector2) -> Vector2:
+		return (dst.position + (cell - src.position) * sc).floor()
+	var inside := func(v: Vector2) -> bool:
+		return dst.grow(-1).has_point(v)
+	var seen_at := func(c: Vector2i) -> bool:
+		if c.x < 0 or c.y < 0 or c.x >= W or c.y >= H or main.seen.size() != W * H:
+			return false
+		return main.seen[c.y * W + c.x] != 0
+	if main.area == "world":
+		# nomi delle regioni gia' visitate
+		for i in main.SEEDS.size():
+			var sd: Vector2i = main.SEEDS[i]
+			var bi: int = main.biome_at(sd.x, sd.y)
+			if seen_at.call(sd):
+				var sp: Vector2 = to_s.call(Vector2(sd))
+				if inside.call(sp):
+					var nm := str(Game.BIO[bi]["n"])
+					_txt(nm, sp + Vector2(-font.get_string_size(nm, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs(8)).x / 2.0, 0), Color(0.86, 0.82, 0.95, 0.85))
+		# ingressi dei dungeon scoperti
+		for g in main.ENTR:
+			var gc: Vector2i = main.ENTR[g]
+			if seen_at.call(gc):
+				var gp: Vector2 = to_s.call(Vector2(gc))
+				if inside.call(gp):
+					draw_rect(Rect2(gp - Vector2(2, 2), Vector2(5, 5)), OUTLINE)
+					draw_rect(Rect2(gp - Vector2(1, 1), Vector2(3, 3)), Color(0.85, 0.45, 1.0))
+					if main.map_zoom == 1 and main.DUNS.has(g):
+						_map_label(str(main.DUNS[g]["n"]), gp, Color(0.85, 0.65, 1.0), dst)
+		# falo' accesi (viaggio rapido)
+		for k in main.persist["fires"].keys():
+			var ks := str(k)
+			if not ks.begins_with("world:"):
+				continue
+			var xy := ks.substr(6).split(",")
+			var fp: Vector2 = to_s.call(Vector2(int(xy[0]), int(xy[1])))
+			if inside.call(fp):
+				draw_rect(Rect2(fp - Vector2(2, 2), Vector2(4, 4)), OUTLINE)
+				draw_rect(Rect2(fp - Vector2(1, 1), Vector2(2, 2)), Color(1.0, 0.62, 0.2))
+	# obiettivi: sempre visibili (anche in zone non ancora esplorate), bloccati al bordo della mappa
+	var blink := fmod(Time.get_ticks_msec() / 1000.0, 1.0) < 0.7
+	for tg in main.obj_targets():
+		var tp: Vector2 = to_s.call((tg["p"] as Vector2) / Game.TS)
+		tp = Vector2(clampf(tp.x, dst.position.x + 3, dst.end.x - 4), clampf(tp.y, dst.position.y + 3, dst.end.y - 4))
+		var c: Color = tg["c"]
+		var dia := PackedVector2Array([tp + Vector2(0, -4), tp + Vector2(4, 0), tp + Vector2(0, 4), tp + Vector2(-4, 0)])
+		draw_colored_polygon(PackedVector2Array([tp + Vector2(0, -6), tp + Vector2(6, 0), tp + Vector2(0, 6), tp + Vector2(-6, 0)]), OUTLINE)
+		draw_colored_polygon(dia, c if blink else c.darkened(0.4))
+		if main.map_zoom == 1:
+			var lbl := str(tg["n"])
+			if lbl.length() > 26:
+				lbl = lbl.substr(0, 26) + "..."
+			_map_label(lbl, tp, c, dst)
+	var pp: Vector2 = to_s.call(pc)
+	if inside.call(pp):
+		draw_rect(Rect2(pp - Vector2(3, 3), Vector2(7, 7)), OUTLINE)
+		draw_rect(Rect2(pp - Vector2(2, 2), Vector2(5, 5)), Color(1, 1, 1) if blink else Color(0.7, 0.9, 1.0))
+	# legenda
+	var ly := size.y - 14.0
+	draw_rect(Rect2(14, ly - 6, 5, 5), Color(1.0, 0.85, 0.25))
+	_txt("OBIETTIVO", Vector2(22, ly), Color(0.85, 0.8, 0.7))
+	draw_rect(Rect2(80, ly - 6, 5, 5), Color(0.45, 1.0, 0.7))
+	_txt("MISSIONI", Vector2(88, ly), Color(0.85, 0.8, 0.7))
+	draw_rect(Rect2(140, ly - 6, 5, 5), Color(1.0, 0.62, 0.2))
+	_txt("FALO'", Vector2(148, ly), Color(0.85, 0.8, 0.7))
+	draw_rect(Rect2(180, ly - 6, 5, 5), Color(0.85, 0.45, 1.0))
+	_txt("INGRESSI", Vector2(188, ly), Color(0.85, 0.8, 0.7))
+	_txt(_k("E INGRANDISCI   WASD SCORRI   M CHIUDI", "A INGRANDISCI   STICK SCORRI   B CHIUDI"), Vector2(0, ly), Color(0.65, 0.65, 0.75), 9, HORIZONTAL_ALIGNMENT_RIGHT, size.x - 14)
+
+
+## scritta accanto a un segno della mappa: a destra, oppure a sinistra se uscirebbe dal riquadro
+func _map_label(t: String, at: Vector2, col: Color, box: Rect2) -> void:
+	var w := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs(8)).x
+	var x := at.x + 7.0
+	if x + w > box.end.x - 2.0:
+		x = at.x - 7.0 - w
+	_txt(t, Vector2(x, clampf(at.y + 3.0, box.position.y + 8.0, box.end.y - 2.0)), col)
 
 
 func _travel() -> void:
@@ -982,10 +1156,10 @@ func _class_select() -> void:
 
 func _pause() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.62))
-	var r := Rect2(size.x / 2 - 100, 62, 200, 150)
+	var r := Rect2(size.x / 2 - 100, 58, 200, 178)
 	_panel(r)
 	_txt("PAUSA", Vector2(r.position.x, r.position.y + 30), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-	var items := ["RIPRENDI", "IMPOSTAZIONI", "CONTROLLI", "TORNA AL TITOLO", "ESCI DAL GIOCO"]
+	var items := ["RIPRENDI", "MAPPA", "BESTIARIO", "IMPOSTAZIONI", "CONTROLLI", "TORNA AL TITOLO", "ESCI DAL GIOCO"]
 	for i in items.size():
 		var sel: bool = i == main.pause_sel
 		_txt(("> " if sel else "  ") + items[i], Vector2(r.position.x + 28, r.position.y + 54 + i * 14),
@@ -1051,8 +1225,8 @@ func _controls() -> void:
 		["CAMBIA ARMA", "TAB", "Y"],
 		["INTERAGISCI", "E", "A"],
 		["PAUSA", "ESC", "START"],
-		["SCHERMO INTERO", "F11 / ALT+INVIO", "-"],
-		["MOSTRA FPS", "F3", "-"],
+		["MAPPA / BESTIARIO", "M / B", "START > MAPPA"],
+		["SCHERMO INTERO / FPS", "F11 / F3", "-"],
 		["ZOOM: ORDA/TATTICA", "V", "R3"],
 		["TATTICA: INVIA", "CLICK / SPAZIO", "RB"],
 		["TATTICA: RICHIAMA", "L / CLICK DESTRO", "RT"],

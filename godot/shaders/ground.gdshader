@@ -5,6 +5,13 @@ shader_type canvas_item;
 uniform sampler2D data : filter_nearest, repeat_disable;   // R = bioma, G = flag (bit0 blocco, bit1 strada)
 uniform vec2 map_size = vec2(300.0, 220.0);
 uniform vec3 boost = vec3(1.0);
+uniform bool photo_on = false;
+uniform sampler2D photo_ga : source_color, filter_nearest, repeat_enable;    // atlante 7x1 (256 px per bioma): terreno A
+uniform sampler2D photo_ma : source_color, filter_nearest, repeat_enable;    // atlante 7x1: terreno B (a chiazze)
+uniform sampler2D photo_path : source_color, filter_nearest, repeat_enable;
+uniform sampler2D photo_cob : source_color, filter_nearest, repeat_enable;
+const vec3 PTONE[7] = vec3[7](vec3(0.80, 0.76, 0.74), vec3(0.66, 0.74, 0.86), vec3(0.62, 0.70, 0.60), vec3(0.60, 0.70, 0.66),
+	vec3(0.72, 0.68, 0.80), vec3(0.80, 0.86, 0.98), vec3(0.85, 0.66, 0.60));
 uniform int force_biome = -1;                                // >=0: dungeon (stesso materiale ovunque)                             // compensa la luce ambiente sui materiali emissivi
 
 varying vec2 wp;
@@ -98,6 +105,41 @@ bool is_blocked(vec2 p) {
 		return bitf(ivec2(floor(p / 16.0)), 0) > 0.5;
 	}
 	return field(p, 0) > thr_at(p);
+}
+
+// foto ridotta: 18 livelli per canale con retinatura ordinata (look anni '90)
+vec3 retro(vec3 t, vec2 p) {
+	return floor(t * 18.0 + bayer(p)) / 18.0;
+}
+
+// due foto per bioma alla scala del mondo, mescolate a chiazze irregolari (niente immagine unica ripetuta)
+vec3 atlas(sampler2D a, int b, vec2 p, float rep) {
+	vec2 q = clamp(fract(p / rep), vec2(1.0 / 256.0), vec2(1.0 - 1.0 / 256.0));   // niente pixel del bioma accanto nell'atlante
+	return texture(a, vec2((float(b) + q.x) / 7.0, q.y)).rgb;
+}
+
+vec3 photo_ground_b(int b, vec2 p) {
+	vec3 g = atlas(photo_ga, b, p, 256.0);
+	vec3 m = atlas(photo_ma, b, p + vec2(97.0, 41.0), 384.0);
+	float f = fbm(p * 0.011 + float(b) * 3.7) + (fbm(p * 0.05) - 0.5) * 0.25 + (bayer(p) - 0.5) * 0.06;
+	vec3 t = mix(g, m, smoothstep(0.46, 0.56, f));
+	float l = dot(t, vec3(0.3, 0.59, 0.11));
+	t = mix(vec3(l), t, 0.66) * PTONE[b];
+	t *= 0.85 + 0.3 * fbm(p * 0.004 + 11.0);                  // grandi zone piu' chiare e piu' scure
+	return retro(t, p);
+}
+
+vec3 photo_ground(vec2 p) {
+	return photo_ground_b(1, p);
+}
+
+vec3 photo_road(vec2 p, float edge) {
+	vec3 t = texture(photo_path, p / 256.0).rgb;
+	vec3 m = atlas(photo_ma, 3, p + vec2(13.0, 211.0), 384.0);
+	t = mix(t, m, smoothstep(0.4, 0.62, fbm(p * 0.02 + 5.0) + (bayer(p) - 0.5) * 0.08));   // pozze e fango sul sentiero
+	float l = dot(t, vec3(0.3, 0.59, 0.11));
+	t = mix(vec3(l), t, 0.55) * vec3(0.78, 0.8, 0.9) * (0.8 + 0.4 * fbm(p * 0.03));
+	return retro(t, p);
 }
 
 vec3 ground(int b, vec2 p, int th) {
@@ -288,6 +330,10 @@ vec3 ground(int b, vec2 p, int th) {
 	float h2 = hash21(floor(p / 3.0) + 77.0);
 	if (h2 > 0.985 && b != 6 && (force_biome < 0)) {
 		c = mix(c, SPECK[b], 0.6);
+	}
+	if (photo_on) {
+		if (force_biome >= 0) return photo_ground_b(4, p) * vec3(0.78, 0.74, 0.82);   // pavimenti dei dungeon: pietra
+		return photo_ground_b(b, p);
 	}
 	return c * (0.82 + 0.36 * fbm(p * 0.006 + 5.0));
 }
@@ -508,6 +554,7 @@ void fragment() {
 			col = water(p, depth) * vec3(0.95, 1.1, 1.25);
 		} else if (bio == 1 || bio == 2) {
 			col = ground(gb, p, th) * 0.42;
+			if (photo_on) col = photo_ground_b(gb, p) * 0.45;
 			if (vnoise(p * 0.35) > 0.78) col += vec3(0.04, 0.02, 0.03);
 		} else if (bio == 3) {
 			col = water(p, depth);
@@ -515,6 +562,9 @@ void fragment() {
 			col = brickwall(p, depth);
 		} else {
 			col = cliff(bio, p, depth);
+			if (photo_on) {   // pareti di roccia: foto di detriti, piu' scure verso l'interno
+				col = retro(atlas(photo_ma, 4, p, 384.0) * vec3(0.55, 0.52, 0.6) * (1.0 - clamp(depth * 3.0, 0.0, 0.6)), p);
+			}
 		}
 	} else {
 		col = ground(gb, p, th);
@@ -522,12 +572,14 @@ void fragment() {
 		float rthr = 0.5 + (fbm(p * 0.2 + 9.0) - 0.47) * 0.55;
 		if (rf > rthr) {
 			col = road_col(p, rf - rthr);
+			if (photo_on && force_biome < 0) col = photo_road(p, rf - rthr);
 				if (gb == 0 && force_biome < 0) col = col * 1.28 + vec3(0.03, 0.02, 0.0);
 		}
 		float cf = field(p, 2);
 		float cthr = 0.5 + (fbm(p * 0.2 + 21.0) - 0.47) * 0.4;
 		if (cf > cthr) {
 			col = cobble_col(p);
+			if (photo_on) col = retro(texture(photo_cob, p / 192.0).rgb * vec3(0.72, 0.72, 0.8), p);
 			if (cf < cthr + 0.07) {
 				col *= 0.7;
 			}

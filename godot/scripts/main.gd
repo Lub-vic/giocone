@@ -26,7 +26,8 @@ func init_layout() -> void:
 	# gli ingressi restano alla stessa distanza dal proprio centro regione
 	ENTR = {"d0": SEEDS[2] + Vector2i(-3, 45), "d1": SEEDS[1] + Vector2i(22, -22), "d2": SEEDS[4] + Vector2i(27, -17),
 		"d3": SEEDS[6] + Vector2i(35, 15), "dF": SEEDS[3] + Vector2i(10, -72), "d4": SEEDS[2] + Vector2i(-25, -37),
-		"d5": SEEDS[3] + Vector2i(25, -34), "d6": SEEDS[5] + Vector2i(25, -27)}
+		"d5": SEEDS[3] + Vector2i(25, -34), "d6": SEEDS[5] + Vector2i(25, -27),
+		"d7": SEEDS[1] + Vector2i(-22, 18)}
 	RIVERS = []
 	for rv in BASE_RIVERS:
 		var pts: Array = []
@@ -40,7 +41,8 @@ func init_layout() -> void:
 			SEEDS[i] = Vector2i(int(lay["seeds"][i][0]), int(lay["seeds"][i][1]))
 		ENTR = {"d0": SEEDS[2] + Vector2i(-3, 45), "d1": SEEDS[1] + Vector2i(22, -22), "d2": SEEDS[4] + Vector2i(27, -17),
 			"d3": SEEDS[6] + Vector2i(35, 15), "dF": SEEDS[3] + Vector2i(10, -72), "d4": SEEDS[2] + Vector2i(-25, -37),
-			"d5": SEEDS[3] + Vector2i(25, -34), "d6": SEEDS[5] + Vector2i(25, -27)}
+			"d5": SEEDS[3] + Vector2i(25, -34), "d6": SEEDS[5] + Vector2i(25, -27),
+		"d7": SEEDS[1] + Vector2i(-22, 18)}
 	if lay.has("weights") and (lay["weights"] as Array).size() == bio_w.size():
 		bio_w = (lay["weights"] as Array).duplicate()
 	if lay.has("rivers"):
@@ -141,6 +143,8 @@ var DUNS := {
 		"amb": Color(0.11, 0.18, 0.15), "tint": Color(0.6, 1.0, 0.7)},
 	"d6": {"n": "IL TRONO DI GHIACCIO", "rows": [3, 0, 3], "boss": "boss_yeti", "rooms": 14, "mult": 2.8, "bio": 5,
 		"amb": Color(0.14, 0.18, 0.28), "tint": Color(0.7, 0.9, 1.4)},
+	"d7": {"n": "IL CAMPANILE CADUTO", "rows": [0], "boss": "boss_campanaro", "rooms": 2, "mult": 1.6, "bio": 1,
+		"amb": Color(0.17, 0.14, 0.26), "arena": true},
 	"dF": {"n": "LA CRIPTA DEL SIGNORE", "rows": [2, 1, 0], "boss": "vampire", "rooms": 18, "mult": 3.5, "bio": 1,
 		"amb": Color(0.16, 0.10, 0.22)},
 }
@@ -217,6 +221,9 @@ var returns := {}                  # area -> cella del portale d'ingresso (nel m
 var spawns: Array = []
 var boss_pos := Vector2.ZERO
 var boss_kind := ""
+var camp_locks: Array = []     # posizioni dei lucchetti delle catene del Campanaro
+var colossus: Colossus = null
+var world_has_cathedral := false
 var boss_tint := Color.WHITE
 var sfx_node: Sfx = null
 var pages_found := 0
@@ -238,9 +245,13 @@ var doors: Array = []
 var carved: Array = []
 var use_pad := false
 var show_fps := false
-var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false}
+var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "photo": false}
 var opt_sel := 0
 var pause_sel := 0
+var beast_sel := 0            # bestiario: scheda selezionata
+var map_zoom := 0              # mappa del mondo: 0 intera, 1 ingrandita attorno al giocatore
+var map_pan := Vector2.ZERO
+var seen_load := PackedByteArray()   # esplorazione del mondo letta dal salvataggio
 var opt_from := "pause"
 var ctrl_from := "options"
 var in_title_menu := false
@@ -254,6 +265,7 @@ const OPTIONS := [
 	{"k": "bright", "n": "LUMINOSITA", "t": "slider", "max": 5},
 	{"k": "fps", "n": "MOSTRA FPS", "t": "toggle"},
 	{"k": "aim_manual", "n": "MIRA MANUALE", "t": "toggle"},
+	{"k": "photo", "n": "GRAFICA FOTO (PROVA)", "t": "toggle"},
 	{"k": "ctrl", "n": "CONTROLLI", "t": "action"},
 	{"k": "back", "n": "INDIETRO", "t": "action"},
 ]
@@ -313,6 +325,8 @@ func _ready() -> void:
 	Game.setup_input()
 	if OS.get_cmdline_user_args().size() == 0:
 		load_settings()
+	if OS.get_cmdline_user_args().has("--photo"):   # prove della grafica FOTO
+		settings["photo"] = true
 	randomize()
 	world_seed = new_seed()
 	pop_salt = randi()
@@ -420,9 +434,22 @@ func save_game() -> void:
 		"last_fire": {"area": last_fire["area"], "cell": [lc.x, lc.y]}, "persist": persist,
 		"player": {"lv": player.lv, "souls": player.souls, "rk": player.rk, "attr": player.attr, "kills": player.kills},
 		"cls": player.cls, "wslots": player.wslots, "wcur": player.wcur, "spells": player.spells, "known": player.known, "relics": player.relics, "mats": player.mats, "items": player.items, "armor": player.armor, "brews": player.brews, "bag": player.bag, "belt": player.belt, "relic_eq": player.relic_eq}
+	var ws: PackedByteArray = world_seen()
+	if ws.size() == WORLD_W * WORLD_H:
+		d["seen"] = Marshalls.raw_to_base64(ws.compress(FileAccess.COMPRESSION_DEFLATE))
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(d))
+
+
+## legge l'esplorazione salvata (base64 compresso); viene applicata quando il mondo viene costruito
+func load_seen(d: Dictionary) -> void:
+	seen_load = PackedByteArray()
+	if d.has("seen"):
+		var raw: PackedByteArray = Marshalls.base64_to_raw(str(d["seen"]))
+		var dec: PackedByteArray = raw.decompress(WORLD_W * WORLD_H, FileAccess.COMPRESSION_DEFLATE)
+		if dec.size() == WORLD_W * WORLD_H:
+			seen_load = dec
 
 
 func load_meta() -> void:
@@ -743,10 +770,11 @@ func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
 		pages_found = int(ld.get("pages", 0))
 		elder_i = int(ld.get("elder", 0))
 		var ps: Dictionary = ld["persist"]
-		for k in ["fires", "opened", "broken", "bosses", "npc", "quests"]:
+		for k in ["fires", "opened", "broken", "bosses", "npc", "quests", "bestiary"]:
 			if not ps.has(k):
 				ps[k] = {}
 		persist = ps
+		load_seen(ld)
 		cut_idx_n = -1
 		var pd: Dictionary = ld["player"]
 		player.lv = int(pd["lv"])
@@ -1100,6 +1128,8 @@ func make_tileset() -> TileSet:
 	ts.tile_size = Vector2i(16, 16)
 	var src := TileSetAtlasSource.new()
 	var tex: Texture2D = load("res://assets/tiles/tiles.png")
+	if Game.photo and ResourceLoader.exists("res://assets/photo/tiles_photo.png"):
+		tex = load("res://assets/photo/tiles_photo.png")   # caselle fotografiche (interni)
 	src.texture = tex
 	src.texture_region_size = Vector2i(16, 16)
 	for x in 4:
@@ -1944,6 +1974,9 @@ func gen_world() -> void:
 	carve_path(SEEDS[2], ENTR["d4"])
 	carve_path(SEEDS[3], ENTR["d5"])
 	carve_path(SEEDS[5], ENTR["d6"])
+	find_cathedral_spot()
+	carve_path(SEEDS[1], ENTR["d7"] + Vector2i(9, 5))      # il sentiero arriva alla facciata da sud
+	carve_path(ENTR["d7"] + Vector2i(9, 5), ENTR["d7"] + Vector2i(0, 1))
 	prof("strade")
 	apply_paint()
 	# cancelli: al centro del ponte della strada indicata
@@ -2085,6 +2118,8 @@ func populate_world() -> void:
 	add_gate("d4", ENTR["d4"], Color(0.3, 0.9, 0.4))
 	add_gate("d5", ENTR["d5"], Color(0.3, 0.9, 0.8))
 	add_gate("d6", ENTR["d6"], Color(0.6, 0.9, 1.0))
+	add_gate("d7", ENTR["d7"], Color(1.0, 0.75, 0.4))
+	place_cathedral()
 	# falo' agli altri centri regione e lungo le strade
 	var fires: Array[Vector2i] = []
 	for si in range(1, SEEDS.size()):
@@ -2430,8 +2465,82 @@ func spawn_all() -> void:
 		return
 	for s in spawns:
 		spawn_enemy(s["k"], s["pos"], s["mult"], s["elite"], s["tint"])
-	if boss_kind != "" and not persist["bosses"].has(boss_kind):
+	if boss_kind == "boss_campanaro":
+		if not persist["bosses"].has(boss_kind):
+			colossus = Colossus.new()
+			colossus.position = boss_pos
+			ents.add_child(colossus)
+			colossus.setup(self, camp_locks)
+	elif boss_kind != "" and not persist["bosses"].has(boss_kind):
 		spawn_enemy(boss_kind, boss_pos, 1.0, false, boss_tint)
+
+
+## cerca vicino al cimitero un'area tutta calpestabile per la cattedrale; l'ingresso va davanti alla sua porta
+func find_cathedral_spot() -> void:
+	var f := tex_fp("cathedral_top")
+	var want: Vector2i = SEEDS[1] + Vector2i(-22, 18)
+	var best := Vector2i(-1, -1)
+	var best_d := 1e9
+	for dy in range(-30, 31, 2):
+		for dx in range(-30, 31, 2):
+			var g := want + Vector2i(dx, dy)
+			var c := g + Vector2i(-f.x / 2, -f.y)
+			var ok := true
+			for y in range(-1, f.y + 2):
+				for x in range(-1, f.x + 1):
+					var cc := c + Vector2i(x, y)
+					if not is_floor(cc) or reserved.has(cc):
+						ok = false
+						break
+				if not ok:
+					break
+			if ok:
+				var d := Vector2(dx, dy).length()
+				if d < best_d:
+					best_d = d
+					best = g
+	if best.x >= 0:
+		ENTR["d7"] = best
+
+
+## la cattedrale in rovina sopra l'ingresso del Campanile: il portale e' davanti alla porta del campanile
+func place_cathedral() -> void:
+	var g: Vector2i = ENTR["d7"]
+	var f := tex_fp("cathedral_top")
+	var c := g + Vector2i(-f.x / 2, -f.y)
+	for y in f.y:
+		for x in f.x:
+			var cc := c + Vector2i(x, y)
+			if is_floor(cc):
+				reserved.erase(cc)
+				block.erase(cc)
+	world_has_cathedral = try_place("cathedral_top", c) != null
+	if not world_has_cathedral:
+		print("CATTEDRALE: spazio occupato a ", c)
+
+
+## navata del Campanaro: colonne con i lucchetti delle catene, bracieri, macerie
+func arena_props(r: Rect2i) -> void:
+	var cx := center(r).x
+	var base := Vector2i(cx, r.position.y + 11)
+	boss_pos = cell_pos(base) + Vector2(0, -8)
+	camp_locks.clear()
+	for c in [base + Vector2i(-10, 3), base + Vector2i(10, 3), base + Vector2i(-9, -6), base + Vector2i(9, -6)]:
+		add_prop("column_top", c)
+		camp_locks.append(cell_pos(c) + Vector2(0, 10))
+	for y in range(r.position.y + 2, r.end.y - 2, 5):
+		for x in [r.position.x + 1, r.end.x - 2]:
+			if randf() < 0.6:
+				try_place("column_top", Vector2i(x, y))
+	for c in [Vector2i(cx - 3, r.end.y - 3), Vector2i(cx + 3, r.end.y - 3), Vector2i(r.position.x + 2, r.position.y + 1),
+			Vector2i(r.end.x - 3, r.position.y + 1)]:
+		add_prop("brazier", c)
+	try_place("camp_bellfall", Vector2i(cx - 15, r.position.y + 2))      # la campana caduta dal campanile
+	try_place("camp_rubble", Vector2i(cx + 11, r.position.y + 1))        # le macerie della torre crollata
+	for k in 14:
+		var c2 := Vector2i(randi_range(r.position.x + 2, r.end.x - 3), randi_range(r.position.y + 15, r.end.y - 2))
+		if absi(c2.x - cx) > 2:
+			try_place(["skullpile", "boulder_cem_%d" % (randi() % 8), "candelabra"][randi() % 3], c2)
 
 
 func carve_path_peek(a: Vector2i, b: Vector2i) -> Array:
@@ -3350,6 +3459,20 @@ func mat_drops(kind: String, champ: bool) -> void:
 				drops = {"osso": 1}
 		"skeleton", "skel_archer", "ghoul", "zombie", "wraith":
 			if randf() < 0.28:
+				drops = {"osso": 1}
+		"goblin", "goblin_archer", "goblin_shaman", "kobold", "lizardman":
+			if randf() < 0.35:
+				drops = {"pelle": 1}
+			if randf() < 0.2:
+				drops["osso"] = 1
+		"orc", "troll", "ogre":
+			drops = {"carne": 1 + randi() % 2}
+			if randf() < 0.5:
+				drops["pelle"] = 1
+			if randf() < 0.4:
+				drops["osso"] = 1
+		"harpy":
+			if randf() < 0.4:
 				drops = {"osso": 1}
 		"wolf":
 			if randf() < 0.55:
@@ -4396,6 +4519,8 @@ func try_place(name: String, c: Vector2i, fx := false) -> Prop:
 		tent_cells.append(c)
 	var p := Prop.new()
 	p.setup_top(name, c, f)
+	if area == "world" and inb(c):
+		p.spr.modulate *= Game.tone(biome[idx(c)])
 	var cells: Array = []
 	for dy in f.y:
 		for dx in f.x:
@@ -4982,7 +5107,113 @@ func init_minimap() -> void:
 	seen.fill(0)
 	mm_img = Image.create(Game.MW, Game.MH, false, Image.FORMAT_RGBA8)
 	mm_img.fill(Color(0, 0, 0, 0))
+	# il mondo ricorda le zone gia' esplorate (anche dopo aver ricaricato la partita)
+	if area == "world" and seen_load.size() == Game.MW * Game.MH:
+		seen = seen_load.duplicate()
+		seen_load = PackedByteArray()
+		for y in Game.MH:
+			for x in Game.MW:
+				if seen[y * Game.MW + x] != 0:
+					mm_img.set_pixel(x, y, mm_color(Vector2i(x, y)))
 	mm_tex = ImageTexture.create_from_image(mm_img)
+
+
+## esplorazione del mondo, anche mentre si e' in un dungeon (il mondo e' messo da parte)
+func world_seen() -> PackedByteArray:
+	if area == "world":
+		return seen
+	if not world_cache.is_empty():
+		return world_cache.get("seen", PackedByteArray())
+	return seen_load
+
+
+## BERSAGLI DA SEGUIRE: obiettivo principale (oro) e missioni dei paesani (verde), nell'area attuale
+func obj_targets() -> Array:
+	var out: Array = []
+	if run_mode or area == "" or area.begins_with("int|"):
+		return out
+	var gold := Color(1.0, 0.85, 0.25)
+	var green := Color(0.45, 1.0, 0.7)
+	if area == "world":
+		var jt: Variant = journey_target()
+		if jt != null:
+			out.append({"p": jt, "c": gold, "n": "OBIETTIVO"})
+		else:
+			var g := main_gate()
+			if g != "" and ENTR.has(g):
+				out.append({"p": cell_pos(ENTR[g]), "c": gold, "n": str(DUNS[g]["n"])})
+		var q: Dictionary = qp()
+		for qid in q:
+			if q[qid]["st"] != "active" or not quest_defs.has(qid):
+				continue
+			var d: Dictionary = quest_defs[qid]
+			var tp: Variant = null
+			if quest_complete(qid):
+				for v in villagers:
+					if is_instance_valid(v) and v.qid == qid:
+						tp = v.position
+				if tp == null and d.has("gpos"):
+					tp = d["gpos"]
+			else:
+				match str(d["type"]):
+					"fetch", "poi_fetch", "poi_find", "poi_clear":
+						tp = cell_pos(d["tcell"])
+					"clear":
+						tp = d["tpos"]
+					"visit":
+						for a in arenas:
+							if a["def"]["id"] == d["target"]:
+								tp = a["pos"]
+			if tp != null:
+				out.append({"p": tp, "c": green, "n": str(d["giver"]) if quest_complete(qid) else str(d["txt"])})
+	elif DUNS.has(area):
+		if boss_kind != "" and not persist["bosses"].has(boss_kind):
+			out.append({"p": boss_pos, "c": gold, "n": "CUSTODE"})
+	return out
+
+
+## il dungeon dell'obiettivo principale (stesso ordine del testo dell'obiettivo)
+func main_gate() -> String:
+	if not persist["bosses"].has("boss_jailer"):
+		return "d0"
+	if guardians >= 3:
+		return "dF"
+	if not persist["bosses"].has("boss_wraith"):
+		return "d1"
+	if not persist["bosses"].has("boss_gargoyle"):
+		return "d2"
+	if not persist["bosses"].has("boss_forge"):
+		return "d3"
+	return ""
+
+
+## BESTIARIO: un nemico entra nelle schede quando lo incontri; si contano anche le uccisioni
+func beast_note(kind: String, killed := false) -> void:
+	if run_mode or kind == "camp_part" or kind == "ooze_small":
+		return
+	if not persist.has("bestiary"):
+		persist["bestiary"] = {}
+	var b: Dictionary = persist["bestiary"]
+	if not b.has(kind):
+		b[kind] = 0
+		if kind != "rat":
+			popup(player.position + Vector2(0, -30), "BESTIARIO: NUOVA SCHEDA", Color(0.85, 0.75, 1.0))
+	if killed:
+		b[kind] = int(b[kind]) + 1
+
+
+func open_bestiary() -> void:
+	state = "bestiary"
+	snd("page")
+
+
+func open_map() -> void:
+	if mm_tex == null:
+		return
+	map_zoom = 0
+	map_pan = Vector2.ZERO
+	state = "map"
+	snd("page")
 
 
 func mm_color(c: Vector2i) -> Color:
@@ -5403,6 +5634,10 @@ func gen_dungeon() -> void:
 	biome.resize(n)
 	biome.fill(dun["bio"])
 	var tries := 0
+	if dun.get("arena", false):
+		rooms.append(Rect2i(Game.MW / 2 - 6, Game.MH - 14, 12, 9))
+		rooms.append(Rect2i(Game.MW / 2 - 18, 4, 36, 28))
+		tries = 9999
 	while rooms.size() < int(dun["rooms"]) and tries < 800:
 		tries += 1
 		var rw: Array = dun.get("rw", [8, 15])
@@ -5534,6 +5769,9 @@ func populate_dungeon() -> void:
 			if ex != null:
 				ex.dest = "world"
 				Game.make_light(ex, Vector2(0, -8), Color(0.7, 0.4, 1.0), 1.6, 0.7)
+			continue
+		if i == far and dun.get("arena", false):
+			arena_props(r)
 			continue
 		if i == far:
 			add_prop("altar", center(r) + Vector2i(0, -2))
@@ -5693,6 +5931,14 @@ func build_ui() -> void:
 	hud.set_anchors_preset(Control.PRESET_FULL_RECT)
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	cl.add_child(hud)
+	# comandi touch: solo su telefoni/tablet (o con --touch per provarli sul PC)
+	if DisplayServer.is_touchscreen_available() or OS.has_feature("mobile") or OS.get_cmdline_user_args().has("--touch"):
+		var tl := CanvasLayer.new()
+		tl.layer = 9
+		add_child(tl)
+		var tc := TouchControls.new()
+		tc.main = self
+		tl.add_child(tc)
 	var fl := CanvasLayer.new()
 	fl.layer = 10
 	add_child(fl)
@@ -5806,6 +6052,7 @@ func break_prop(p: Prop) -> void:
 
 func enemy_died(e: Enemy) -> void:
 	enemies.erase(e)
+	beast_note(e.kind, true)
 	if not (e.is_boss and e.kind == "vampire"):
 		mat_drops(str(e.kind), e.champ)
 	if not e.sref.is_empty():
@@ -6510,6 +6757,9 @@ func apply_settings() -> void:
 	if sfx_node != null:
 		sfx_node.set_levels(float(settings["sfx"]) / 10.0, float(settings["amb"]) / 10.0)
 	show_fps = bool(settings["fps"])
+	if Game.photo != bool(settings.get("photo", false)):
+		Game.photo = bool(settings.get("photo", false))
+		Game._cache.clear()
 
 
 func set_fullscreen(on: bool) -> void:
@@ -6529,6 +6779,12 @@ func opt_change(dir: int) -> void:
 		return
 	apply_settings()
 	save_settings()
+	if k == "photo" and area != "" and player != null:
+		# la grafica cambia ricaricando: si salva e si torna al titolo (CONTINUA riprende da qui)
+		save_game()
+		Engine.time_scale = 1.0
+		get_tree().reload_current_scene()
+		return
 	if k == "sfx" or k == "master":
 		snd("hit")
 	else:
@@ -6571,14 +6827,19 @@ func _activate_pause_selection() -> void:
 		0:
 			state = "play"
 		1:
+			state = "play"
+			open_map()
+		2:
+			open_bestiary()
+		3:
 			opt_from = "pause"
 			opt_sel = 0
 			in_title_menu = false
 			state = "options"
-		2:
+		4:
 			ctrl_from = "pause"
 			state = "controls"
-		3:
+		5:
 			save_game()
 			Engine.time_scale = 1.0
 			get_tree().reload_current_scene()
@@ -6638,7 +6899,7 @@ func _handle_menu_click(pos: Vector2) -> bool:
 		return true
 	if state == "pause":
 		var row := floori((pos.y - 106.0) / 14.0)
-		if pos.x < 130.0 or pos.x > 350.0 or row < 0 or row >= 5 or pos.y >= 122.0 + row * 14.0:
+		if pos.x < 130.0 or pos.x > 350.0 or row < 0 or row >= 7 or pos.y >= 122.0 + row * 14.0:
 			return false
 		pause_sel = row
 		_activate_pause_selection()
@@ -6799,17 +7060,53 @@ func _unhandled_input(ev: InputEvent) -> void:
 			state = "play"
 			snd("page")
 		return
+	if state == "bestiary":
+		var n := Bestiary.ENTRIES.size()
+		if ev.is_action_pressed("ui_right"):
+			beast_sel = (beast_sel + 1) % n
+		elif ev.is_action_pressed("ui_left"):
+			beast_sel = (beast_sel + n - 1) % n
+		elif ev.is_action_pressed("ui_down"):
+			beast_sel = mini(n - 1, beast_sel + 8)
+		elif ev.is_action_pressed("ui_up"):
+			beast_sel = maxi(0, beast_sel - 8)
+		elif (ev is InputEventKey and ev.pressed and not ev.echo and (ev.keycode == KEY_B or ev.keycode == KEY_ESCAPE)) or ev.is_action_pressed("ui_cancel") \
+				or (ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_START):
+			state = "play"
+			snd("page")
+		elif ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+			var cp: Vector2 = hud.get_local_mouse_position()
+			var ci := floori((cp.x - 14.0) / 27.0)
+			var ri := floori((cp.y - 34.0) / 27.0)
+			if ci >= 0 and ci < 8 and ri >= 0 and ri * 8 + ci < n:
+				beast_sel = ri * 8 + ci
+		return
+	if state == "map":
+		if (ev is InputEventKey and ev.pressed and not ev.echo and (ev.keycode == KEY_M or ev.keycode == KEY_ESCAPE)) or ev.is_action_pressed("ui_cancel") \
+				or (ev is InputEventJoypadButton and ev.pressed and ev.button_index in [JOY_BUTTON_START, JOY_BUTTON_BACK]):
+			state = "play"
+			snd("page")
+		elif ev.is_action_pressed("interact") or (ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton)) \
+				or (ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT):
+			map_zoom = 1 - map_zoom
+			map_pan = Vector2.ZERO
+			snd("page")
+		return
 	if state == "play":
 		if (ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_ESCAPE) or (ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_START):
 			state = "pause"
 			pause_sel = 0
 			snd("page")
+		elif ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_M and not inv_open:
+			open_map()
+		elif ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_B and not inv_open:
+			open_bestiary()
 		return
 	if state == "pause":
 		if ev.is_action_pressed("ui_down"):
-			pause_sel = (pause_sel + 1) % 5
+			pause_sel = (pause_sel + 1) % 7
 		elif ev.is_action_pressed("ui_up"):
-			pause_sel = (pause_sel + 4) % 5
+			pause_sel = (pause_sel + 6) % 7
 		elif ev.is_action_pressed("ui_cancel") or (ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_START):
 			state = "play"
 		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
@@ -7789,6 +8086,8 @@ var run_test_base := Vector2.ZERO
 
 
 func _process(_dt: float) -> void:
+	if state == "map":   # la mappa si scorre con il movimento (stick, croce, WASD)
+		map_pan += Input.get_vector("move_left", "move_right", "move_up", "move_down") * _dt * (260.0 if map_zoom == 1 else 120.0)
 	if OS.get_cmdline_user_args().has("--gateshot"):
 		tgs += 1
 		if OS.get_cmdline_user_args().has("--stairs"):
@@ -8118,6 +8417,150 @@ func _process(_dt: float) -> void:
 			# salvataggio: borsa, cintura e reliquie sopravvivono al JSON
 			var js: Variant = JSON.parse_string(JSON.stringify({"bag": player.bag, "belt": player.belt, "relic_eq": player.relic_eq}))
 			print("INV json: borsa=", (js["bag"] as Array).size(), " cintura=", js["belt"], " reliquie=", js["relic_eq"])
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--foestest") or OS.get_cmdline_user_args().has("--foesshot"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			player.max_hp = 99999.0
+			player.hp = 99999.0
+			var kinds := ["goblin", "goblin_archer", "goblin_shaman", "kobold", "orc", "troll", "ogre", "harpy", "lizardman", "orc_warlord", "goblin_boss", "troll_frost"]
+			for i in kinds.size():
+				var e := spawn_enemy(kinds[i], player.position + Vector2.from_angle(TAU * i / kinds.size()) * 70.0, 1.0, false, Color.WHITE)
+				e.awake = true
+				e.set_process(true)
+			print("FOES comparsi=", kinds.size())
+		if tgs == 60:
+			for e in enemies:
+				if e.kind == "troll":
+					e.hurt(60.0, Vector2.UP, 0.0)
+					print("FOES troll colpito hp=", int(e.hp), "/", int(e.max_hp))
+		if tgs == 700:
+			for e in enemies:
+				if e.kind == "troll":
+					print("FOES troll dopo ", snappedf(e.t - e.last_hit_t, 0.1), "s senza colpi hp=", int(e.hp))
+			print("FOES vivi=", enemies.size(), " danno al giocatore=", int(99999 - player.hp))
+			if not OS.get_cmdline_user_args().has("--foesshot"):
+				get_tree().quit()
+	if OS.get_cmdline_user_args().has("--beastshot"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			for k in ["rat", "goblin", "goblin_archer", "kobold", "skeleton", "zombie", "ghoul", "wolf", "troll", "orc", "harpy", "knight_fallen", "boss_jailer", "boss_campanaro"]:
+				beast_note(k)
+				for i in randi_range(1, 30):
+					beast_note(k, true)
+			for i in Bestiary.ENTRIES.size():
+				if Bestiary.ENTRIES[i][0] == "troll":
+					beast_sel = i
+			open_bestiary()
+			print("BEAST schede=", persist["bestiary"].size(), " stato=", state, " voci=", Bestiary.ENTRIES.size())
+			for en in Bestiary.ENTRIES:
+				if Bestiary.stats(en[0]).is_empty():
+					print("BEAST senza dati: ", en[0])
+	if OS.get_cmdline_user_args().has("--aoeshot"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			player.max_hp = 99999.0
+			player.hp = 99999.0
+			spawn_hazard(player.position + Vector2(-80, 0), 32.0, 1.2, 0.15, 1.0, 0.0, Color(0.9, 0.3, 0.2))
+			spawn_hazard(player.position + Vector2(80, 0), 28.0, 0.3, 4.0, 0.1, 0.5, Color(0.4, 0.9, 0.3))
+			spawn_hazard(player.position + Vector2(0, -70), 44.0, 0.6, 0.15, 1.0, 0.0, Color(0.5, 0.9, 1.0))
+		if tgs == 20 or tgs == 21:
+			player.mana = 999.0
+			player.spells = ["nova", "gelo"]
+			player.spell_cd = [0.0, 0.0]
+			player.cast(0)
+			print("AOE mana=", int(player.mana), " cd=", player.spell_cd, " shock=", fx.get_children().filter(func(x): return x is Hazard.Shock).size(), " drink=", player.drink_t, " dash=", player.dash_t, " heavy=", player.heavy_t)
+	if OS.get_cmdline_user_args().has("--maptest"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			# esplora un po' di mondo: attorno al villaggio, verso il cimitero e la cattedrale
+			for pt in [SEEDS[0], SEEDS[1], ENTR["d7"], ENTR["d1"]]:
+				for dy in range(-30, 31):
+					for dx in range(-30, 31):
+						var c: Vector2i = pt + Vector2i(dx, dy)
+						if inb(c) and dx * dx + dy * dy < 900 and seen[idx(c)] == 0:
+							seen[idx(c)] = 1
+							mm_img.set_pixelv(c, mm_color(c))
+			mm_tex.update(mm_img)
+			var n0 := 0
+			for v in seen:
+				n0 += int(v != 0)
+			# salvataggio e ricarica dell'esplorazione
+			var b64 := Marshalls.raw_to_base64(seen.compress(FileAccess.COMPRESSION_DEFLATE))
+			load_seen({"seen": b64})
+			var n1 := 0
+			for v in seen_load:
+				n1 += int(v != 0)
+			seen_load = PackedByteArray()
+			print("MAP esplorate=", n0, " dopo ricarica=", n1, " byte salvati=", b64.length(), " bersagli=", obj_targets().map(func(x): return str(x["n"])))
+			open_map()
+			print("MAP stato=", state)
+		if tgs == 20:
+			map_zoom = 1
+		if tgs == 21:
+			print("MAP zoom=", map_zoom)
+		if tgs == 40 and not OS.get_cmdline_user_args().has("--shot"):
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--cathshot"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			var g: Vector2i = ENTR["d7"]
+			ensure_area(cell_pos(g), 3)
+			player.position = cell_pos(g + Vector2i(26, -14))
+			for arg in OS.get_cmdline_user_args():
+				if arg.begins_with("--seed="):
+					var sd: Vector2i = SEEDS[int(arg.substr(7))]
+					ensure_area(cell_pos(sd), 3)
+					player.position = cell_pos(sd + Vector2i(8, 9))
+			if OS.get_cmdline_user_args().has("--vil"):
+				ensure_area(cell_pos(SEEDS[0]), 3)
+				player.position = cell_pos(SEEDS[0] + Vector2i(5, 7))
+			player.cam.reset_smoothing()
+			player.zmode = 0
+			print("CATH ingresso=", g, " cattedrale=", world_has_cathedral, " villaggio=", SEEDS[0])
+	if OS.get_cmdline_user_args().has("--belltest") or OS.get_cmdline_user_args().has("--bellshot"):
+		tgs += 1
+		var shot := OS.get_cmdline_user_args().has("--bellshot")
+		if tgs == 3:
+			state = "play"
+			_do_change("d7")
+			player.max_hp = 99999.0
+			player.hp = 99999.0
+			print("BELL cattedrale nel mondo=", world_has_cathedral)
+			print("BELL area=", area, " colosso=", colossus != null, " lucchetti=", camp_locks.size(), " stanze=", rooms.size())
+		if shot and colossus != null and tgs % 15 == 0:
+			print("BELL t=", tgs, " stato=", colossus.state, " vita giocatore=", int(player.hp), " fase=", colossus.phase)
+		if shot and tgs == 200 and colossus != null:
+			for L in colossus.locks.slice(0, 2):
+				L["part"].hurt(L["part"].max_hp + 1.0, Vector2.UP, 0.0)
+		if tgs == 6 and colossus != null:
+			player.position = colossus.position + Vector2(-20, 70)
+		if tgs == 30 and colossus != null:
+			print("BELL stato=", colossus.state, " boss=", boss != null and boss == colossus.head, " hp=", int(colossus.head.hp))
+			var hp0 := colossus.head.hp
+			colossus.head.hurt(100.0, Vector2.UP, 0.0)
+			print("BELL colpo alla testa chiusa: ", int(hp0 - colossus.head.hp), " (deve essere poco)")
+		if tgs >= 40 and tgs < 400 and not shot and colossus != null and tgs % 40 == 0:
+			for L in colossus.locks:
+				if L["alive"]:
+					L["part"].hurt(L["part"].max_hp + 1.0, Vector2.UP, 0.0)
+					print("BELL lucchetto rotto, fase=", colossus.phase, " stato=", colossus.state)
+					break
+		if tgs == 420 and not shot and colossus != null:
+			var c: Dictionary = colossus.chains[0]
+			print("BELL catena0 punti=", (c["pts"] as PackedVector2Array).size(), " libera=", c["free_end"], " catene totali=", colossus.chains.size())
+			colossus.head_open = 2.0
+			var hp1 := colossus.head.hp
+			colossus.head.hurt(100.0, Vector2.UP, 0.0)
+			print("BELL colpo al volto scoperto: ", int(hp1 - colossus.head.hp))
+			colossus.head.hurt(999999.0, Vector2.UP, 0.0)
+		if tgs == 470 and not shot:
+			print("BELL sconfitto=", persist["bosses"].has("boss_campanaro"), " colosso valido=", is_instance_valid(colossus) and not colossus.dead)
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--invshot"):
 		tgs += 1
@@ -9282,6 +9725,12 @@ func _process(_dt: float) -> void:
 	if player != null:
 		shake_v *= pow(0.02, real)
 		# la telecamera si allinea ai pixel interi: terreno e oggetti restano fermi l'uno rispetto all'altro
+		# contro il Campanaro la visuale si sposta verso di lui, cosi' il corpo resta in quadro
+		var cam_t := Vector2.ZERO
+		if colossus != null and is_instance_valid(colossus) and not colossus.dead and colossus.state != "sleep":
+			cam_t = ((colossus.position + Vector2(0, -60)) - player.position) * 0.5
+			cam_t = cam_t.limit_length(110.0)
+		player.cam.position = player.cam.position.lerp(cam_t, 1.0 - pow(0.08, real))
 		var cam_base: Vector2 = player.cam.get_screen_center_position() - player.cam.offset
 		var cam_snap: Vector2 = cam_base.round() - cam_base
 		var cam_shk := (Vector2(randf_range(-1, 1), randf_range(-1, 1)) * shake_v).round() if shake_v > 0.4 else Vector2.ZERO

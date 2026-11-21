@@ -20,6 +20,16 @@ const DEFS := {
 	"wolf": ["wolf", 30.0, 66.0, "flank", 5.0, 14, 16],
 	"ooze_small": ["ooze", 14.0, 46.0, "chase", 4.0, 4, 8],
 	"crow": ["crow", 10.0, 72.0, "bat", 4.0, 5, 8],
+	# nemici fantasy classici
+	"goblin": ["goblin", 22.0, 56.0, "skirmish", 5.0, 9, 12],
+	"goblin_archer": ["goblin_archer", 20.0, 38.0, "archer", 5.0, 11, 11],
+	"goblin_shaman": ["goblin_shaman", 24.0, 34.0, "caster", 5.0, 16, 14],
+	"kobold": ["kobold", 12.0, 66.0, "chase", 4.0, 4, 8],
+	"orc": ["orc", 62.0, 40.0, "duelist", 6.0, 24, 24],
+	"troll": ["troll", 150.0, 26.0, "tank", 8.0, 60, 32],
+	"ogre": ["ogre", 185.0, 23.0, "tank", 9.0, 70, 40],
+	"harpy": ["harpy", 34.0, 60.0, "diver", 5.0, 18, 16],
+	"lizardman": ["lizardman", 44.0, 52.0, "flank", 5.0, 18, 18],
 	"vampire": ["vampire", 650.0, 30.0, "boss", 11.0, 2000, 34, 1.5, "IL SIGNORE DELLA CRIPTA"],
 	"boss_jailer": ["knight_fallen", 260.0, 36.0, "boss", 9.0, 700, 17, 1.8, "IL CARCERIERE"],
 	"boss_wraith": ["wraith", 380.0, 34.0, "boss", 10.0, 900, 26, 2.2, "IL FALCIATORE"],
@@ -28,6 +38,9 @@ const DEFS := {
 	"boss_ooze": ["ooze", 520.0, 26.0, "boss", 12.0, 1500, 26, 2.6, "MADRE DELLE MELME"],
 	"boss_yeti": ["ghoul", 600.0, 34.0, "boss", 11.0, 1800, 30, 2.7, "IL GIGANTE DI GHIACCIO"],
 	"boss_forge": ["skeleton", 640.0, 32.0, "boss", 12.0, 1900, 36, 2.8, "COLOSSO DI BRACE"],
+	# il Campanaro: la testa porta la vita del boss, il resto lo gestisce Colossus
+	"boss_campanaro": ["camp_rest", 900.0, 0.0, "part", 14.0, 2600, 30, 1.0, "IL CAMPANARO"],
+	"camp_part": ["camp_rest", 999.0, 0.0, "part", 10.0, 0, 0],
 }
 # nemici speciali: attacchi unici, nome, barra della vita
 const CHAMPS := {
@@ -57,6 +70,9 @@ const VARIANTS := {
 	"zombie_bloated": {"b": "zombie", "hp": 1.2, "spd": 1.0, "dmg": 1.0, "sc": 1.2, "tint": Color(0.8, 1.3, 0.6), "trait": "esplosivo"},
 	"spider_brood": {"b": "spider", "hp": 1.3, "spd": 0.9, "dmg": 1.0, "sc": 1.25, "tint": Color(0.9, 0.7, 1.3), "trait": "prolifico"},
 	"gargoyle_obs": {"b": "gargoyle", "hp": 1.7, "spd": 0.9, "dmg": 1.2, "sc": 1.15, "tint": Color(0.6, 0.6, 0.75), "trait": ""},
+	"orc_warlord": {"b": "orc", "hp": 2.1, "spd": 0.9, "dmg": 1.45, "sc": 1.25, "tint": Color(1.25, 0.85, 0.8), "trait": ""},
+	"goblin_boss": {"b": "goblin", "hp": 2.4, "spd": 1.0, "dmg": 1.5, "sc": 1.3, "tint": Color(1.2, 1.1, 0.7), "trait": ""},
+	"troll_frost": {"b": "troll", "hp": 1.2, "spd": 1.0, "dmg": 1.1, "sc": 1.0, "tint": Color(0.75, 0.95, 1.4), "trait": ""},
 	"imp_cinder": {"b": "imp", "hp": 1.2, "spd": 1.2, "dmg": 1.1, "sc": 1.0, "tint": Color(1.6, 0.8, 0.4), "trait": "esplosivo"},
 }
 const TRAITS := {
@@ -116,6 +132,8 @@ var blink_cd := 3.0
 var dive_pos := Vector2.ZERO
 var phase_n := 0
 var pat_seen := {}
+var col = null   # Colossus a cui appartiene questa parte (null per i nemici normali)
+var last_hit_t := -99.0   # il troll si rigenera se non lo colpisci per un po'
 
 
 func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE) -> void:
@@ -180,7 +198,7 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 		spr.scale = Vector2(0.62, 0.62)
 	orb = 1.0 if randf() < 0.5 else -1.0
 	spr.offset = Vector2(0, -8)
-	if k == "skeleton" or k == "skel_archer" or k == "boss_forge":
+	if k in ["skeleton", "skel_archer", "boss_forge", "orc", "troll", "ogre"]:
 		spr.offset.y -= (spr.texture.get_height() - 20) * 0.5
 	add_child(spr)
 	spr.modulate = tint
@@ -228,6 +246,13 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 func _process(dt: float) -> void:
 	if main.state != "play":
 		return
+	if col != null:
+		flash = maxf(0.0, flash - dt)
+		return
+	if kind == "troll" and hp < max_hp and t - last_hit_t > 3.0 and not dying:
+		hp = minf(max_hp, hp + max_hp * 0.04 * dt)        # rigenerazione: va inseguito e abbattuto in fretta
+		if int(t * 4.0) % 8 == 0:
+			main.burst(position + Vector2(0, -10), Color(0.4, 0.9, 0.4), 1, 15.0, 0.4)
 	t += dt
 	flash = max(0.0, flash - dt)
 	if slow_t > 0.0:
@@ -257,6 +282,7 @@ func _process(dt: float) -> void:
 	if not awake:
 		if d < 110.0:
 			awake = true
+			main.beast_note(kind)
 		return
 	if d > 280.0 and not is_boss:
 		awake = false
@@ -750,6 +776,8 @@ func _boss_signature(u: Vector2) -> void:
 
 
 func _draw() -> void:
+	if col != null:
+		return
 	draw_set_transform(Vector2(0, 1), 0.0, Vector2(1, 0.4))
 	var sh := radius + (8.0 if is_boss else 2.0) * (1.0 if not elite else 1.2) + (4.0 if champ else 0.0)
 	draw_circle(Vector2.ZERO, sh, Color(0, 0, 0, 0.5))
@@ -769,6 +797,11 @@ func _draw() -> void:
 
 
 func hurt(d: float, dir: Vector2, force: float, heavy := false) -> void:
+	if col != null:
+		d = col.part_hurt(self, d)
+		if d <= 0.0:
+			return
+	last_hit_t = t
 	var crit: bool = randf() < main.player.crit_now()
 	if crit:
 		d *= 2.0
