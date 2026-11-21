@@ -181,6 +181,10 @@ func chat_line() -> String:
 		ln = NIGHT_LINES[randi() % NIGHT_LINES.size()]
 	else:
 		# alterna le battute del proprio mestiere e le voci della zona
-		ln = own[(said / 2) % own.size()] if said % 2 == 0 else pool[(said / 2) % pool.size()]
+		var ep: Array = Chrono.era_lines()
+		if not ep.is_empty() and said % 3 == 2:
+			ln = str(ep[randi() % ep.size()])   # i paesani commentano la nuova era
+		else:
+			ln = own[(said / 2) % own.size()] if said % 2 == 0 else pool[(said / 2) % pool.size()]
 		said += 1
 	return ln

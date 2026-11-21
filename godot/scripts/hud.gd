@@ -185,6 +185,13 @@ func _draw() -> void:
 	_bar(Vector2(5, 12), sw, 3, p.st / p.max_st, Color(0.3, 0.75, 0.38))
 	_bar(Vector2(5, 17), msw, 3, p.mana / p.max_mana, Color(0.3, 0.5, 0.98))
 	_bar(Vector2(5, 22), 46, 3, p.focus / 100.0, Color(0.72, 0.42, 0.98))
+	var cr_full: bool = p.chrono >= Chrono.COST
+	_bar(Vector2(54, 22), 40, 3, p.chrono / Chrono.MAX_E, Color(0.4, 1.0, 1.0) if cr_full else Color(0.25, 0.55, 0.7))
+	if not p.veh.is_empty():
+		_bar(Vector2(54, 27), 40, 3, float(p.veh["hp"]) / float(p.veh["max"]), Color(1.0, 0.6, 0.25))
+		_txt("%s %ds" % [str(Chrono.JACKPOT[p.veh["id"]]["n"]), int(ceil(float(p.veh["t"])))], Vector2(98, 30), Color(1.0, 0.8, 0.5))
+	elif cr_full and main.state == "play":
+		_txt("N: EVOCA", Vector2(98, 25), Color(0.5, 1.0, 1.0))
 	draw_texture(Game.tex("flask"), Vector2(4, 26), Color(1, 1, 1, 0.95))
 	_txt("x%d" % p.flasks, Vector2(16, 34), Color(1, 0.82, 0.4))
 	_txt("LV %d" % p.lv, Vector2(36, 34), Color(0.85, 0.82, 0.95))
@@ -196,6 +203,8 @@ func _draw() -> void:
 		_txt("%d:%02d" % [tm / 60, tm % 60], Vector2(0, 10), Color(0.95, 0.85, 0.6), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 	if main.cycle > 0:
 		_txt("CICLO %d" % (main.cycle + 1), Vector2(5, 44), Color(1, 0.62, 0.3))
+	if Chrono.era() > 0:
+		_txt("ERA: " + Chrono.era_name(), Vector2(5, 52 if main.cycle > 0 else 44), Color(0.95, 0.8, 0.5))
 	# obiettivo compatto: pieno per qualche secondo quando cambia, poi attenuato; una sola missione
 	var obj: String = main.objective()
 	var obj_key := obj.substr(0, mini(obj.find("("), 28) if obj.find("(") > 0 else 28)
@@ -740,10 +749,10 @@ func _craft(p: Player) -> void:
 	var ty := r.position.y + 66.0
 	for i in Forge.TABS.size():
 		var on: bool = i == main.craft_tab
-		var tx := r.position.x + 14 + i * 78.0
+		var tx := r.position.x + 14 + i * 62.0
 		if on:
-			draw_rect(Rect2(tx - 2, ty - 10, 76, 13), Color(0.35, 0.22, 0.08, 0.9 if main.craft_row == 0 else 0.55))
-		_txt(Forge.TABS[i], Vector2(tx, ty), GOLD_L if on else Color(0.6, 0.58, 0.7), 8, HORIZONTAL_ALIGNMENT_CENTER, 72)
+			draw_rect(Rect2(tx - 2, ty - 10, 60, 13), Color(0.35, 0.22, 0.08, 0.9 if main.craft_row == 0 else 0.55))
+		_txt(Forge.TABS[i], Vector2(tx, ty), GOLD_L if on else Color(0.6, 0.58, 0.7), 8, HORIZONTAL_ALIGNMENT_CENTER, 56)
 	draw_rect(Rect2(x, ty + 5, r.size.x - 28, 1), GOLD_D)
 	# scelte (sinistra)
 	var sl: Array = Forge.slots(main.craft_tab)

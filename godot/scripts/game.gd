@@ -144,7 +144,7 @@ static func setup_input() -> void:
 	var m := {
 		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT],
 		"move_up": [KEY_W, KEY_UP], "move_down": [KEY_S, KEY_DOWN],
-		"attack": [KEY_SPACE, KEY_J], "dash": [KEY_SHIFT, KEY_K], "restart": [KEY_R, KEY_ENTER], "heavy": [KEY_L], "flask": [KEY_Q, KEY_F], "interact": [KEY_E], "zoom": [KEY_V], "lock": [KEY_Y], "parry": [KEY_C], "swap": [KEY_TAB], "spell1": [KEY_1, KEY_R], "spell2": [KEY_2, KEY_G], "item_next": [KEY_Z], "item_use": [KEY_X],
+		"attack": [KEY_SPACE, KEY_J], "dash": [KEY_SHIFT, KEY_K], "restart": [KEY_R, KEY_ENTER], "heavy": [KEY_L], "flask": [KEY_Q, KEY_F], "interact": [KEY_E], "zoom": [KEY_V], "lock": [KEY_Y], "parry": [KEY_C], "swap": [KEY_TAB], "spell1": [KEY_1, KEY_R], "spell2": [KEY_2, KEY_G], "item_next": [KEY_Z], "item_use": [KEY_X], "summon": [KEY_N],
 		"aim_left": [], "aim_right": [], "aim_up": [], "aim_down": [],
 	}
 	for a in m:
@@ -181,6 +181,7 @@ static func setup_input() -> void:
 	_jbtn("zoom", JOY_BUTTON_DPAD_UP)
 	_jbtn("lock", JOY_BUTTON_RIGHT_STICK)   # R3: aggancia il nemico (mira manuale), premuto di nuovo passa al successivo
 	_jbtn("parry", JOY_BUTTON_LEFT_STICK)
+	_jbtn("summon", JOY_BUTTON_BACK)   # SELECT / Share: bolla spazio-temporale
 	_jaxis("item_use", JOY_AXIS_TRIGGER_LEFT, 1.0)
 	_jbtn("ui_accept", JOY_BUTTON_A)
 	_jbtn("ui_cancel", JOY_BUTTON_B)

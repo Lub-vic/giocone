@@ -436,7 +436,8 @@ func save_game() -> void:
 	var d := {"v": 3, "seed": world_seed, "pop": pop_salt, "cycle": cycle, "guardians": guardians, "pages": pages_found, "elder": elder_i,
 		"last_fire": {"area": last_fire["area"], "cell": [lc.x, lc.y]}, "persist": persist,
 		"player": {"lv": player.lv, "souls": player.souls, "rk": player.rk, "attr": player.attr, "kills": player.kills},
-		"cls": player.cls, "wslots": player.wslots, "wcur": player.wcur, "spells": player.spells, "known": player.known, "relics": player.relics, "mats": player.mats, "items": player.items, "armor": player.armor, "brews": player.brews, "bag": player.bag, "belt": player.belt, "relic_eq": player.relic_eq}
+		"cls": player.cls, "wslots": player.wslots, "wcur": player.wcur, "spells": player.spells, "known": player.known, "relics": player.relics, "mats": player.mats, "items": player.items, "armor": player.armor, "brews": player.brews, "bag": player.bag, "belt": player.belt, "relic_eq": player.relic_eq,
+		"chrono": {"e": player.chrono, "pity": player.pity, "tech": Chrono.tech, "junk": Chrono.owned}}
 	var ws: PackedByteArray = world_seen()
 	if ws.size() == WORLD_W * WORLD_H:
 		d["seen"] = Marshalls.raw_to_base64(ws.compress(FileAccess.COMPRESSION_DEFLATE))
@@ -488,6 +489,10 @@ func start_run(cls_id: String) -> void:
 	player.armor = {}
 	player.brews = {}
 	player.relics = {}
+	Chrono.reset()
+	player.chrono = 60.0
+	player.pity = 0
+	player.veh = {}
 	player.lv = 1
 	player.souls = 0
 	player.kills = 0
@@ -820,6 +825,18 @@ func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
 				elif str(be["k"]) == "a":
 					player.bag.append({"k": "a", "a": Rpg.clean_piece(be["a"])})
 		player.item_sel = 0
+		Chrono.reset()
+		player.chrono = 60.0
+		player.pity = 0
+		player.veh = {}
+		if ld.has("chrono"):
+			var cd: Dictionary = ld["chrono"]
+			player.chrono = float(cd.get("e", 60.0))
+			player.pity = int(cd.get("pity", 0))
+			Chrono.tech = float(cd.get("tech", 0.0))
+			for jk in cd.get("junk", {}):
+				if Chrono.JUNK.has(str(jk)):
+					Chrono.owned[str(jk)] = int(cd["junk"][jk])
 		player.relics = {}
 		if ld.has("relics"):
 			for k in ld["relics"]:
@@ -3633,7 +3650,7 @@ func use_brew(fx: Dictionary) -> bool:
 # ------------------------------------------------------------------ forgia (artigianato componibile)
 var craft_tab := 0
 var craft_row := 0
-var craft_vals: Array = [[0, 0, 0, 0, 1], [0, 0], [1, 0, 0, 1], [0, 0, 0, 1]]
+var craft_vals: Array = [[0, 0, 0, 0, 1], [0, 0], [1, 0, 0, 1], [0, 0, 0, 1], [0]]
 
 
 func craft_ids() -> Array:
@@ -3713,18 +3730,24 @@ func craft_make() -> void:
 			else:
 				say("BORSA PIENA: LIBERA SPAZIO CON I")
 				return
+		4:
+			var jid := str(it["junk"])
+			var given := false
+			match str(it["t"]):
+				"w":
+					given = _give_weapon(it)
+				"a":
+					given = _give_armor(it)
+				_:
+					given = _give_brew(it)
+			if not given:
+				return
+			Chrono.owned[jid] = int(Chrono.owned.get(jid, 0)) - 1
+			if int(Chrono.owned[jid]) <= 0:
+				Chrono.owned.erase(jid)
 		_:
-			var id := str(it["id"])
-			if int(player.items.get(id, 0)) >= 9:
-				say("SCORTA PIENA (MAX 9)")
+			if not _give_brew(it):
 				return
-			if int(player.items.get(id, 0)) == 0 and player.bag_free() <= 0:
-				say("BORSA PIENA: LIBERA SPAZIO CON I")
-				return
-			player.brews[id] = {"n": it["n"], "fx": it["fx"]}
-			player.items[id] = int(player.items.get(id, 0)) + 1
-			belt_auto(id)
-			say("%s IN BORSA%s" % [str(it["n"]), ": Z CAMBIA, X USA" if player.belt.has(id) else " (CINTURA PIENA: AGGIUNGILA CON I)"])
 	for k in cost:
 		player.mats[k] = int(player.mats[k]) - int(cost[k])
 		if int(player.mats[k]) <= 0:
@@ -3733,6 +3756,73 @@ func craft_make() -> void:
 	snd("buy")
 	burst(player.position, Color(1.0, 0.85, 0.5), 14, 40.0, 0.5)
 	save_game()
+
+
+## consegna al giocatore gli oggetti ottenuti dagli anacronismi (false se la borsa e' piena)
+func _give_weapon(w: Dictionary) -> bool:
+	w.erase("t")
+	w.erase("junk")
+	if player.wslots[1] == null:
+		player.wslots[1] = w
+		player.wcur = 1
+		say("TRASFORMATO E IMPUGNATO: %s" % str(w["nm"]).to_upper())
+	elif player.bag_free() > 0:
+		player.bag.append({"k": "w", "w": w})
+		say("TRASFORMATO, IN BORSA: %s   (I PER EQUIPAGGIARE)" % str(w["nm"]).to_upper())
+	else:
+		say("BORSA PIENA: LIBERA SPAZIO CON I")
+		return false
+	return true
+
+
+func _give_armor(a: Dictionary) -> bool:
+	a.erase("t")
+	a.erase("junk")
+	var sl := str(a["slot"])
+	if not player.armor.has(sl):
+		player.armor[sl] = a
+		say("INDOSSI: %s" % str(a["n"]))
+	elif player.bag_free() > 0:
+		player.bag.append({"k": "a", "a": a})
+		say("IN BORSA: %s   (I PER INDOSSARE)" % str(a["n"]))
+	else:
+		say("BORSA PIENA: LIBERA SPAZIO CON I")
+		return false
+	return true
+
+
+func _give_brew(it: Dictionary) -> bool:
+	var id := str(it["id"])
+	if int(player.items.get(id, 0)) >= 9:
+		say("SCORTA PIENA (MAX 9)")
+		return false
+	if int(player.items.get(id, 0)) == 0 and player.bag_free() <= 0:
+		say("BORSA PIENA: LIBERA SPAZIO CON I")
+		return false
+	player.brews[id] = {"n": it["n"], "fx": it["fx"]}
+	player.items[id] = int(player.items.get(id, 0)) + 1
+	belt_auto(id)
+	say("%s IN BORSA%s" % [str(it["n"]), ": Z CAMBIA, X USA" if player.belt.has(id) else " (CINTURA PIENA: AGGIUNGILA CON I)"])
+	return true
+
+
+## bolla spazio-temporale: un tasto, un oggetto a caso dal passato o dal futuro
+func summon() -> void:
+	if state != "play" or player == null:
+		return
+	if player.chrono < Chrono.COST:
+		say("CRONOTONE: %d%%" % int(player.chrono))
+		snd("hurt")
+		return
+	player.chrono -= Chrono.COST
+	var r := Chrono.roll(player.lv, player.pity)
+	player.pity = player.pity + 1 if str(r["cls"]) == "junk" else 0
+	Chrono.apply(self, r)
+
+
+## ricarica del Cronotone uccidendo
+func chrono_gain(n: float) -> void:
+	player.chrono = minf(Chrono.MAX_E, player.chrono + n)
 
 
 # ------------------------------------------------------------------ borsa ed equipaggiamento (il mondo non si ferma)
@@ -6090,6 +6180,7 @@ func enemy_died(e: Enemy) -> void:
 			sp.awake = true
 			sp.set_process(true)
 	player.kills += 1
+	chrono_gain(60.0 if e.is_boss else (18.0 if e.champ else 8.0))
 	snd("kill")
 	burst(e.position, Color(0.9, 0.85, 0.75), 18 if not e.is_boss else 70, 70.0, 0.6)
 	burst(e.position, Color(0.7, 0.1, 0.2), 12, 50.0, 0.7)
@@ -6970,8 +7061,8 @@ func _handle_menu_click(pos: Vector2) -> bool:
 		return true
 	if state == "craft":
 		# schede in alto; righe delle scelte a sinistra (meta' sinistra = indietro, destra = avanti); CREA sotto
-		if pos.y >= 70.0 and pos.y < 84.0 and pos.x >= 84.0 and pos.x < 396.0:
-			craft_tab = clampi(floori((pos.x - 84.0) / 78.0), 0, Forge.TABS.size() - 1)
+		if pos.y >= 70.0 and pos.y < 84.0 and pos.x >= 84.0 and pos.x < 84.0 + 62.0 * Forge.TABS.size():
+			craft_tab = clampi(floori((pos.x - 84.0) / 62.0), 0, Forge.TABS.size() - 1)
 			craft_row = 0
 			return true
 		var nsl: int = Forge.slots(craft_tab).size()
@@ -9677,6 +9768,8 @@ func _process(_dt: float) -> void:
 			dk *= 0.88
 		var nt := Color(0.8, 0.87, 1.2).lerp(Color.WHITE, dl)
 		tgt = Color(minf(tgt.r * dk * nt.r, 1.0), minf(tgt.g * dk * nt.g, 1.0), minf(tgt.b * dk * nt.b, 1.0))
+	if area == "world":
+		tgt = tgt * Chrono.world_tint()   # l'era cambia il colore del mondo
 	cm.color = cm.color.lerp(tgt, 1.0 - exp(-real * 1.6))
 	if wr_node != null and is_instance_valid(wr_node):
 		wr_node.set_boost(cm.color)

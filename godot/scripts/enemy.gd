@@ -238,6 +238,7 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 				spr.scale *= 1.12
 		spr.modulate = spr.modulate * (TRAITS[trait_] as Color)
 		xp = int(xp * 1.4)
+	Chrono.tune_enemy(self, is_boss or champ or elite)   # l'era del mondo rende i nemici piu' tecnologici
 	fer = m.ferocity(is_boss or champ)
 	speed *= 0.55 + 0.45 * fer       # piu' lenti...
 	dmg *= 0.8 + 0.2 * fer           # ...colpiscono un po' meno...

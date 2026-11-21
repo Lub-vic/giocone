@@ -16,6 +16,7 @@ var idx := 0
 var count := 1
 var t := randf() * 5.0
 var spr: Sprite2D
+var ttl := -1.0     # > 0: alleato temporaneo (es. drone evocato)
 
 
 func setup(m) -> void:
@@ -42,6 +43,13 @@ func _process(dt: float) -> void:
 		return
 	t += dt
 	cd -= dt
+	if ttl > 0.0:
+		ttl -= dt
+		if ttl <= 0.0:
+			main.allies.erase(self)
+			main.burst(position, Color(0.6, 0.85, 1.0), 16, 50.0, 0.5)
+			queue_free()
+			return
 	flash = maxf(0.0, flash - dt)
 	spr.self_modulate = Color(3, 3, 3) if flash > 0.0 else Color.WHITE
 	var pl: Player = main.player

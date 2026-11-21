@@ -76,6 +76,9 @@ const RELIC_MAX := 3
 var brews := {}          # ricette delle pozioni create: id -> {n, fx}
 var items := {}         # consumabili creati, da usare a piacere: id -> quantita'
 var item_sel := 0
+var chrono := 60.0       # Cronotone: carica per evocare con la bolla spazio-temporale
+var pity := 0            # oggetti inutili evocati di fila
+var veh := {}            # mezzo evocato in uso: id, hp, max, t (tempo residuo), cd, crush
 var parry_cd := 0.0
 var rw_t := {}
 var blade_ang := 0.0
@@ -311,6 +314,118 @@ func idle() -> bool:
 	return atk_t <= 0.0 and atk_cd <= 0.0 and heavy_t <= 0.0 and dash_t <= 0.0 and drink_t <= 0.0
 
 
+# ------------------------------------------------------------------ mezzi evocati (carro, carrarmato, ufo...)
+## sali a bordo: il mezzo ha vita e tempo propri, i danni colpiscono lui finche' non esplode
+func board(id: String) -> void:
+	var d: Dictionary = Chrono.JACKPOT[id]
+	if not veh.is_empty():
+		veh_exit(false)
+	var mh := float(d["hp"]) + float(d["hpl"]) * lv
+	veh = {"id": id, "hp": mh, "max": mh, "t": float(d["t"]), "cd": 0.0, "crush": 0.0}
+	inv = maxf(inv, 0.6)
+	drink_t = 0.0
+	heavy_t = 0.0
+	main.burst(position, Color(0.6, 0.9, 1.0), 30, 80.0, 0.6)
+
+
+func veh_spd() -> float:
+	if veh.is_empty():
+		return 1.0
+	return float(Chrono.JACKPOT[veh["id"]]["spd"])
+
+
+func veh_exit(boom: bool) -> void:
+	if veh.is_empty():
+		return
+	veh = {}
+	inv = maxf(inv, 0.8)
+	main.burst(position, Color(1.0, 0.6, 0.2), 40, 90.0, 0.6)
+	if boom:
+		for e in main.enemies.duplicate():
+			if e.position.distance_to(position) < 50.0 + e.radius:
+				e.hurt(bd() * 2.5, (e.position - position).normalized(), 160.0, true)
+		shock(position, 50, Color(1.0, 0.6, 0.2))
+		main.shake(6.0)
+		main.snd("slam")
+		main.say("IL MEZZO ESPLODE!")
+	else:
+		main.say("IL MEZZO SI DISSOLVE NELLA BOLLA")
+
+
+## il mezzo incassa il danno al posto del personaggio; true se lo ha assorbito
+func veh_absorb(d: float) -> bool:
+	if veh.is_empty():
+		return false
+	veh["hp"] = float(veh["hp"]) - d
+	flash = 0.1
+	main.popup(position + Vector2(0, -18), "-%d" % int(round(d)), Color(1.0, 0.7, 0.3))
+	if float(veh["hp"]) <= 0.0:
+		veh_exit(true)
+	return true
+
+
+func veh_tick(dt: float) -> void:
+	veh["t"] = float(veh["t"]) - dt
+	if float(veh["t"]) <= 0.0:
+		veh_exit(false)
+		return
+	var d: Dictionary = Chrono.JACKPOT[veh["id"]]
+	veh["cd"] = float(veh["cd"]) - dt
+	# speronamento: il peso del mezzo travolge i nemici a contatto
+	if float(d.get("crush", 0.0)) > 0.0:
+		veh["crush"] = float(veh["crush"]) - dt
+		if float(veh["crush"]) <= 0.0:
+			veh["crush"] = 0.4
+			for e in main.enemies.duplicate():
+				if e.position.distance_to(position) < 13.0 + e.radius:
+					e.hurt(dmg() * float(d["crush"]), (e.position - position).normalized(), 170.0, false)
+	if act_held("attack") and float(veh["cd"]) <= 0.0 and not main.inv_open:
+		var near: Enemy = main.nearest_enemy(position, 170.0)
+		if near != null and not bool(main.settings["aim_manual"]):
+			face = (near.position - position).normalized()
+		veh["cd"] = float(d["cd"])
+		var aoe := float(d.get("aoe", 0.0))
+		var spread := randf_range(-0.14, 0.14) if str(veh["id"]) == "ufo" else 0.0
+		var col := Color(0.6, 0.95, 1.0) if aoe <= 0.0 and str(veh["id"]) == "ufo" else (Color(1.0, 0.8, 0.4) if aoe > 0.0 else Color(0.85, 0.7, 0.45))
+		main.spawn_parrow(position + Vector2(0, -6), face.rotated(spread), 300.0, dmg() * float(d["dm"]), 0.9, int(d.get("pr", 0)), col, weapon(), aoe, aoe > 0.0 or str(veh["id"]) == "ufo")
+		main.snd("slam" if aoe > 0.0 else "swing")
+		if aoe > 0.0:
+			kb -= face * 70.0
+			main.shake(2.0)
+
+
+func _veh_draw() -> void:
+	var id := str(veh["id"])
+	var ang := face.angle()
+	if id == "ufo":
+		draw_set_transform(Vector2(0, -10), 0.0, Vector2(1, 0.55))
+		draw_circle(Vector2.ZERO, 11.0, Color(0.62, 0.66, 0.74))
+		draw_circle(Vector2.ZERO, 8.0, Color(0.82, 0.86, 0.94))
+		draw_set_transform(Vector2(0, -14), 0.0, Vector2.ONE)
+		draw_circle(Vector2.ZERO, 5.0, Color(0.4, 0.9, 1.0, 0.85))
+		for i in 3:
+			var a := t * 3.0 + i * TAU / 3.0
+			draw_circle(Vector2(cos(a) * 9.0, 4.0 + sin(a) * 2.0), 1.2, Color(1.0, 0.9, 0.4))
+	elif id == "tank":
+		draw_set_transform(Vector2(0, -5), ang, Vector2.ONE)
+		draw_rect(Rect2(-11, -9, 22, 5), Color(0.18, 0.2, 0.2))
+		draw_rect(Rect2(-11, 4, 22, 5), Color(0.18, 0.2, 0.2))
+		draw_rect(Rect2(-10, -5, 20, 10), Color(0.42, 0.5, 0.4))
+		draw_circle(Vector2.ZERO, 5.0, Color(0.5, 0.58, 0.46))
+		draw_line(Vector2.ZERO, Vector2(15, 0), Color(0.25, 0.28, 0.26), 3.0)
+	else:
+		draw_set_transform(Vector2(0, -5), ang, Vector2.ONE)
+		draw_rect(Rect2(-9, -6, 18, 12), Color(0.5, 0.34, 0.2))
+		draw_rect(Rect2(-9, -6, 18, 2), Color(0.35, 0.22, 0.12))
+		draw_circle(Vector2(-4, -8), 3.0, Color(0.2, 0.14, 0.1))
+		draw_circle(Vector2(-4, 8), 3.0, Color(0.2, 0.14, 0.1))
+		draw_line(Vector2(0, 0), Vector2(14, 0), Color(0.75, 0.65, 0.45), 2.0)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	var fr := clampf(float(veh["hp"]) / float(veh["max"]), 0.0, 1.0)
+	draw_rect(Rect2(-9, -26, 18, 3), Color(0, 0, 0, 0.85))
+	draw_rect(Rect2(-8, -25, 16.0 * fr, 1), Color(1.0, 0.6, 0.25))
+
+
 func _process(dt: float) -> void:
 	if main.state != "play":
 		return
@@ -437,6 +552,12 @@ func _process(dt: float) -> void:
 		main.item_cycle()
 	if act("item_use") and idle():
 		main.item_use()
+	# bolla spazio-temporale: un tasto, un oggetto a caso
+	chrono = minf(Chrono.MAX_E, chrono + 0.6 * dt)
+	if act("summon") and idle():
+		main.summon()
+	if not veh.is_empty():
+		veh_tick(dt)
 	# fiala
 	if act("flask") and flasks > 0 and hp < max_hp and idle():
 		drink_t = 0.85
@@ -451,9 +572,9 @@ func _process(dt: float) -> void:
 	# attacchi
 	var w := weapon()
 	var f: Dictionary = Rpg.FAM[w["f"]]
-	if (act_held("attack") or auto_fire(f)) and atk_cd <= 0.0 and idle() and st > 0.0 and zmode == 0:
+	if (act_held("attack") or auto_fire(f)) and atk_cd <= 0.0 and idle() and st > 0.0 and zmode == 0 and veh.is_empty():
 		attack()
-	if act("heavy") and idle() and st > 0.0 and zmode == 0 and spend(float(f["hc"]) * Rpg.st_mult(w)):
+	if act("heavy") and idle() and st > 0.0 and zmode == 0 and veh.is_empty() and spend(float(f["hc"]) * Rpg.st_mult(w)):
 		heavy_t = f["hw"]
 		var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
 		if near != null and not bool(main.settings["aim_manual"]):
@@ -482,7 +603,7 @@ func _process(dt: float) -> void:
 			slow = 0.3
 		if drink_t > 0.0:
 			slow = 0.35
-		vel = dir * speed * slow * (1.0 + bv("b_mv"))
+		vel = dir * speed * slow * (1.0 + bv("b_mv")) * veh_spd()
 	if slow_t > 0.0:
 		vel *= 0.55
 	vel += kb
@@ -502,7 +623,8 @@ func _process(dt: float) -> void:
 		tintc = Color(1.2, 1.1, 1.5)
 	spr.self_modulate = tintc
 	update_wspr()
-	spr.visible = not (inv > 0.0 and inv < 0.4 and int(t * 20.0) % 2 == 0 and dash_t <= 0.0)
+	wspr.visible = veh.is_empty()
+	spr.visible = veh.is_empty() and not (inv > 0.0 and inv < 0.4 and int(t * 20.0) % 2 == 0 and dash_t <= 0.0)
 	if dash_t > 0.0:
 		spr.modulate = Color(1, 1, 1, 0.55)
 	else:
@@ -762,7 +884,9 @@ func _draw_slash() -> void:
 
 func _draw() -> void:
 	draw_set_transform(Vector2(0, 1), 0.0, Vector2(1, 0.4))
-	draw_circle(Vector2.ZERO, 6.5, Color(0, 0, 0, 0.5))
+	draw_circle(Vector2.ZERO, 6.5 if veh.is_empty() else 11.0, Color(0, 0, 0, 0.5))
+	if not veh.is_empty():
+		_veh_draw()
 
 
 ## parata a tempo: annulla il colpo di un nemico, lo sbilancia e lo lascia scoperto
@@ -796,6 +920,11 @@ func hurt(d: float, dir: Vector2, slow := 0.0) -> void:
 		slow_t = max(slow_t, slow)
 	main.chain_break()
 	d *= max(0.3, 1.0 - 0.05 * r("armor") - 0.006 * a("fed") - 0.025 * rl("pietra") - (0.2 if buffs.has("pelle") else 0.0) - arm("df") - bv("b_df"))
+	if veh_absorb(d):
+		inv = 0.3
+		kb = dir * 60.0
+		main.snd("hit")
+		return
 	if shield > 0.0:
 		var ab := minf(shield, d)
 		shield -= ab
@@ -825,6 +954,8 @@ func dot(d: float, slow := 0.0) -> void:
 	if main.state != "play" or dash_t > 0.0:
 		return
 	d *= max(0.3, 1.0 - 0.05 * r("armor") - 0.006 * a("fed"))
+	if veh_absorb(d):
+		return
 	if shield > 0.0:
 		var ab := minf(shield, d)
 		shield -= ab

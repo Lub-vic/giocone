@@ -52,6 +52,7 @@ func _layout() -> void:
 		["FIA", "flask", Vector2(lx, 126), sm, Color(1.0, 0.7, 0.3)],
 		["OGG", "item_use", Vector2(lx, 156), sm, Color(0.6, 1.0, 0.7)],
 		["MAP", "key:M", Vector2(lx, 18), sm * 0.85, Color(0.8, 0.8, 0.9)],
+		["CRO", "summon", Vector2(lx, 188), sm, Color(0.5, 0.95, 1.0)],
 	]
 	if not panels:   # schermo 16:9: comandi sopra i bordi del gioco, piu' in basso
 		play_btns = [
@@ -64,6 +65,7 @@ func _layout() -> void:
 			["FIA", "flask", Vector2(458, 140), 11.0, Color(1.0, 0.7, 0.3)],
 			["ARM", "swap", Vector2(428, 144), 11.0, Color(0.85, 0.85, 0.7)],
 			["OGG", "item_use", Vector2(398, 162), 10.0, Color(0.6, 1.0, 0.7)],
+			["CRO", "summon", Vector2(370, 162), 10.0, Color(0.5, 0.95, 1.0)],
 			["II", "pad:START", Vector2(462, 96), 10.0, Color(0.8, 0.8, 0.9)],
 			["BOR", "key:I", Vector2(436, 100), 10.0, Color(0.8, 0.8, 0.9)],
 		]

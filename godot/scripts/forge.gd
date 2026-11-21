@@ -3,7 +3,7 @@ extends RefCounted
 ## Artigianato componibile: armi, modifiche alle armi, armature e pozioni.
 ## Ogni scelta (materiale, parte, essenza, qualita', dose) somma i suoi modificatori: le combinazioni sono migliaia.
 
-const TABS := ["FORGIA ARMA", "MODIFICA ARMA", "ARMATURA", "POZIONI"]
+const TABS := ["ARMA", "MODIFICA", "ARMATURA", "POZIONI", "ANACRON."]
 const MAT_N := {"": "NESSUNO", "erba": "ERBE", "fungo": "FUNGHI", "legna": "LEGNA", "minerale": "MINERALE", "pelle": "PELLE", "carne": "CARNE", "osso": "OSSA"}
 
 # ------------------------------------------------------------------ armi
@@ -115,6 +115,14 @@ static func slots(tab: int) -> Array:
 				ps.append([pc, PIECE_N[pc]])
 			return [["PEZZO", ps], ["MATERIALE", _opts(ARM_MAT.keys(), false)], ["IMBOTTITURA", _opts(PAD.keys(), true)],
 				["QUALITA'", [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]]]]
+		4:
+			var js: Array = []
+			for k in Chrono.JUNK:
+				if int(Chrono.owned.get(k, 0)) > 0:
+					js.append([k, "%s x%d" % [Chrono.JUNK[k]["n"], int(Chrono.owned[k])]])
+			if js.is_empty():
+				js.append(["", "NESSUNO"])
+			return [["OGGETTO", js]]
 		_:
 			return [["BASE", _base_opts()], ["ADDITIVO 1", _opts([""] + ADDS.keys(), true)], ["ADDITIVO 2", _opts([""] + ADDS.keys(), true)],
 				["DOSE", [[1, "LEGGERA"], [2, "NORMALE"], [3, "FORTE"]]]]
@@ -158,8 +166,40 @@ static func make(tab: int, v: Array, p, roll := false) -> Dictionary:
 			return _make_mod(v, p)
 		2:
 			return _make_armor(v, p)
+		4:
+			return _make_junk(v)
 		_:
 			return _make_brew(v)
+
+
+## oggetto evocato dal passato/futuro -> arma, armatura o pozione in base a cosa e'
+static func _make_junk(v: Array) -> Dictionary:
+	var id := str(v[0])
+	if id == "" or int(Chrono.owned.get(id, 0)) <= 0:
+		return {"cost": {}, "lines": ["NESSUN OGGETTO ANACRONISTICO", "EVOCA CON N (SELECT)"], "item": {}, "err": "NESSUN OGGETTO"}
+	var j: Dictionary = Chrono.JUNK[id]
+	var o: Dictionary = j["out"]
+	var lines: Array = ["%s -> %s" % [j["n"], str(o.get("nm", o.get("n", ""))).to_upper()]]
+	var it := {}
+	match str(o["t"]):
+		"w":
+			var mods: Dictionary = (o["mods"] as Dictionary).duplicate()
+			it = {"k": "w", "f": o["f"], "r": 0, "b": float(o["b"]), "a": (o["a"] as Array).duplicate(), "adj": 0, "mods": mods, "u": 0, "nm": o["nm"], "rc": {}}
+			it["r"] = rarity_of(it)
+			lines.append("ARMA: %s" % str(Rpg.FAM[o["f"]]["n"]).to_upper())
+			lines.append_array(wlines(it))
+		"a":
+			it = {"slot": o["slot"], "n": o["n"], "st": (o["st"] as Dictionary).duplicate(), "q": 3, "m": o["m"], "rc": {}}
+			lines.append("ARMATURA: %s" % str(PIECE_N[o["slot"]]))
+			lines.append_array(alines(it["st"]))
+		_:
+			var bid := "b:junk:%s" % id
+			it = {"id": bid, "n": o["n"], "fx": (o["fx"] as Dictionary).duplicate(true)}
+			lines.append("POZIONE")
+			lines.append_array(brew_lines(it["fx"]))
+	it["t"] = str(o["t"])
+	it["junk"] = id
+	return {"cost": {}, "lines": lines, "item": it, "err": ""}
 
 
 static func _make_weapon(v: Array, roll: bool) -> Dictionary:
