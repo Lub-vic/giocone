@@ -213,7 +213,6 @@ static func apply(main, r: Dictionary) -> void:
 		main.say("NUOVA ERA - %s. %s" % [era_name(), str(ERA_MSG[era()])])
 		main.shake(6.0)
 	var nm := name_of(r)
-	_icon(main, pl.position + Vector2(0, -22), str(r["id"]), str(r["cls"]) != "junk" and str(r["cls"]) != "use")
 	match str(r["cls"]):
 		"junk":
 			var id := str(r["id"])
@@ -239,22 +238,6 @@ static func apply(main, r: Dictionary) -> void:
 	main.popup(pl.position + Vector2(0, -26), nm, col)
 	main.say("EVOCATO: %s" % nm)
 	_use(main, str(r["id"]))
-
-
-## l'oggetto evocato appare come icona che sale e svanisce sopra il giocatore
-static func _icon(main, pos: Vector2, id: String, big: bool) -> void:
-	var sp := Sprite2D.new()
-	sp.texture = Game.tex("ch_" + id)
-	sp.position = pos
-	sp.scale = Vector2(0.2, 0.2)
-	sp.z_index = 50
-	main.fx.add_child(sp)
-	var k := (38.0 if big else 26.0) / maxf(sp.texture.get_width(), sp.texture.get_height())
-	var tw: Tween = main.create_tween()
-	tw.tween_property(sp, "scale", Vector2(k, k), 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_property(sp, "position:y", pos.y - 16.0, 0.9)
-	tw.parallel().tween_property(sp, "modulate:a", 0.0, 0.9).set_delay(0.35)
-	tw.tween_callback(sp.queue_free)
 
 
 static func _near(main, pos: Vector2, rad: float) -> Array:

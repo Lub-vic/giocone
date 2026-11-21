@@ -322,6 +322,7 @@ func board(id: String) -> void:
 		veh_exit(false)
 	var mh := float(d["hp"]) + float(d["hpl"]) * lv
 	veh = {"id": id, "hp": mh, "max": mh, "t": float(d["t"]), "cd": 0.0, "cd2": 0.0, "crush": 0.0}
+	z_index = 18 if id == "ufo" else 0   # l'ufo vola sopra alberi e muri
 	inv = maxf(inv, 0.6)
 	drink_t = 0.0
 	heavy_t = 0.0
@@ -338,6 +339,8 @@ func veh_exit(boom: bool) -> void:
 	if veh.is_empty():
 		return
 	veh = {}
+	z_index = 0
+	main.unstick(self, radius)
 	inv = maxf(inv, 0.8)
 	main.burst(position, Color(1.0, 0.6, 0.2), 40, 90.0, 0.6)
 	if boom:
@@ -620,7 +623,10 @@ func _process(dt: float) -> void:
 		vel *= 0.55
 	vel += kb
 	kb = kb.move_toward(Vector2.ZERO, 700.0 * dt)
-	main.move_body(self, vel * dt, radius)
+	if veh.is_empty():
+		main.move_body(self, vel * dt, radius)
+	else:
+		main.move_vehicle(self, vel * dt, radius, str(veh["id"]))
 	var moving := dir.length() > 0.1
 	spr.flip_h = face.x < 0.0
 	spr.offset.y = -8.0 - (abs(sin(t * 12.0)) * 1.0 if moving else 0.0)

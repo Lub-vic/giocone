@@ -1528,7 +1528,7 @@ func world_strike(pos: Vector2, face: Vector2, reach: float, arc: float, mult: f
 	popup(cp + Vector2(0, -14), "%d%%" % int(ceil(100.0 * left / tot)), Color(1.0, 0.9, 0.7))
 
 
-func destroy_at(c: Vector2i, p: Prop, mat: String, kind: String) -> void:
+func destroy_at(c: Vector2i, p: Prop, mat: String, kind: String, loot := true) -> void:
 	var cp := Vector2(c) * Game.TS + Vector2(8, 8)
 	if p != null:
 		for cc in p.dcells:
@@ -1548,6 +1548,8 @@ func destroy_at(c: Vector2i, p: Prop, mat: String, kind: String) -> void:
 	burst(cp, Destruct.COL[mat], 18, 70.0, 0.55)
 	snd("kill")
 	shake(2.5)
+	if not loot:
+		return
 	match kind:
 		"albero":
 			add_mat("legna", randi_range(2, 4))
@@ -3817,7 +3819,7 @@ func summon() -> void:
 	player.chrono -= Chrono.COST
 	var r := Chrono.roll(player.lv, player.pity)
 	player.pity = player.pity + 1 if str(r["cls"]) == "junk" else 0
-	Chrono.apply(self, r)
+	ChronoBubble.spawn(self, r, str(r["cls"]) != "junk" and str(r["cls"]) != "use")   # la bolla si apre vicino a te; l'effetto parte quando l'oggetto ti raggiunge
 
 
 ## ricarica del Cronotone uccidendo
@@ -6082,6 +6084,45 @@ func move_body(o: Node2D, d: Vector2, r: float) -> void:
 		o.position.x += d.x
 	if free_at(o.position + Vector2(0, d.y), r):
 		o.position.y += d.y
+
+
+## movimento dei mezzi evocati nel mondo aperto: l'ufo vola sopra tutto, il carrarmato abbatte gli ostacoli
+func move_vehicle(o: Node2D, d: Vector2, r: float, kind: String) -> void:
+	if area == "world":
+		if kind == "ufo":
+			var lim := Vector2(Game.MW, Game.MH) * Game.TS - Vector2(10, 10)
+			o.position = (o.position + d).clamp(Vector2(10, 10), lim)
+			return
+		if kind == "tank" and d.length_squared() > 0.0:
+			var ahead := o.position + d.normalized() * (r + 5.0)
+			var probes: Array = [ahead, ahead + d.normalized().orthogonal() * (r + 3.0), ahead - d.normalized().orthogonal() * (r + 3.0),
+				o.position + Vector2(d.x, 0) + Vector2(sign(d.x) * (r + 3.0), 0), o.position + Vector2(0, d.y) + Vector2(0, sign(d.y) * (r + 3.0))]
+			for pp in probes:
+				_tank_crush(Vector2i(floori(pp.x / Game.TS), floori(pp.y / Game.TS)))
+	move_body(o, d, r)
+
+
+func _tank_crush(c: Vector2i) -> void:
+	if not inb(c):
+		return
+	if dest_cells.has(c) and is_instance_valid(dest_cells[c]):
+		var pr: Prop = dest_cells[c]
+		destroy_at(c, pr, pr.dm, pr.dd, false)
+	elif terrain_breakable(c) and solid(c):
+		var ti := Destruct.terrain(biome[idx(c)])
+		destroy_at(c, null, str(ti["m"]), str(ti["d"]), false)   # anche montagne e muri, ma senza bottino
+
+
+## il mezzo e' finito sopra un ostacolo (l'ufo vola): rimetti il personaggio sul terreno libero piu' vicino
+func unstick(o: Node2D, r: float) -> void:
+	if free_at(o.position, r):
+		return
+	for ring in range(1, 14):
+		for i in 16:
+			var p: Vector2 = o.position + Vector2.from_angle(i * TAU / 16.0) * (ring * 8.0)
+			if free_at(p, r):
+				o.position = p
+				return
 
 
 # ------------------------------------------------------------------ eventi di gioco
