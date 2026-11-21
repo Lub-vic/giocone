@@ -116,6 +116,20 @@ func act(a: String) -> bool:
 	return not main.inv_open and Input.is_action_just_pressed(a)
 
 
+## FUOCO AUTOMATICO (impostazioni): attacca da solo quando un nemico e' a portata,
+## lasciando sempre un po' di stamina per la rotolata
+func auto_fire(f: Dictionary) -> bool:
+	if not bool(main.settings.get("auto_fire", false)) or main.inv_open or st < max_st * 0.3:
+		return false
+	var reach := 150.0 if f["ranged"] else 30.0 + Rpg.reach_add(weapon())
+	var near: Enemy = main.nearest_enemy(position, reach)
+	if near == null or near.dying or not near.awake:
+		return false
+	if not bool(main.settings["aim_manual"]):
+		face = (near.position - position).normalized()
+	return true
+
+
 func act_held(a: String) -> bool:
 	return not main.inv_open and Input.is_action_pressed(a)
 
@@ -426,7 +440,7 @@ func _process(dt: float) -> void:
 	# attacchi
 	var w := weapon()
 	var f: Dictionary = Rpg.FAM[w["f"]]
-	if act_held("attack") and atk_cd <= 0.0 and idle() and st > 0.0 and zmode == 0:
+	if (act_held("attack") or auto_fire(f)) and atk_cd <= 0.0 and idle() and st > 0.0 and zmode == 0:
 		attack()
 	if act("heavy") and idle() and st > 0.0 and zmode == 0 and spend(float(f["hc"]) * Rpg.st_mult(w)):
 		heavy_t = f["hw"]

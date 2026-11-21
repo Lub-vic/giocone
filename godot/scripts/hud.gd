@@ -1185,7 +1185,7 @@ func _options() -> void:
 	_txt("IMPOSTAZIONI", Vector2(r.position.x, r.position.y + 30), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 	for i in main.OPTIONS.size():
 		var o: Dictionary = main.OPTIONS[i]
-		var y: float = r.position.y + 58.0 + i * 16.0
+		var y: float = r.position.y + 50.0 + i * 14.0
 		var sel: bool = i == main.opt_sel
 		var col := Color(1, 0.92, 0.5) if sel else Color(0.78, 0.76, 0.88)
 		_txt(("> " if sel else "  ") + str(o["n"]), Vector2(r.position.x + 14, y), col)

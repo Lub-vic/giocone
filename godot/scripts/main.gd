@@ -245,7 +245,7 @@ var doors: Array = []
 var carved: Array = []
 var use_pad := false
 var show_fps := false
-var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "photo": false}
+var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "photo": false, "auto_fire": false}
 var opt_sel := 0
 var pause_sel := 0
 var beast_sel := 0            # bestiario: scheda selezionata
@@ -265,6 +265,7 @@ const OPTIONS := [
 	{"k": "bright", "n": "LUMINOSITA", "t": "slider", "max": 5},
 	{"k": "fps", "n": "MOSTRA FPS", "t": "toggle"},
 	{"k": "aim_manual", "n": "MIRA MANUALE", "t": "toggle"},
+	{"k": "auto_fire", "n": "FUOCO AUTOMATICO", "t": "toggle"},
 	{"k": "photo", "n": "GRAFICA FOTO (PROVA)", "t": "toggle"},
 	{"k": "ctrl", "n": "CONTROLLI", "t": "action"},
 	{"k": "back", "n": "INDIETRO", "t": "action"},
@@ -325,6 +326,8 @@ func _ready() -> void:
 	Game.setup_input()
 	if OS.get_cmdline_user_args().size() == 0:
 		load_settings()
+	if OS.has_feature("mobile") and not FileAccess.file_exists("user://settings.cfg"):
+		settings["auto_fire"] = true   # col touch il fuoco automatico e' molto piu' comodo
 	if OS.get_cmdline_user_args().has("--photo"):   # prove della grafica FOTO
 		settings["photo"] = true
 	randomize()
@@ -4059,7 +4062,7 @@ func inv_input(ev: InputEvent) -> bool:
 		inv_scroll = 0
 		inv_side = 1
 	elif ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-		var hit: Array = hud.inv_hit(ev.position)
+		var hit: Array = hud.inv_hit(ev.position - hud.position)
 		if hit.is_empty():
 			return true
 		match str(hit[0]):
@@ -5933,6 +5936,8 @@ func build_ui() -> void:
 	cl.add_child(hud)
 	# comandi touch: solo su telefoni/tablet (o con --touch per provarli sul PC)
 	if DisplayServer.is_touchscreen_available() or OS.has_feature("mobile") or OS.get_cmdline_user_args().has("--touch"):
+		# telefono piu' largo del 16:9: la finestra si allarga e i comandi vanno nelle bande laterali
+		get_tree().root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
 		var tl := CanvasLayer.new()
 		tl.layer = 9
 		add_child(tl)
@@ -6879,8 +6884,8 @@ func _handle_menu_click(pos: Vector2) -> bool:
 	if state == "options":
 		if pos.x < 80.0 or pos.x > 400.0:
 			return false
-		var row := floori((pos.y - 71.0) / 16.0)
-		if row < 0 or row >= OPTIONS.size() or pos.y >= 85.0 + row * 16.0:
+		var row := floori((pos.y - 63.0) / 14.0)
+		if row < 0 or row >= OPTIONS.size() or pos.y >= 75.0 + row * 14.0:
 			return false
 		opt_sel = row
 		var option: Dictionary = OPTIONS[row]
@@ -7036,7 +7041,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 		inv_toggle()
 		return
 	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
-		if _handle_menu_click(ev.position):
+		if _handle_menu_click(ev.position - hud.position):
 			get_viewport().set_input_as_handled()
 			return
 	if state == "dialog":
@@ -8473,6 +8478,13 @@ func _process(_dt: float) -> void:
 			player.spell_cd = [0.0, 0.0]
 			player.cast(0)
 			print("AOE mana=", int(player.mana), " cd=", player.spell_cd, " shock=", fx.get_children().filter(func(x): return x is Hazard.Shock).size(), " drink=", player.drink_t, " dash=", player.dash_t, " heavy=", player.heavy_t)
+	if OS.get_cmdline_user_args().has("--optsnap") and Engine.get_process_frames() == 60:
+		state = "options"
+		settings["auto_fire"] = true
+	if OS.get_cmdline_user_args().has("--snap") and Engine.get_process_frames() == 90:
+		get_viewport().get_texture().get_image().save_png("user://snap.png")
+		print("SNAP ", get_viewport().get_visible_rect().size)
+		get_tree().quit()
 	if OS.get_cmdline_user_args().has("--maptest"):
 		tgs += 1
 		if tgs == 3:
