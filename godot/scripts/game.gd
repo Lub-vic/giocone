@@ -144,7 +144,7 @@ static func setup_input() -> void:
 	var m := {
 		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT],
 		"move_up": [KEY_W, KEY_UP], "move_down": [KEY_S, KEY_DOWN],
-		"attack": [KEY_SPACE, KEY_J], "dash": [KEY_SHIFT, KEY_K], "restart": [KEY_R, KEY_ENTER], "heavy": [KEY_L], "flask": [KEY_Q, KEY_F], "interact": [KEY_E], "zoom": [KEY_V], "parry": [KEY_C], "swap": [KEY_TAB], "spell1": [KEY_1, KEY_R], "spell2": [KEY_2, KEY_G], "item_next": [KEY_Z], "item_use": [KEY_X],
+		"attack": [KEY_SPACE, KEY_J], "dash": [KEY_SHIFT, KEY_K], "restart": [KEY_R, KEY_ENTER], "heavy": [KEY_L], "flask": [KEY_Q, KEY_F], "interact": [KEY_E], "zoom": [KEY_V], "lock": [KEY_Y], "parry": [KEY_C], "swap": [KEY_TAB], "spell1": [KEY_1, KEY_R], "spell2": [KEY_2, KEY_G], "item_next": [KEY_Z], "item_use": [KEY_X],
 		"aim_left": [], "aim_right": [], "aim_up": [], "aim_down": [],
 	}
 	for a in m:
@@ -164,7 +164,7 @@ static func setup_input() -> void:
 	_jaxis("move_down", JOY_AXIS_LEFT_Y, 1.0)
 	_jbtn("move_left", JOY_BUTTON_DPAD_LEFT)
 	_jbtn("move_right", JOY_BUTTON_DPAD_RIGHT)
-	_jbtn("move_up", JOY_BUTTON_DPAD_UP)
+	# croce su: non muove piu' (c'e' lo stick) ma cambia modalita' Orda/Tattica
 	_jbtn("move_down", JOY_BUTTON_DPAD_DOWN)
 	_jaxis("aim_left", JOY_AXIS_RIGHT_X, -1.0)
 	_jaxis("aim_right", JOY_AXIS_RIGHT_X, 1.0)
@@ -178,7 +178,8 @@ static func setup_input() -> void:
 	_jbtn("swap", JOY_BUTTON_Y)
 	_jbtn("spell1", JOY_BUTTON_LEFT_SHOULDER)
 	_jaxis("spell2", JOY_AXIS_TRIGGER_LEFT, 1.0)
-	_jbtn("zoom", JOY_BUTTON_RIGHT_STICK)
+	_jbtn("zoom", JOY_BUTTON_DPAD_UP)
+	_jbtn("lock", JOY_BUTTON_RIGHT_STICK)   # R3: aggancia il nemico (mira manuale), premuto di nuovo passa al successivo
 	_jbtn("parry", JOY_BUTTON_LEFT_STICK)
 	_jaxis("item_use", JOY_AXIS_TRIGGER_LEFT, 1.0)
 	_jbtn("ui_accept", JOY_BUTTON_A)

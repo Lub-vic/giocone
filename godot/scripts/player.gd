@@ -82,6 +82,7 @@ var blade_ang := 0.0
 var blade_hit: Dictionary = {}
 var knife_t := 0.0
 var aim_world := Vector2.ZERO
+var lock: Enemy = null          # nemico agganciato (mira manuale)
 var wspr: Sprite2D          # arma impugnata, cambia con l'arma in uso
 var wspr_f := ""
 
@@ -357,6 +358,16 @@ func _process(dt: float) -> void:
 		hp = min(max_hp, hp + regen_rate * dt)
 	var dir := Vector2.ZERO if main.inv_open else Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	if bool(main.settings["aim_manual"]):
+		if act("lock"):
+			cycle_lock()
+		if lock != null and (not is_instance_valid(lock) or lock.dying or lock.position.distance_to(position) > 280.0):
+			lock = null
+	else:
+		lock = null
+	if bool(main.settings["aim_manual"]) and lock != null:
+		face = (lock.position - position).normalized()
+		aim_world = lock.position + Vector2(0, -8)
+	elif bool(main.settings["aim_manual"]):
 		if main.use_pad:
 			var aim := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down")
 			if aim.length() > 0.4:
@@ -826,6 +837,21 @@ func dot(d: float, slow := 0.0) -> void:
 		main.popup(position + Vector2(0, -16), "-%d" % int(round(d)), Color(0.5, 1.0, 0.4))
 	if hp <= 0.0:
 		main.game_over(false)
+
+
+## R3 / Y: aggancia il nemico piu' vicino; premuto di nuovo passa al successivo (dal piu' vicino al piu' lontano)
+func cycle_lock() -> void:
+	var list: Array = []
+	for e in main.enemies:
+		if is_instance_valid(e) and e.awake and not e.dying and e.kind != "camp_part" and e.position.distance_to(position) < 220.0:
+			list.append(e)
+	if list.is_empty():
+		lock = null
+		return
+	list.sort_custom(func(a, b): return a.position.distance_to(position) < b.position.distance_to(position))
+	var i := list.find(lock)
+	lock = list[(i + 1) % list.size()]
+	main.snd("page")
 
 
 func cycle_zoom() -> void:

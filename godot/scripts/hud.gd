@@ -105,7 +105,18 @@ func _bar(pos: Vector2, w: float, h: float, frac: float, col: Color, ghost := -1
 
 
 func _crosshair(p: Player) -> void:
-	var cp: Vector2 = get_viewport().get_canvas_transform() * p.aim_world
+	var cp: Vector2 = get_viewport().get_canvas_transform() * p.aim_world - position
+	if p.lock != null and is_instance_valid(p.lock):   # nemico agganciato: parentesi rosse attorno
+		var lc: Vector2 = get_viewport().get_canvas_transform() * (p.lock.position + Vector2(0, -8)) - position
+		var r := 11.0 + p.lock.radius * 0.6 + sin(Time.get_ticks_msec() / 120.0)
+		var lcol := Color(1.0, 0.3, 0.25)
+		for sx in [-1.0, 1.0]:
+			for sy in [-1.0, 1.0]:
+				var c := lc + Vector2(sx, sy) * r
+				draw_line(c, c - Vector2(sx * 4, 0), Color(0, 0, 0, 0.8), 3.0)
+				draw_line(c, c - Vector2(0, sy * 4), Color(0, 0, 0, 0.8), 3.0)
+				draw_line(c, c - Vector2(sx * 4, 0), lcol, 1.0)
+				draw_line(c, c - Vector2(0, sy * 4), lcol, 1.0)
 	if cp.x < -10.0 or cp.x > size.x + 10.0 or cp.y < -10.0 or cp.y > size.y + 10.0:
 		return
 	var col := Color(1.0, 0.82, 0.42, 0.95)
@@ -1227,14 +1238,15 @@ func _controls() -> void:
 		["PAUSA", "ESC", "START"],
 		["MAPPA / BESTIARIO", "M / B", "START > MAPPA"],
 		["SCHERMO INTERO / FPS", "F11 / F3", "-"],
-		["ZOOM: ORDA/TATTICA", "V", "R3"],
+		["ZOOM: ORDA/TATTICA", "V", "CROCE SU"],
+		["AGGANCIA NEMICO", "Y", "R3"],
 		["TATTICA: INVIA", "CLICK / SPAZIO", "RB"],
 		["TATTICA: RICHIAMA", "L / CLICK DESTRO", "RT"],
 		["CAMPO: MAGIE", "Z / X", "LB / RB"],
 		["CAMPO: VIAGGIO", "T", "Y"],
 	]
 	for i in rows.size():
-		var y: float = r.position.y + 58.0 + i * 10.4
+		var y: float = r.position.y + 58.0 + i * 9.8
 		_txt(rows[i][0], Vector2(x, y), Color(0.85, 0.83, 0.95))
 		_txt(rows[i][1], Vector2(x + 96, y), Color(0.7, 0.85, 1.0))
 		_txt(rows[i][2], Vector2(x + 262, y), Color(0.7, 1.0, 0.8))

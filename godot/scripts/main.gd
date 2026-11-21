@@ -7792,7 +7792,7 @@ func _pad_test() -> void:
 	var items := [
 		["attack", "b", JOY_BUTTON_RIGHT_SHOULDER], ["dash", "b", JOY_BUTTON_B], ["flask", "b", JOY_BUTTON_X],
 		["swap", "b", JOY_BUTTON_Y], ["spell1", "b", JOY_BUTTON_LEFT_SHOULDER], ["interact", "b", JOY_BUTTON_A],
-		["zoom", "b", JOY_BUTTON_RIGHT_STICK], ["restart", "b", JOY_BUTTON_START],
+		["zoom", "b", JOY_BUTTON_DPAD_UP], ["lock", "b", JOY_BUTTON_RIGHT_STICK], ["restart", "b", JOY_BUTTON_START],
 		["heavy", "a", JOY_AXIS_TRIGGER_RIGHT], ["spell2", "a", JOY_AXIS_TRIGGER_LEFT],
 		["move_left", "a", JOY_AXIS_LEFT_X], ["move_up", "a", JOY_AXIS_LEFT_Y],
 		["ui_accept", "b", JOY_BUTTON_A], ["ui_cancel", "b", JOY_BUTTON_B], ["ui_down", "b", JOY_BUTTON_DPAD_DOWN],
@@ -8485,6 +8485,25 @@ func _process(_dt: float) -> void:
 		get_viewport().get_texture().get_image().save_png("user://snap.png")
 		print("SNAP ", get_viewport().get_visible_rect().size)
 		get_tree().quit()
+	if OS.get_cmdline_user_args().has("--locktest"):
+		tgs += 1
+		if tgs == 3:
+			state = "play"
+			settings["aim_manual"] = true
+			player.max_hp = 99999.0
+			player.hp = 99999.0
+			for i in 3:
+				var e := spawn_enemy("goblin", player.position + Vector2(40 + i * 30, 0), 1.0, false, Color.WHITE)
+				e.awake = true
+		if tgs == 5:
+			var seq: Array = []
+			for k in 4:
+				player.cycle_lock()
+				seq.append(int(player.lock.position.distance_to(player.position)) if player.lock != null else -1)
+			print("LOCK distanze in ordine=", seq, " face verso bersaglio=", player.face.dot((player.lock.position - player.position).normalized()) > 0.9 if player.lock else false)
+		if tgs == 8:
+			print("LOCK face=", snappedf(player.face.dot((player.lock.position - player.position).normalized()), 0.01), " zoom tasto=", InputMap.action_get_events("zoom").size(), " lock tasto=", InputMap.action_get_events("lock").size())
+			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--maptest"):
 		tgs += 1
 		if tgs == 3:
