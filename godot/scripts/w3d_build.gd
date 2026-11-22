@@ -7,11 +7,26 @@ extends RefCounted
 var v := PackedVector3Array()
 var c := PackedColorArray()
 var rn := RandomNumberGenerator.new()
+var sz := 1.0                   # fattore di scala per rock() e shard() (arredi ingranditi)
+var gain := 1.0                 # luminosita' aggiuntiva (oggetti di scena)
+var sat := 1.0                  # saturazione e contrasto applicati ai colori (oggetti dello scenario piu' leggibili)
+var con := 1.0
 
 
 func shade(col: Color, j: float) -> Color:
-	var k := 1.0 + rn.randf_range(-j, j)
-	return Color(clampf(col.r * k, 0.0, 1.0), clampf(col.g * k, 0.0, 1.0), clampf(col.b * k, 0.0, 1.0), col.a)
+	var k := (1.0 + rn.randf_range(-j, j)) * gain
+	var r := col.r * k
+	var g := col.g * k
+	var b := col.b * k
+	if sat != 1.0 or con != 1.0:
+		var l := r * 0.3 + g * 0.59 + b * 0.11
+		r = l + (r - l) * sat
+		g = l + (g - l) * sat
+		b = l + (b - l) * sat
+		r = (r - 0.2) * con + 0.2
+		g = (g - 0.2) * con + 0.2
+		b = (b - 0.2) * con + 0.2
+	return Color(clampf(r, 0.0, 1.0), clampf(g, 0.0, 1.0), clampf(b, 0.0, 1.0), col.a)
 
 
 func tri(a: Vector3, b: Vector3, d: Vector3, col: Color) -> void:
@@ -60,7 +75,7 @@ func cyl(t: Transform3D, rb: float, rt: float, h: float, segs: int, col: Color, 
 
 ## sasso: cubo con i vertici sporcati a caso
 func rock(center: Vector3, size: Vector3, col: Color, j := 0.1, vj := 0.3, yaw := 0.0) -> void:
-	var h := size * 0.5
+	var h := size * 0.5 * sz
 	var p: Array = []
 	var bas := Basis(Vector3.UP, yaw)
 	for i in 8:
@@ -289,7 +304,9 @@ func blob(c: Vector3, r: Vector3, col: Color, seg := 7, rings := 4, j := 0.1, wo
 
 
 ## scheggia: due piramidi unite per la base (rombo), col vertice sporcato: forma tagliente, 8 facce
-func shard(p0: Vector3, p1: Vector3, w1: float, w2: float, col: Color, t := 0.4, j := 0.15, wob := 0.12) -> void:
+func shard(p0: Vector3, p1: Vector3, w1_: float, w2_: float, col: Color, t := 0.4, j := 0.15, wob := 0.12) -> void:
+	var w1 := w1_ * sz
+	var w2 := w2_ * sz
 	var a := p1 - p0
 	var ln := maxf(a.length(), 0.001)
 	var d := a / ln
@@ -315,6 +332,131 @@ func shard(p0: Vector3, p1: Vector3, w1: float, w2: float, col: Color, t := 0.4,
 func shift(off: Vector3) -> void:
 	for i in v.size():
 		v[i] += off
+
+
+## vista DALL'ALTO di uno sprite frontale: si ricostruisce un solido (profondita' ellittica proporzionale alla larghezza di
+## ogni riga di pixel) e lo si legge dall'alto. Ritorna Vector2i(x, z) -> {h: livelli, c: colore}. La parte davanti (-Z)
+## scende e prende i colori delle righe piu' basse dello sprite (viso, petto), il dietro e' piu' scuro.
+func topcells(img: Image) -> Dictionary:
+	var w := img.get_width()
+	var h := img.get_height()
+	var cells := {}
+	for y in h:
+		var x := 0
+		while x < w:
+			if img.get_pixel(x, y).a < 0.5:
+				x += 1
+				continue
+			var x0 := x
+			while x < w and img.get_pixel(x, y).a >= 0.5:
+				x += 1
+			var x1 := x - 1
+			var half := (x1 - x0 + 1) * 0.5
+			var ctr := (x0 + x1) * 0.5
+			var zdm := clampf(half * 0.62, 0.9, 5.5)
+			for px in range(x0, x1 + 1):
+				var rel := (px - ctr) / maxf(half, 0.5)
+				var zd := maxf(0.7, zdm * sqrt(maxf(0.0, 1.0 - rel * rel)))
+				var zr := int(floor(zd))
+				for zi in range(-zr, zr + 1):
+					var key := Vector2i(px, zi)
+					if cells.has(key):
+						continue
+					var front := clampf(-float(zi) / maxf(zd, 1.0), 0.0, 1.0)
+					var ys := y
+					var lim := mini(h - 1, y + int(round(front * 5.0)))
+					for k in range(y, lim + 1):
+						if img.get_pixel(px, k).a >= 0.5:
+							ys = k
+						else:
+							break
+					var col := img.get_pixel(px, ys)
+					if zi > 0:
+						col = Color(col.r * 0.78, col.g * 0.78, col.b * 0.8, 1.0)
+					var lvl := (h - 1 - y) + 1
+					var edge := zr > 0 and absi(zi) >= zr
+					cells[key] = {"h": maxi(1, lvl - (1 if edge else 0) - int(round(front * 1.5))), "c": col}
+	return cells
+
+
+func topdown(img: Image, vox: float) -> void:
+	var cells := topcells(img)
+	var w := img.get_width()
+	for key in cells:
+		var k: Vector2i = key
+		var hv: int = cells[key]["h"]
+		var col: Color = cells[key]["c"]
+		col.a = 0.9
+		var side := Color(col.r * 0.62, col.g * 0.62, col.b * 0.64, 0.95)
+		var x0 := (k.x - w * 0.5) * vox
+		var z0 := k.y * vox - vox * 0.5
+		var top := hv * vox
+		quad(Vector3(x0, top, z0), Vector3(x0 + vox, top, z0), Vector3(x0 + vox, top, z0 + vox), Vector3(x0, top, z0 + vox), col)
+		for d in 4:
+			var offs: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+			var nk: Vector2i = k + (offs[d] as Vector2i)
+			var nh := 0
+			if cells.has(nk):
+				nh = int(cells[nk]["h"])
+			if nh >= hv:
+				continue
+			var lo := nh * vox
+			match d:
+				0:
+					quad(Vector3(x0 + vox, lo, z0), Vector3(x0 + vox, lo, z0 + vox), Vector3(x0 + vox, top, z0 + vox), Vector3(x0 + vox, top, z0), side)
+				1:
+					quad(Vector3(x0, lo, z0), Vector3(x0, lo, z0 + vox), Vector3(x0, top, z0 + vox), Vector3(x0, top, z0), side)
+				2:
+					quad(Vector3(x0, lo, z0 + vox), Vector3(x0 + vox, lo, z0 + vox), Vector3(x0 + vox, top, z0 + vox), Vector3(x0, top, z0 + vox), side)
+				3:
+					quad(Vector3(x0, lo, z0), Vector3(x0 + vox, lo, z0), Vector3(x0 + vox, top, z0), Vector3(x0, top, z0), side)
+
+
+## celle dall'alto da un'immagine a colori + una di altezze (livelli): Vector2i(x, z) -> {h, c}
+func hcells(img: Image, himg: Image) -> Dictionary:
+	var w := img.get_width()
+	var hgt := img.get_height()
+	var cells := {}
+	for y in hgt:
+		for x in w:
+			var c := img.get_pixel(x, y)
+			if c.a < 0.5:
+				continue
+			var lv := int(round(himg.get_pixel(x, y).r * 255.0))
+			cells[Vector2i(x, y - hgt / 2)] = {"h": maxi(1, lv), "c": c}
+	return cells
+
+
+func build_cells(cells: Dictionary, w: int, vox: float) -> void:
+	for key in cells:
+		var k: Vector2i = key
+		var hv: int = cells[key]["h"]
+		var col: Color = cells[key]["c"]
+		var lum := col.r * 0.3 + col.g * 0.55 + col.b * 0.15
+		col = Color(lerpf(col.r, lum, 0.3) * 0.68, lerpf(col.g, lum, 0.3) * 0.68, lerpf(col.b, lum, 0.3) * 0.7, 0.92)
+		var side := Color(col.r * 0.62, col.g * 0.62, col.b * 0.64, 0.97)
+		var x0 := (k.x - w * 0.5) * vox
+		var z0 := k.y * vox
+		var top := hv * vox
+		quad(Vector3(x0, top, z0), Vector3(x0 + vox, top, z0), Vector3(x0 + vox, top, z0 + vox), Vector3(x0, top, z0 + vox), col)
+		var offs: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+		for d in 4:
+			var nk: Vector2i = k + (offs[d] as Vector2i)
+			var nh := 0
+			if cells.has(nk):
+				nh = int(cells[nk]["h"])
+			if nh >= hv:
+				continue
+			var lo := nh * vox
+			match d:
+				0:
+					quad(Vector3(x0 + vox, lo, z0), Vector3(x0 + vox, lo, z0 + vox), Vector3(x0 + vox, top, z0 + vox), Vector3(x0 + vox, top, z0), side)
+				1:
+					quad(Vector3(x0, lo, z0), Vector3(x0, lo, z0 + vox), Vector3(x0, top, z0 + vox), Vector3(x0, top, z0), side)
+				2:
+					quad(Vector3(x0, lo, z0 + vox), Vector3(x0 + vox, lo, z0 + vox), Vector3(x0 + vox, top, z0 + vox), Vector3(x0, top, z0 + vox), side)
+				3:
+					quad(Vector3(x0, lo, z0), Vector3(x0 + vox, lo, z0), Vector3(x0 + vox, top, z0), Vector3(x0, top, z0), side)
 
 
 func mesh() -> ArrayMesh:

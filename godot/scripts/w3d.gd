@@ -1,5 +1,6 @@
 class_name W3D
 extends Node
+static var gp_added := false
 ## Prova del motore 3D "top-down verticale, tutto poligoni": il villaggio nasce a blocchi attorno a chi cammina,
 ## i bordi della bolla sprofondano nel buio, il mondo si piega come un pianetino.
 ## Il mondo e' fatto di campi di densita' (erba, sassi, cespugli, alberi) e di lotti allineati alle strade:
@@ -9,18 +10,24 @@ extends Node
 const CHS := 24                 # lato di un blocco (unita' = 16 px del vecchio gioco)
 const GS := 0.4                 # lato di una cella del terreno
 const LC := 8.0                 # lato di un lotto (3x3 lotti per blocco)
-const CAM_H := 29.0
-const RES := [Vector2i(480, 270), Vector2i(320, 180), Vector2i(240, 135)]
-const SPEED := 8.6              # il gioco 2D va a 82 px/s = 5,1 unita/s; nel 3D sembrava al rallentatore (x1,4), e con la camera piu' lontana (x1,2) si compensa
+const CAM_H := 48.0
+const RES := [Vector2i(640, 360), Vector2i(960, 540), Vector2i(480, 270), Vector2i(320, 180)]
+const SPEED := 9.6              # il gioco 2D va a 82 px/s = 5,1 unita/s; nel 3D sembrava al rallentatore (x1,4), e con la camera piu' lontana (x1,2) si compensa
 const NPC_KINDS := ["goblin", "skeleton", "ghoul", "kobold", "orc", "wolf", "goblin_archer", "skel_archer"]
 const WOOD := Color(0.17, 0.115, 0.085)
 const STONE := Color(0.24, 0.235, 0.25)
 
 var seed_v := 1337
 var vp: SubViewport
+var sheet := false
+var extra_mats: Array = []
+var shadow_disc := false
+var env: Environment
 var cam: Camera3D
 var sun: DirectionalLight3D
 var mat: ShaderMaterial
+var mat_chr: ShaderMaterial
+var patterns := false
 var post_rect: TextureRect
 var post_mat: ShaderMaterial
 var hud: Label
@@ -54,10 +61,14 @@ var shot_wait := 0
 var nofx := false
 var no_shadow := false
 var gen_ms := 0.0
-var res_i := 1
+var res_i := 0
 var npcs: Array = []
 var char_style := 0
 var vox_cache: Dictionary = {}
+const TD_VOX := 0.0625 * 0.95
+var hero_kind := "necro"
+var omni_pos: Array = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
+var omni_en: Array = [0.0, 0.0, 0.0]
 var omnis: Array = []              # luci vere con ombre: le 3 piu' vicine tra torce, finestre e lanterna dell'eroe
 var disc_mesh: ArrayMesh
 var demo := true                 # demo giocabile: combattimento, nemici, boss, falo'
@@ -70,7 +81,10 @@ var cam_h := CAM_H
 
 
 func _ready() -> void:
-	RenderingServer.global_shader_parameter_add("w3d_player", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3.ZERO)
+	if not gp_added:
+		RenderingServer.global_shader_parameter_add("w3d_player", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3.ZERO)
+		gp_added = true
+	get_window().content_scale_size = Vector2i(960, 540)   # piu' pixel logici: meno pixellato (l'interfaccia viene scalata x2)
 	for arg in OS.get_cmdline_user_args():
 		if str(arg).begins_with("--shots="):
 			for s in str(arg).substr(8).split(";"):
@@ -82,6 +96,9 @@ func _ready() -> void:
 			cam_h = float(str(arg).substr(7))
 		if str(arg) == "--lineup":
 			lineup = true
+		if str(arg) == "--sheet":
+			lineup = true
+			sheet = true
 		if str(arg) == "--nofx":
 			nofx = true
 		if str(arg) == "--noshadow":
@@ -90,7 +107,15 @@ func _ready() -> void:
 			fade_a = float(str(arg).substr(9))
 		if str(arg).begins_with("--style="):
 			char_style = int(str(arg).substr(8))
+	if sheet:
+		get_window().content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+		get_window().content_scale_size = Vector2i(480, 270)
+		fade_a = 400.0
+		curve = 0.0
 	_build_view()
+	if sheet:
+		vp.size = Vector2i(1440, 810)
+		post_mat.set_shader_parameter("px", Vector2(1440, 810))
 	_new_world()
 	if not lineup and shots.is_empty():
 		combat = W3DCombat.new()
@@ -107,8 +132,13 @@ func _ready() -> void:
 	hud.position = Vector2(6, 250)
 	var cl := CanvasLayer.new()
 	cl.layer = 5
+	cl.scale = Vector2(2, 2)
 	cl.add_child(hud)
 	add_child(cl)
+
+
+func _exit_tree() -> void:
+	get_window().content_scale_size = Vector2i(480, 270)
 
 
 func _build_view() -> void:
@@ -118,33 +148,23 @@ func _build_view() -> void:
 	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	vp.msaa_3d = Viewport.MSAA_DISABLED
 	add_child(vp)
-	var env := Environment.new()
+	env = Environment.new()
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.01, 0.008, 0.02)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.46, 0.46, 0.5) if lineup else Color(0.30, 0.32, 0.48)
-	env.ambient_light_energy = 1.5 if lineup else 0.62
+	env.ambient_light_color = Color(0.46, 0.46, 0.5) if lineup else Color(0.42, 0.44, 0.6)
+	env.ambient_light_energy = (0.85 if sheet else 1.5) if lineup else 1.35
 	var we := WorldEnvironment.new()
 	we.environment = env
 	vp.add_child(we)
 	sun = DirectionalLight3D.new()
 	sun.light_color = Color(0.62, 0.68, 0.98)
-	sun.light_energy = 1.0 if lineup else 0.66
+	sun.light_energy = (0.7 if sheet else 1.0) if lineup else 0.66
 	sun.rotation_degrees = Vector3(-36, -35, 0)
 	sun.shadow_enabled = not no_shadow
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun.directional_shadow_max_distance = 60.0
 	vp.add_child(sun)
-	for i in 3:
-		var ol := OmniLight3D.new()
-		ol.light_color = Color(0.95, 0.8, 0.58)
-		ol.omni_range = 16.0
-		ol.omni_attenuation = 1.1
-		ol.light_energy = 1.2
-		ol.shadow_enabled = not no_shadow
-		ol.shadow_bias = 0.08
-		vp.add_child(ol)
-		omnis.append(ol)
 	cam = Camera3D.new()
 	cam.projection = Camera3D.PROJECTION_PERSPECTIVE
 	cam.fov = 38.6
@@ -155,6 +175,11 @@ func _build_view() -> void:
 	cam.current = true
 	mat = ShaderMaterial.new()
 	mat.shader = load("res://shaders/w3d.gdshader")
+	mat_chr = ShaderMaterial.new()
+	mat_chr.shader = mat.shader
+	mat_chr.set_shader_parameter("gamma_in", 2.0 if sheet else 1.0)
+	mat_chr.set_shader_parameter("boost", 1.35 if sheet else 1.9)
+	mat_chr.set_shader_parameter("sat_k", 1.3 if sheet else 1.7)
 	var cl := CanvasLayer.new()
 	cl.layer = 1
 	add_child(cl)
@@ -186,12 +211,20 @@ func _new_world() -> void:
 		fn.seed = seed_v + int(nn[1])
 		fn.frequency = float(nn[2])
 	_gen_roads()
+	if OS.get_cmdline_user_args().has("--graves"):
+		for gz in range(-8, 9):
+			for gx in range(-8, 9):
+				if _zone_grave(gx, gz):
+					print("GRAVE ", (gx * 3 + 1.5) * LC, " ", (gz * 3 + 1.5) * LC)
 	pos = (bonfires[1] as Vector2) + Vector2(0, 2.6)
+	if sheet:
+		pos = Vector2.ZERO
 	_build_hero()
 	if lineup:
 		var gb := W3DBuilder.new()
-		for gz in range(-20, 20):
-			for gx in range(-20, 20):
+		var gr := 45 if sheet else 20
+		for gz in range(-gr, gr):
+			for gx in range(-gr, gr):
 				var x := pos.x + gx
 				var z := pos.y + gz
 				gb.quad(Vector3(x, 0, z), Vector3(x + 1, 0, z), Vector3(x + 1, 0, z + 1), Vector3(x, 0, z + 1), gb.shade(Color(0.17, 0.155, 0.14), 0.08))
@@ -199,6 +232,8 @@ func _new_world() -> void:
 		gm.mesh = gb.mesh()
 		gm.material_override = mat
 		vp.add_child(gm)
+	if sheet:
+		_build_sheet()
 	_stream(true)
 	_update_cam()
 	if combat != null:
@@ -325,6 +360,10 @@ func _enqueue(k: Vector2i) -> void:
 	g.rn.seed = hash(Vector3i(k.x, k.y, seed_v))
 	o.rn.seed = hash(Vector3i(k.x, k.y, seed_v + 1))
 	v.rn.seed = hash(Vector3i(k.x, k.y, seed_v + 2))
+	o.sat = 1.55
+	o.con = 1.45
+	v.sat = 1.3
+	v.con = 1.2
 	jobs.append({"k": k, "x0": x0, "z0": z0, "g": g, "o": o, "v": v, "cols": [], "lamps": [], "sub": sub, "hs": [], "step": 0, "us": 0})
 	job_keys[k] = true
 
@@ -419,12 +458,12 @@ func _height(p: Vector2, rd: float) -> float:
 
 func _ground_col(p: Vector2, rd: float, rw: float) -> Color:
 	var a := n_soil.get_noise_2d(p.x, p.y)
-	var col := Color(0.098, 0.085, 0.078)
-	col = col.lerp(Color(0.05, 0.042, 0.042), clampf(-a * 1.8, 0.0, 1.0))
-	col = col.lerp(Color(0.14, 0.12, 0.105), clampf((a - 0.25) * 2.0, 0.0, 0.7))
+	var col := Color(0.15, 0.13, 0.12)
+	col = col.lerp(Color(0.085, 0.07, 0.07), clampf(-a * 1.8, 0.0, 1.0))
+	col = col.lerp(Color(0.21, 0.18, 0.155), clampf((a - 0.25) * 2.0, 0.0, 0.7))
 	var vg := n_veg.get_noise_2d(p.x, p.y)
 	if vg > 0.1:
-		col = col.lerp(Color(0.065, 0.085, 0.055), clampf((vg - 0.1) * 2.2, 0.0, 0.85))
+		col = col.lerp(Color(0.08, 0.105, 0.07), clampf((vg - 0.1) * 2.2, 0.0, 0.85))
 	var st := n_stain.get_noise_2d(p.x + 400.0, p.y - 300.0)
 	if st > 0.5:
 		col = col.lerp(Color(0.15, 0.035, 0.035), clampf((st - 0.5) * 3.0, 0.0, 0.7))
@@ -455,11 +494,11 @@ func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
 			var d := Vector3(x0 + (ii + 1) * GS, h11, z0 + (jj + 1) * GS)
 			var e := Vector3(x0 + ii * GS, h01, z0 + (jj + 1) * GS)
 			if (ii + jj) % 2 == 0:
-				g.tri(a, b, d, g.shade(col, 0.07))
-				g.tri(a, d, e, g.shade(col, 0.07))
+				g.tri(a, b, d, g.shade(col, 0.035))
+				g.tri(a, d, e, g.shade(col, 0.035))
 			else:
-				g.tri(a, b, e, g.shade(col, 0.07))
-				g.tri(b, d, e, g.shade(col, 0.07))
+				g.tri(a, b, e, g.shade(col, 0.035))
+				g.tri(b, d, e, g.shade(col, 0.035))
 			# ciottoli della strada principale: un sasso piatto per cella
 			if rdv.x < rdv.y * 0.5 + 0.1 and rdv.y > 2.3 and p.length() < 130.0 and g.rn.randf() < 0.92:
 				var sp := Vector3(p.x + g.rn.randf_range(-0.1, 0.1), _height(p, 3.0) + 0.03, p.y + g.rn.randf_range(-0.15, 0.15))
@@ -492,17 +531,19 @@ func _grass(j: Dictionary, half: int) -> void:
 
 
 func _tuft(o: W3DBuilder, p: Vector3, dens: float, tone: float) -> void:
-	var col := Color(0.14, 0.18, 0.09).lerp(Color(0.34, 0.30, 0.16), tone)
+	var pal := [Color(0.07, 0.10, 0.055), Color(0.10, 0.13, 0.07), Color(0.17, 0.15, 0.09), Color(0.13, 0.09, 0.06), Color(0.09, 0.11, 0.10), Color(0.20, 0.17, 0.10)]
+	var i0 := int(tone * 5.99)
+	var col: Color = (pal[i0] as Color).lerp(pal[(i0 + 1 + o.rn.randi() % 2) % 6], o.rn.randf_range(0.0, 0.6))
 	col.a = 0.9
 	var nb := 3 + int(dens * 2.5)
-	var h0 := lerpf(0.4, 1.1, dens) * o.rn.randf_range(0.75, 1.25)
+	var h0 := lerpf(0.4, 1.1, dens) * o.rn.randf_range(0.65, 1.3)
 	var lean := o.rn.randf() * TAU
 	for i in nb:
 		var a := lean + o.rn.randf_range(-1.2, 1.2) + i * 2.1
 		var dir := Vector3(cos(a), 0, sin(a))
 		var side := dir.cross(Vector3.UP) * 0.075
 		var hgt := h0 * o.rn.randf_range(0.6, 1.1)
-		o.tri(p - side, p + side, p + dir * (0.1 + hgt * 0.35) + Vector3(0, hgt, 0), o.shade(col, 0.25))
+		o.tri(p - side, p + side, p + dir * (0.1 + hgt * 0.35) + Vector3(0, hgt, 0), o.shade(col, 0.3))
 
 
 func _bone(o: W3DBuilder, p: Vector3) -> void:
@@ -696,7 +737,7 @@ func _lot(j: Dictionary, ix: int, iz: int) -> void:
 		"yard":
 			_yard(o, cp, tan_, toward, r, cols, float(pl["core"]))
 		"grave":
-			_grave_lot(o, ix, iz, r, cols)
+			_grave_lot(o, ix, iz, r, cols, lamps)
 		"wild":
 			var roll := r.randf()
 			if roll > 0.985:
@@ -770,51 +811,213 @@ func _yard(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Random
 				_barrel(o, q, r, cols)
 
 
-func _grave_lot(o: W3DBuilder, ix: int, iz: int, r: RandomNumberGenerator, cols: Array) -> void:
+## cimitero: caotico e vissuto. Lapidi grandi e storte, croci enormi, obelischi, sarcofagi, tombe aperte, tumuli, ossa;
+## al centro una cappella o un mausoleo, a volte un secondo mausoleo. Cancellata rotta e piena di buchi, alberi morti.
+func _grave_lot(o: W3DBuilder, ix: int, iz: int, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
 	var ox := ix * LC
 	var oz := iz * LC
 	var zx := posmod(ix, 3)
 	var zz := posmod(iz, 3)
-	for i in 4:
-		for jn in 3:
-			if r.randf() > 0.86:
-				continue
-			var q := Vector2(ox + 1.0 + i * 2.0, oz + 1.3 + jn * 2.6)
-			if float(_road_near(q)["d"]) < 2.2:
-				continue
-			var tilt := Basis(Vector3.FORWARD, r.randf_range(-0.16, 0.16)) * Basis(Vector3.RIGHT, r.randf_range(-0.1, 0.1))
-			var t := Transform3D(Basis(Vector3.UP, r.randf_range(-0.12, 0.12)) * tilt, Vector3(q.x, 0, q.y))
-			o.rock(Vector3(q.x, 0.1, q.y + 0.85), Vector3(0.75, 0.2, 1.6), Color(0.14, 0.11, 0.09), 0.1, 0.18)
-			var kind := r.randi() % 8
-			if kind < 3:
-				o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.5, 0)), Vector3(0.62, 1.0, 0.16), Color(0.30, 0.30, 0.32), 0.14, 8)
-				o.box(t * Transform3D(Basis(Vector3.FORWARD, 0.785), Vector3(0, 1.08, 0)), Vector3(0.42, 0.42, 0.16), Color(0.30, 0.30, 0.32), 0.14, 8)
-			elif kind < 5:
-				o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.65, 0)), Vector3(0.14, 1.3, 0.14), Color(0.24, 0.19, 0.15), 0.14, 8)
-				o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.95, 0)), Vector3(0.7, 0.14, 0.14), Color(0.24, 0.19, 0.15), 0.14, 8)
-			elif kind == 5:
-				o.cyl(t, 0.32, 0.12, 1.7, 4, Color(0.27, 0.27, 0.29), 0.14)
-			elif kind == 6:
-				o.rock(Vector3(q.x, 0.38, q.y), Vector3(0.6, 0.76, 0.5), Color(0.27, 0.27, 0.3), 0.14, 0.4, r.randf() * TAU)
-			else:
-				o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.3, 0)), Vector3(0.8, 0.6, 0.18), Color(0.26, 0.26, 0.28), 0.14, 8)
-			if r.randf() < 0.14:
-				o.box(Transform3D(Basis.IDENTITY, Vector3(q.x + 0.5, 0.15, q.y + 0.4)), Vector3(0.1, 0.22, 0.1), Color(0.9, 0.82, 0.6, 0.15), 0.0, 8)
-			if r.randf() < 0.09:
-				_bone(o, Vector3(q.x - 0.5, 0.05, q.y + 1.2))
-			cols.append(["c", q, 0.42])
+	var gx := floori(float(ix) / 3.0)
+	var gz := floori(float(iz) / 3.0)
+	var hz := fposmod(sin(float(gx) * 7.13 + float(gz) * 31.7 + float(seed_v) * 0.7) * 43758.5453, 1.0)
+	var hz2 := fposmod(sin(float(gx) * 3.9 + float(gz) * 17.3 + float(seed_v) * 0.31) * 43758.5453, 1.0)
+	var center := Vector2(ox + LC * 0.5, oz + LC * 0.5)
+	var built := false
+	if zx == 1 and zz == 1:
+		if hz > 0.38:
+			_chapel(o, center + Vector2(r.randf_range(-0.6, 0.6), 0), r.randf_range(-0.12, 0.12), r, cols, lamps)
+		else:
+			_mausoleum(o, center, r.randf_range(-0.1, 0.1), r, cols, lamps)
+		built = true
+	elif ((zx == 0 and zz == 2) or (zx == 2 and zz == 0)) and hz2 > 0.55 and ((zx == 0) == (hz2 > 0.78)):
+		_mausoleum(o, center + Vector2(r.randf_range(-0.8, 0.8), r.randf_range(-0.8, 0.8)), r.randf_range(-0.7, 0.7), r, cols, lamps)
+		built = true
+	# lapidi: gruppi disordinati, raggruppate attorno a 1-2 centri (famiglie), qualche isolata
+	var clusters: Array = []
+	for i in r.randi_range(1, 2):
+		clusters.append(Vector2(ox + r.randf_range(1.5, LC - 1.5), oz + r.randf_range(1.5, LC - 1.5)))
+	var n := r.randi_range(3, 6) if built else r.randi_range(5, 9)
+	for i in n:
+		var q: Vector2
+		if r.randf() < 0.7:
+			var cc: Vector2 = clusters[r.randi() % clusters.size()]
+			q = cc + Vector2(r.randfn(0.0, 1.5), r.randfn(0.0, 1.5))
+		else:
+			q = Vector2(ox + r.randf_range(0.6, LC - 0.6), oz + r.randf_range(0.6, LC - 0.6))
+		if float(_road_near(q)["d"]) < 2.4 or not _free(q, 0.9, cols):
+			continue
+		_grave_item(o, q, r, cols, lamps)
+	# cancellata rotta lungo il perimetro: pezzi con molti buchi, qualche palo piegato
+	var edges: Array = []
 	if zx == 0:
-		_fence_run(o, Vector2(ox + 0.1, oz), Vector2(ox + 0.1, oz + LC), r, cols, false)
+		edges.append([Vector2(ox + 0.1, oz), Vector2(ox + 0.1, oz + LC)])
 	if zx == 2:
-		_fence_run(o, Vector2(ox + LC - 0.1, oz), Vector2(ox + LC - 0.1, oz + LC), r, cols, false)
+		edges.append([Vector2(ox + LC - 0.1, oz), Vector2(ox + LC - 0.1, oz + LC)])
 	if zz == 0:
-		_fence_run(o, Vector2(ox, oz + 0.1), Vector2(ox + LC, oz + 0.1), r, cols, false)
+		edges.append([Vector2(ox, oz + 0.1), Vector2(ox + LC, oz + 0.1)])
 	if zz == 2:
-		_fence_run(o, Vector2(ox, oz + LC - 0.1), Vector2(ox + LC, oz + LC - 0.1), r, cols, zx == 1)
-	if (zx == 0 or zx == 2) and (zz == 0 or zz == 2):
-		_dead_tree(o, Vector2(ox + (1.2 if zx == 0 else LC - 1.2), oz + (1.2 if zz == 0 else LC - 1.2)), r, cols)
-	elif r.randf() < 0.3:
+		edges.append([Vector2(ox, oz + LC - 0.1), Vector2(ox + LC, oz + LC - 0.1)])
+	for ed in edges:
+		var a: Vector2 = ed[0]
+		var b2: Vector2 = ed[1]
+		var parts := 4
+		for pi in parts:
+			if r.randf() < 0.32:
+				continue
+			var pa := a.lerp(b2, float(pi) / parts)
+			var pb := a.lerp(b2, float(pi + 1) / parts - r.randf_range(0.0, 0.07))
+			_fence_run(o, pa, pb, r, cols, false)
+	if (zx == 0 or zx == 2) and (zz == 0 or zz == 2) and r.randf() < 0.8:
+		_dead_tree(o, Vector2(ox + (1.4 if zx == 0 else LC - 1.4), oz + (1.4 if zz == 0 else LC - 1.4)), r, cols)
+	for i in r.randi_range(0, 2):
 		_bush(o, Vector2(ox + r.randf_range(1, LC - 1), oz + r.randf_range(1, LC - 1)), r, cols)
+	for i in r.randi_range(1, 4):
+		_bone(o, Vector3(ox + r.randf_range(0.5, LC - 0.5), 0.05, oz + r.randf_range(0.5, LC - 0.5)))
+
+
+func _grave_item(o: W3DBuilder, q: Vector2, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
+	var stone := Color(0.30, 0.30, 0.32).lerp(Color(0.24, 0.30, 0.25), r.randf() * 0.5)
+	var yaw := r.randf() * TAU if r.randf() < 0.3 else r.randf_range(-0.6, 0.6)
+	var lean := Basis(Vector3.FORWARD, r.randf_range(-0.28, 0.28)) * Basis(Vector3.RIGHT, r.randf_range(-0.2, 0.2))
+	var t := Transform3D(Basis(Vector3.UP, yaw) * lean, Vector3(q.x, 0, q.y))
+	var kind := r.randf()
+	if kind < 0.28:
+		# lapide alta con cima arrotondata o a punta
+		var h := r.randf_range(1.5, 2.3)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h * 0.5, 0)), Vector3(r.randf_range(0.95, 1.3), h, 0.3), stone, 0.16, 8)
+		o.box(t * Transform3D(Basis(Vector3.FORWARD, 0.785), Vector3(0, h + 0.05, 0)), Vector3(0.78, 0.78, 0.3), stone, 0.16, 8)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h * 0.55, -0.17)), Vector3(0.5, 0.09, 0.06), stone * 0.6, 0.1, 8)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h * 0.38, -0.17)), Vector3(0.36, 0.07, 0.06), stone * 0.6, 0.1, 8)
+		cols.append(["c", q, 0.6])
+	elif kind < 0.5:
+		# croce grande, di pietra o di legno
+		var wood := r.randf() < 0.4
+		var cc := Color(0.27, 0.19, 0.14) if wood else stone * 1.08
+		var h2 := r.randf_range(2.0, 3.0)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h2 * 0.5, 0)), Vector3(0.28, h2, 0.28), cc, 0.15, 8)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h2 * 0.72, 0)), Vector3(1.35, 0.26, 0.26), cc, 0.15, 8)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.17, 0)), Vector3(0.9, 0.34, 0.9), stone * 0.8, 0.15, 8)
+		cols.append(["c", q, 0.55])
+	elif kind < 0.62:
+		# obelisco
+		var h3 := r.randf_range(2.6, 3.8)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.28, 0)), Vector3(1.2, 0.56, 1.2), stone * 0.85, 0.15, 8)
+		o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.55, 0)), 0.5, 0.17, h3, 4, stone * 1.1, 0.16)
+		o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.55 + h3, 0)), 0.17, 0.0, 0.5, 4, stone * 1.2, 0.16, false)
+		cols.append(["c", q, 0.7])
+	elif kind < 0.74:
+		# sarcofago con coperchio storto
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.4, 0)), Vector3(1.3, 0.8, 2.5), stone * 0.9, 0.16, 8)
+		o.box(t * Transform3D(Basis(Vector3.UP, r.randf_range(-0.1, 0.1)), Vector3(0.12, 0.88, 0.1)), Vector3(1.45, 0.2, 2.65), stone * 1.12, 0.16, 8)
+		cols.append(["b", q, Vector2(0.78, 1.38), yaw])
+	elif kind < 0.84:
+		# tomba aperta: buca scura, terra smossa, assi
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.03, 0)), Vector3(1.15, 0.06, 2.3), Color(0.015, 0.012, 0.02), 0.0, 8)
+		for si in 2:
+			var sd := -1.0 if si == 0 else 1.0
+			o.rock(t * Vector3(sd * 0.95, 0.2, r.randf_range(-0.5, 0.5)), Vector3(0.7, 0.42, 1.8), Color(0.19, 0.14, 0.11), 0.16, 0.35, yaw)
+		o.box(t * Transform3D(Basis(Vector3.FORWARD, r.randf_range(0.3, 0.5)), Vector3(0.1, 0.35, 0.3)), Vector3(0.14, 0.05, 1.5), WOOD, 0.14, 8)
+		o.box(t * Transform3D(Basis(Vector3.UP, 0.2) * Basis(Vector3.FORWARD, -0.2), Vector3(0.3, 0.15, -0.5)), Vector3(0.14, 0.05, 1.2), WOOD, 0.14, 8)
+		cols.append(["b", q, Vector2(0.6, 1.2), yaw])
+	elif kind < 0.93:
+		# tumulo di terra con piccola croce e fiori secchi
+		o.rock(Vector3(q.x, 0.25, q.y), Vector3(1.0, 0.5, 2.0), Color(0.2, 0.15, 0.11), 0.16, 0.3, yaw)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.75, -1.0)), Vector3(0.1, 1.0, 0.1), WOOD, 0.15, 8)
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 1.0, -1.0)), Vector3(0.55, 0.1, 0.1), WOOD, 0.15, 8)
+		if r.randf() < 0.5:
+			o.box(Transform3D(Basis.IDENTITY, Vector3(q.x + 0.4, 0.14, q.y - 0.7)), Vector3(0.1, 0.2, 0.1), Color(0.95, 0.82, 0.55, 0.15), 0.0, 8)
+			lamps.append(Vector4(q.x + 0.4, 0.4, q.y - 0.7, 0.45))
+		cols.append(["b", q, Vector2(0.55, 1.0), yaw])
+	else:
+		# lapide spezzata e frammenti
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.55, 0)), Vector3(1.0, 1.1, 0.3), stone, 0.16, 8)
+		o.rock(t * Vector3(0.9, 0.2, 0.5), Vector3(0.6, 0.4, 0.5), stone * 0.9, 0.16, 0.4, yaw)
+		o.rock(t * Vector3(-0.7, 0.15, 0.9), Vector3(0.5, 0.3, 0.4), stone * 0.85, 0.16, 0.4, yaw)
+		cols.append(["c", q, 0.6])
+
+
+func _mausoleum(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
+	var stone := Color(0.30, 0.30, 0.33)
+	var t := Transform3D(Basis(Vector3.UP, yaw), Vector3(p.x, 0, p.y))
+	var w := 4.6
+	var d := 4.2
+	var h := 3.4
+	for i in 3:
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.15 + i * 0.0, d * 0.5 + 0.5 + i * 0.5)), Vector3(w + 0.4, 0.3 - 0.0, 0.6), stone * (0.8 + 0.06 * i), 0.14, 8)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h * 0.5, 0)), Vector3(w, h, d), stone, 0.16, 8)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h * 0.5 + 0.05, 0)), Vector3(w + 0.25, 0.22, d + 0.25), stone * 0.75, 0.12, 8)
+	# frontone triangolare e tetto
+	var a: Vector3 = t * Vector3(-w * 0.5 - 0.3, h + 0.1, d * 0.5 + 0.3)
+	var b: Vector3 = t * Vector3(w * 0.5 + 0.3, h + 0.1, d * 0.5 + 0.3)
+	var c: Vector3 = t * Vector3(0, h + 1.5, d * 0.5 + 0.3)
+	o.tri(a, b, c, o.shade(stone * 1.05, 0.15))
+	o.tri(b, a, c, o.shade(stone * 0.8, 0.15))
+	var e0: Vector3 = t * Vector3(-w * 0.5 - 0.3, h + 0.1, -d * 0.5 - 0.3)
+	var e1: Vector3 = t * Vector3(w * 0.5 + 0.3, h + 0.1, -d * 0.5 - 0.3)
+	var rf0: Vector3 = t * Vector3(0, h + 1.5, -d * 0.5 - 0.3)
+	o.lattice(a, a + (e0 - a), c, rf0, 1, 1, stone * 0.7, 0.05, 0.0, Vector3.UP)
+	o.lattice(b, e1, c, rf0, 1, 1, stone * 0.75, 0.05, 0.0, Vector3.UP)
+	# colonne davanti, porta scura, cancelletto, statue e croce
+	for sx in [-1.7, -0.6, 0.6, 1.7]:
+		o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(sx, 0.3, d * 0.5 + 0.55)), 0.26, 0.22, h - 0.3, 6, stone * 1.1, 0.14)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 1.25, d * 0.5 + 0.06)), Vector3(1.5, 2.5, 0.2), Color(0.02, 0.015, 0.025), 0.0, 8)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 1.0, d * 0.5 + 0.2)), Vector3(1.0, 2.0, 0.07), Color(0.12, 0.1, 0.1), 0.1, 8)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h + 1.9, d * 0.5 + 0.3)), Vector3(0.18, 0.9, 0.18), stone * 1.1, 0.14, 8)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h + 2.1, d * 0.5 + 0.3)), Vector3(0.7, 0.16, 0.18), stone * 1.1, 0.14, 8)
+	for sx in [-1.0, 1.0]:
+		o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(sx * 3.2, 0.0, d * 0.5 + 0.6)), 0.4, 0.3, 1.3, 5, stone * 0.9, 0.14)
+		o.rock(t * Vector3(sx * 3.2, 1.7, d * 0.5 + 0.6), Vector3(0.55, 0.8, 0.55), stone * 1.1, 0.14, 0.3, 0.0)
+	var lp: Vector3 = t * Vector3(-1.2, 1.6, d * 0.5 + 0.9)
+	o.box(Transform3D(Basis.IDENTITY, lp), Vector3(0.22, 0.34, 0.22), Color(0.9, 0.85, 0.6, 0.15), 0.0, 8)
+	lamps.append(Vector4(lp.x, lp.y, lp.z, 0.9))
+	cols.append(["b", p, Vector2(w * 0.5 + 0.3, d * 0.5 + 0.3), yaw])
+	cols.append(["b", p + Vector2(sin(yaw), cos(yaw)) * (d * 0.5 + 0.9), Vector2(w * 0.5, 0.35), yaw])
+
+
+func _chapel(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
+	var wall := Color(0.27, 0.26, 0.28)
+	var slate := Color(0.14, 0.15, 0.19)
+	var t := Transform3D(Basis(Vector3.UP, yaw), Vector3(p.x, 0, p.y))
+	var w := 4.4
+	var d := 6.6
+	var h := 3.0
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.2, 0)), Vector3(w + 0.5, 0.4, d + 0.5), wall * 0.75, 0.12, 8)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, h * 0.5, 0)), Vector3(w, h, d), wall, 0.16, 8)
+	# tetto a falde (con buchi) e frontone
+	var ov := 0.5
+	for sgn in [1.0, -1.0]:
+		var e0: Vector3 = t * Vector3(sgn * (w * 0.5 + ov), h - 0.1, -(d * 0.5 + ov))
+		var e1: Vector3 = t * Vector3(sgn * (w * 0.5 + ov), h - 0.1, d * 0.5 + ov)
+		var rr0: Vector3 = t * Vector3(0, h + 2.0, -(d * 0.5 + ov))
+		var rr1: Vector3 = t * Vector3(0, h + 2.0, d * 0.5 + ov)
+		var nrm: Vector3 = (t.basis * Vector3(sgn * 2.0, w * 0.5 + ov, 0)).normalized()
+		o.lattice(e0, e1, rr0, rr1, 1, 1, slate, 0.05, 0.0, nrm, 0.0, 0.0)
+		o.quad(e0 - nrm * 0.18, e1 - nrm * 0.18, rr1 - nrm * 0.18, rr0 - nrm * 0.18, Color(0.04, 0.035, 0.04))
+	var fa: Vector3 = t * Vector3(-w * 0.5, h, d * 0.5)
+	var fb: Vector3 = t * Vector3(w * 0.5, h, d * 0.5)
+	var fc: Vector3 = t * Vector3(0, h + 2.0, d * 0.5)
+	o.tri(fa, fb, fc, o.shade(wall * 1.05, 0.15))
+	o.tri(fb, fa, fc, o.shade(wall * 0.8, 0.15))
+	# campanile
+	var tw := Transform3D(t.basis, t * Vector3(0, 0, -d * 0.5 - 0.6))
+	o.box(tw * Transform3D(Basis.IDENTITY, Vector3(0, 3.0, 0)), Vector3(2.0, 6.0, 2.0), wall * 1.05, 0.16, 8)
+	o.box(tw * Transform3D(Basis.IDENTITY, Vector3(0, 6.1, 0)), Vector3(2.3, 0.3, 2.3), wall * 0.7, 0.12, 8)
+	o.cyl(tw * Transform3D(Basis(Vector3.UP, 0.785), Vector3(0, 6.25, 0)), 1.6, 0.0, 2.6, 4, slate * 1.2, 0.2, false)
+	o.box(tw * Transform3D(Basis.IDENTITY, Vector3(0, 5.2, 1.02)), Vector3(0.7, 1.1, 0.1), Color(0.02, 0.015, 0.025), 0.0, 8)
+	o.box(tw * Transform3D(Basis.IDENTITY, Vector3(0, 8.9, 0)), Vector3(0.14, 0.8, 0.14), wall * 1.2, 0.14, 8)
+	o.box(tw * Transform3D(Basis.IDENTITY, Vector3(0, 9.0, 0)), Vector3(0.55, 0.14, 0.14), wall * 1.2, 0.14, 8)
+	# porta ad arco, vetrate accese, scalini
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 1.1, d * 0.5 + 0.06)), Vector3(1.4, 2.2, 0.16), Color(0.03, 0.02, 0.03), 0.0, 8)
+	o.box(t * Transform3D(Basis(Vector3.FORWARD, 0.785), Vector3(0, 2.25, d * 0.5 + 0.06)), Vector3(1.0, 1.0, 0.16), Color(0.03, 0.02, 0.03), 0.0, 8)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.12, d * 0.5 + 0.6)), Vector3(2.4, 0.24, 1.0), wall * 0.8, 0.12, 8)
+	for sz in [-1.7, 0.2, 2.0]:
+		for sd in [-1.0, 1.0]:
+			var wp: Vector3 = t * Vector3(sd * (w * 0.5 + 0.05), 1.7, sz)
+			o.box(Transform3D(t.basis * Basis(Vector3.UP, 0.0), wp), Vector3(0.14, 1.3, 0.6), Color(0.95, 0.8, 0.5, 0.2), 0.0, 8)
+			lamps.append(Vector4(wp.x + sd * t.basis.x.x * 0.7, 1.7, wp.z + sd * t.basis.x.z * 0.7, 0.5))
+	cols.append(["b", p, Vector2(w * 0.5 + 0.3, d * 0.5 + 0.3), yaw])
+	cols.append(["b", p + Vector2(sin(yaw), cos(yaw)) * (-d * 0.5 - 0.6), Vector2(1.2, 1.2), yaw])
 
 
 # ------------------------------------------------------------------ casa
@@ -844,10 +1047,10 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		var j2 := (i + 1) % 4
 		var nrm := Vector3.UP.cross((bc[j2] - bc[i]).normalized()).normalized()
 		var ln: float = (bc[i] - bc[j2]).length()
-		o.lattice(bc[i], bc[j2], tc[i], tc[j2], maxi(2, int(ln / 2.2)), 2, base_col, 0.3, 0.22, nrm)
+		o.lattice(bc[i], bc[j2], tc[i], tc[j2], 1, 1, base_col, 0.06, 0.0, nrm)
 		if i == 0 or i == 2:
 			var ap: Vector3 = apex_a if i == 0 else apex_b
-			var cen: Vector3 = (tc[i] + tc[j2] + ap) / 3.0 + nrm * r.randf_range(-0.05, 0.18)
+			var cen: Vector3 = (tc[i] + tc[j2] + ap) / 3.0
 			o.tri(tc[i], tc[j2], cen, o.shade(base_col, 0.2))
 			o.tri(tc[j2], ap, cen, o.shade(base_col, 0.2))
 			o.tri(ap, tc[i], cen, o.shade(base_col, 0.2))
@@ -859,7 +1062,7 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		var r0: Vector3 = t0 * Vector3(0, wh + rh + 0.06, -(d * 0.5 + ov))
 		var r1: Vector3 = t0 * Vector3(0, wh + rh + 0.06, d * 0.5 + ov)
 		var nrm2: Vector3 = (t0.basis * Vector3(sgn * rh, w * 0.5 + ov, 0)).normalized()
-		o.lattice(e0, e1, r0, r1, maxi(3, int((d + 2.0 * ov) / 2.2)), 3, roof_col, 0.34, 0.34, nrm2, holes, 0.3)
+		o.lattice(e0, e1, r0, r1, 1, 1, roof_col, 0.05, 0.0, nrm2, 0.0, 0.0)
 		o.quad(e0 - nrm2 * 0.18, e1 - nrm2 * 0.18, r1 - nrm2 * 0.18, r0 - nrm2 * 0.18, Color(0.04, 0.035, 0.04))
 	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(0, wh + rh + 0.06, 0)), Vector3(0.34, 0.26, d + 2.0 * ov), roof_col * 0.7, 0.12, 8)
 	var cxl := r.randf_range(-w * 0.22, w * 0.22)
@@ -1127,6 +1330,12 @@ func _sword(b: W3DBuilder, x: float, y: float, blade: Color) -> void:
 	_sh(b, [x, y, -0.3], [x, y, 0.45], 0.06, 0.06, Color(0.25, 0.17, 0.1), 0.5)
 
 
+func _sword_side(b: W3DBuilder, x: float, y: float, blade: Color) -> void:
+	_sh(b, [x - 0.1, y, 0.0], [x + 1.9, y, 0.5], 0.1, 0.035, blade, 0.12)
+	_sh(b, [x + 0.18, y, -0.38], [x + 0.3, y, 0.42], 0.07, 0.04, Color(0.55, 0.45, 0.2), 0.5)
+	_sh(b, [x - 0.1, y, 0.0], [x - 0.65, y, -0.05], 0.06, 0.06, Color(0.25, 0.17, 0.1), 0.5)
+
+
 func _bow(b: W3DBuilder, x: float, col: Color) -> void:
 	for i in 4:
 		var z0 := -1.2 + i * 0.6
@@ -1148,7 +1357,7 @@ func _m_hero(b: W3DBuilder, f: W3DBuilder) -> void:
 	_shm(b, [0.15, 1.12, 0.0], [0.82, 0.98, -0.02], 0.22, 0.17, steel, 0.5)
 	_sh(b, [-0.7, 1.0, 0.0], [-0.55, 0.78, -0.55], 0.12, 0.1, steel * 0.8, 0.4)
 	_sh(b, [0.7, 1.0, 0.0], [0.82, 0.92, -0.5], 0.13, 0.1, steel * 0.8, 0.4)
-	_sword(b, 0.82, 0.92, Color(0.72, 0.74, 0.82, 0.8))
+	_sword_side(b, 0.78, 0.92, Color(0.72, 0.74, 0.82, 0.8))
 	# mantello e sciarpa: parte fluente
 	_sh(f, [0, 1.15, 0.12], [0, 0.35, 2.0], 0.85, 0.05, Color(0.27, 0.08, 0.09), 0.3)
 	_sh(f, [-0.3, 1.1, 0.12], [-1.0, 0.3, 1.55], 0.32, 0.04, Color(0.2, 0.07, 0.08), 0.35)
@@ -1276,6 +1485,28 @@ func _m_wolf(b: W3DBuilder, f: W3DBuilder) -> void:
 	_sh(f, [0, 0.7, 0.85], [0.35, 0.85, 2.0], 0.12, 0.08, fur * 0.7, 0.4)
 
 
+func _m_necro(b: W3DBuilder, f: W3DBuilder) -> void:
+	var robe := Color(0.20, 0.15, 0.27)
+	var trim := Color(0.34, 0.28, 0.42)
+	_sh(b, [0, 0.1, 0.1], [0, 1.25, 0.0], 0.5, 0.4, robe, 0.55)
+	_sh(b, [0, 0.95, 0.0], [0.1, 2.3, 0.15], 0.5, 0.5, Color(0.16, 0.12, 0.22), 0.3)
+	_sh(b, [0, 1.25, -0.1], [0, 1.4, -0.72], 0.24, 0.22, Color(0.03, 0.03, 0.05), 0.5)
+	_glow(b, -0.1, 1.38, -0.58, 0.07, Color(0.55, 0.95, 0.65, 0.2))
+	_glow(b, 0.1, 1.38, -0.58, 0.07, Color(0.55, 0.95, 0.65, 0.2))
+	_shm(b, [0.15, 1.1, 0.0], [0.78, 0.95, -0.1], 0.2, 0.15, trim, 0.5)
+	_sh(b, [0.7, 0.95, 0.0], [0.8, 0.9, -0.55], 0.1, 0.08, Color(0.8, 0.78, 0.7), 0.4)
+	# bastone con teschio
+	_sh(b, [0.82, 0.9, 1.1], [0.84, 0.95, -1.6], 0.06, 0.05, Color(0.28, 0.2, 0.14), 0.5)
+	_sh(b, [0.84, 1.0, -1.45], [0.86, 1.2, -2.1], 0.22, 0.2, Color(0.8, 0.78, 0.68), 0.45)
+	_glow(b, 0.78, 1.28, -1.9, 0.05, Color(0.55, 0.95, 0.65, 0.2))
+	_glow(b, 0.94, 1.28, -1.9, 0.05, Color(0.55, 0.95, 0.65, 0.2))
+	_sh(b, [0.85, 1.1, -2.0], [0.85, 1.4, -2.6], 0.12, 0.12, Color(0.45, 0.95, 0.6, 0.15), 0.4)
+	_sh(f, [0, 1.15, 0.12], [0, 0.3, 2.1], 0.9, 0.05, Color(0.16, 0.11, 0.23), 0.3)
+	_sh(f, [-0.3, 1.1, 0.12], [-1.1, 0.25, 1.6], 0.34, 0.04, Color(0.13, 0.09, 0.19), 0.35)
+	_sh(f, [0.3, 1.1, 0.12], [1.1, 0.25, 1.6], 0.34, 0.04, Color(0.13, 0.09, 0.19), 0.35)
+	_sh(f, [0, 0.9, 0.2], [0.3, 0.5, 1.2], 0.12, 0.03, Color(0.4, 0.8, 0.5, 0.3), 0.4)
+
+
 func _char_mesh(kind: String) -> ArrayMesh:
 	var key := "model_" + kind
 	if vox_cache.has(key):
@@ -1290,6 +1521,11 @@ func _char_flow(kind: String) -> ArrayMesh:
 
 
 func _char_build(kind: String) -> void:
+	if W3DChars.has(kind):
+		var mm: Array = W3DChars.build(kind)
+		vox_cache["model_" + kind] = mm[0]
+		vox_cache["flow_" + kind] = mm[1]
+		return
 	var b := W3DBuilder.new()
 	var f := W3DBuilder.new()
 	b.rn.seed = hash(kind)
@@ -1297,6 +1533,8 @@ func _char_build(kind: String) -> void:
 	match kind:
 		"hero":
 			_m_hero(b, f)
+		"necro":
+			_m_necro(b, f)
 		"goblin":
 			_m_goblin(b, f, false)
 		"goblin_archer":
@@ -1321,6 +1559,8 @@ func _char_build(kind: String) -> void:
 
 
 func _pivot(kind: String) -> Vector3:
+	if W3DChars.has(kind):
+		return W3DChars.pivot(kind)
 	return Vector3(0, 0.8, 0.8) if kind == "wolf" else Vector3(0, 1.0, 0.1)
 
 
@@ -1367,14 +1607,15 @@ func _disc() -> ArrayMesh:
 func _vox_node(sname: String, vox: float) -> Node3D:
 	var n := Node3D.new()
 	var sd := MeshInstance3D.new()
+	sd.visible = shadow_disc
 	sd.mesh = _disc()
-	sd.material_override = mat
+	sd.material_override = mat_chr
 	sd.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var body := Node3D.new()
 	n.add_child(body)
 	var mi := MeshInstance3D.new()
 	mi.mesh = _vox_mesh(sname, vox)
-	mi.material_override = mat
+	mi.material_override = mat_chr
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	body.add_child(mi)
 	if char_style == 0:
@@ -1384,7 +1625,7 @@ func _vox_node(sname: String, vox: float) -> Node3D:
 			fl.position = _pivot(sname)
 			var fi := MeshInstance3D.new()
 			fi.mesh = fm
-			fi.material_override = mat
+			fi.material_override = mat_chr
 			fi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			fl.add_child(fi)
 			body.add_child(fl)
@@ -1397,14 +1638,14 @@ func _vox_node(sname: String, vox: float) -> Node3D:
 func _build_hero() -> void:
 	if hero != null and is_instance_valid(hero):
 		hero.queue_free()
-	hero = _vox_node("hero", 0.075)
+	hero = _vox_node(hero_kind, 0.075)
 	hero_body = hero.get_child(0)
 	for n in npcs:
 		(n["node"] as Node3D).queue_free()
 	npcs.clear()
 	var rr := RandomNumberGenerator.new()
 	rr.seed = seed_v + 99
-	if lineup:
+	if lineup and not sheet:
 		var kinds := ["hero", "goblin", "goblin_archer", "skeleton", "skel_archer", "ghoul", "kobold", "orc", "wolf"]
 		for i in kinds.size():
 			var nd := _vox_node(kinds[i], 0.075)
@@ -1431,7 +1672,10 @@ func _spawn_npc(rr: RandomNumberGenerator) -> void:
 func _face(nd: Node3D, dv: Vector2, dt: float, moving: bool) -> void:
 	if char_style == 0:
 		if moving:
-			nd.rotation.y = lerp_angle(nd.rotation.y, atan2(-dv.x, -dv.y), 1.0 - exp(-12.0 * dt))
+			if nd == hero:
+				nd.rotation.y = atan2(-dv.x, -dv.y)   # l'eroe gira all'istante
+			else:
+				nd.rotation.y = lerp_angle(nd.rotation.y, atan2(-dv.x, -dv.y), 1.0 - exp(-12.0 * dt))
 	elif absf(dv.x) > 0.2:
 		nd.scale.x = -1.0 if dv.x < 0.0 else 1.0
 		nd.rotation.y = 0.0
@@ -1468,6 +1712,127 @@ func _npc_update(dt: float) -> void:
 			npcs.remove_at(i)
 	if not lineup and npcs.size() < 14 and rr.randf() < 0.05:
 		_spawn_npc(rr)
+
+
+# ------------------------------------------------------------------ sprite dall'alto (assets/topdown)
+var td_cells: Dictionary = {}
+
+
+func td_has(name: String) -> bool:
+	return ResourceLoader.exists("res://assets/topdown/%s.png" % name) and ResourceLoader.exists("res://assets/topdown/%s_h.png" % name)
+
+
+func td_get(name: String) -> Dictionary:
+	if td_cells.has(name):
+		return td_cells[name]
+	var im: Image = (load("res://assets/topdown/%s.png" % name) as Texture2D).get_image()
+	var hm: Image = (load("res://assets/topdown/%s_h.png" % name) as Texture2D).get_image()
+	for q in [im, hm]:
+		if (q as Image).is_compressed():
+			(q as Image).decompress()
+		(q as Image).convert(Image.FORMAT_RGBA8)
+	var b := W3DBuilder.new()
+	var cells := b.hcells(im, hm)
+	var res := {"cells": cells, "w": im.get_width()}
+	td_cells[name] = res
+	return res
+
+
+func td_mesh(name: String) -> ArrayMesh:
+	var key := "tdm_" + name
+	if vox_cache.has(key):
+		return vox_cache[key]
+	var d := td_get(name)
+	var b := W3DBuilder.new()
+	b.build_cells(d["cells"], int(d["w"]), TD_VOX)
+	var m := b.mesh()
+	vox_cache[key] = m
+	return m
+
+
+# ------------------------------------------------------------------ mockup: sprite originale | 3D esatto | modello stilizzato
+func _exact_mesh(kind: String) -> ArrayMesh:
+	var key := "exact_" + kind
+	if vox_cache.has(key):
+		return vox_cache[key]
+	var img: Image = Game.tex(kind).get_image()
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+	var b := W3DBuilder.new()
+	b.voxel(img, 0.078, 2, 3)
+	var m := b.mesh()
+	vox_cache[key] = m
+	return m
+
+
+func _topdown_mesh(kind: String) -> ArrayMesh:
+	var key := "td_" + kind
+	if vox_cache.has(key):
+		return vox_cache[key]
+	var img: Image = Game.tex(kind).get_image()
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+	var b := W3DBuilder.new()
+	b.topdown(img, 1.0 / 16.0 * 1.1)
+	var m := b.mesh()
+	vox_cache[key] = m
+	return m
+
+
+func _build_sheet() -> void:
+	var kinds: Array = W3DChars.KINDS
+	for i in kinds.size():
+		var kind: String = kinds[i]
+		var col := i % 3
+		var row := i / 3
+		var x0 := col * 9.4 - 9.4
+		var z0 := row * 4.4
+		# sprite originale, disteso a terra
+		var sp := Sprite3D.new()
+		sp.texture = Game.tex(kind)
+		sp.pixel_size = 0.078
+		sp.rotation_degrees = Vector3(-90, 0, 0)
+		sp.position = Vector3(x0 - 3.3, 0.06, z0 - 0.5)
+		sp.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		sp.shaded = false
+		vp.add_child(sp)
+		# 3D esatto: ogni pixel un cubetto
+		var ex := Node3D.new()
+		var mi := MeshInstance3D.new()
+		mi.mesh = _exact_mesh(kind)
+		mi.material_override = mat_chr
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		ex.add_child(mi)
+		ex.position = Vector3(x0 - 1.1, 0, z0 - 0.5)
+		vp.add_child(ex)
+		# 3D esatto DALL'ALTO: lo stesso sprite ricostruito come solido e letto dall'alto
+		var td := Node3D.new()
+		var tmi := MeshInstance3D.new()
+		tmi.mesh = td_mesh(kind) if td_has(kind) else _topdown_mesh(kind)
+		tmi.material_override = mat_chr
+		tmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		td.add_child(tmi)
+		td.position = Vector3(x0 + 1.1, 0, z0)
+		vp.add_child(td)
+		# modello stilizzato
+		var nd := _vox_node(kind, 0.075)
+		nd.position = Vector3(x0 + 3.3, 0, z0)
+		nd.scale = Vector3.ONE * 0.8
+		# etichetta
+		var lb := Label3D.new()
+		lb.text = kind.to_upper()
+		lb.font = Game.font()
+		lb.font_size = 36
+		lb.pixel_size = 0.016
+		lb.rotation_degrees = Vector3(-90, 0, 0)
+		lb.modulate = Color(1, 0.9, 0.5)
+		lb.outline_size = 8
+		lb.no_depth_test = true
+		lb.position = Vector3(x0, 0.2, z0 + 1.8)
+		vp.add_child(lb)
+	hero.visible = false
 
 
 # ------------------------------------------------------------------ gioco
@@ -1515,7 +1880,7 @@ func _process(dt: float) -> void:
 		combat.w_dir = dir
 		step = combat.hero_step(dir, dt)
 	if moving and (combat == null or combat.free_turn()):
-		facing = facing.lerp(dir, 1.0 - exp(-14.0 * dt)).normalized()
+		facing = dir
 	if step.length() > 0.0001:
 		if not _blocked(pos + Vector2(step.x, 0), 0.34):
 			pos.x += step.x
@@ -1526,6 +1891,8 @@ func _process(dt: float) -> void:
 	if combat != null:
 		combat.update(dt)
 	hero.position = Vector3(pos.x, _height(pos, 3.0), pos.y)
+	if sheet:
+		hero.visible = false
 	_face(hero, facing, dt, moving or (combat != null and not combat.free_turn()))
 	if combat != null and char_style == 0:
 		hero.rotation.y += combat.swing_offset()
@@ -1543,13 +1910,24 @@ func _process(dt: float) -> void:
 	if Engine.get_process_frames() % 90 == 0:
 		print("W3D fps=", Engine.get_frames_per_second(), " blocchi=", chunks.size(), " coda=", jobs.size(), " gen_ms=", snappedf(gen_ms, 0.1))
 	_update_lamps()
-	mat.set_shader_parameter("curve", curve)
-	mat.set_shader_parameter("fade_a", fade_a)
-	mat.set_shader_parameter("fade_b", fade_a + 18.0)
+	_mp("curve", curve)
+	_mp("fade_a", fade_a)
+	_mp("fade_b", fade_a + 18.0)
+	_mp("hero_glow", 0.0 if lineup else 1.0)
+	mat.set_shader_parameter("patt", 1.0 if patterns else 0.0)
+	mat_chr.set_shader_parameter("patt", 0.0)
 	post_rect.material = null if nofx else post_mat
-	hud.text = "WASD muovi  SPAZIO colpo  L pesante  SHIFT rotolata  Q fiala  E falo'  ESC esci   |   F2/F3 curva %.3f  F4/F5 bolla  F6 filtro  F7 nuovo  F8 pixel  C personaggi   %d FPS" % [curve, Engine.get_frames_per_second()]
+	hud.text = "WASD muovi  SPAZIO colpo  L pesante  SHIFT rotolata  Q fiala  E falo'  ESC esci   |   F2/F3 curva %.3f  F4/F5 bolla  F6 filtro  F7 nuovo  F8 pixel  T trame  C personaggi   %d FPS" % [curve, Engine.get_frames_per_second()]
 	if not shots.is_empty():
 		_shot_step()
+
+
+func _mp(k: String, v: Variant) -> void:
+	mat.set_shader_parameter(k, v)
+	mat_chr.set_shader_parameter(k, v)
+	if k in ["curve", "fade_a", "fade_b"]:
+		for om in extra_mats:
+			(om as ShaderMaterial).set_shader_parameter(k, v)
 
 
 func _update_cam() -> void:
@@ -1563,8 +1941,6 @@ func _update_lamps() -> void:
 			var lv: Vector4 = l
 			cand.append([Vector2(lv.x, lv.z).distance_squared_to(pos), lv])
 	cand.sort_custom(func(a, b): return a[0] < b[0])
-	if not lineup:
-		cand.push_front([0.0, Vector4(pos.x, 3.2, pos.y, 0.55)])   # alone di luce attorno all'eroe
 	var arr := PackedVector4Array()
 	for i in 16:
 		if i < cand.size():
@@ -1573,16 +1949,7 @@ func _update_lamps() -> void:
 			arr.append(Vector4(lv.x, lv.y, lv.z, lv.w * fl))
 		else:
 			arr.append(Vector4(0, 0, 0, 0))
-	mat.set_shader_parameter("lamps", arr)
-	for i in omnis.size():
-		var ol: OmniLight3D = omnis[i]
-		if i < cand.size():
-			var lv2: Vector4 = cand[i][1]
-			ol.position = Vector3(lv2.x, maxf(lv2.y, 2.0), lv2.z)
-			ol.light_energy = lv2.w * 2.2 * (1.0 + sin(lamp_t * 11.0 + lv2.x * 3.1) * 0.07)
-			ol.visible = true
-		else:
-			ol.visible = false
+	_mp("lamps", arr)
 
 
 func _unhandled_input(ev: InputEvent) -> void:
@@ -1607,6 +1974,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 				res_i = (res_i + 1) % RES.size()
 				vp.size = RES[res_i]
 				post_mat.set_shader_parameter("px", Vector2(RES[res_i]))
+			KEY_T:
+				patterns = not patterns
 			KEY_C:
 				char_style = (char_style + 1) % 3
 				_build_hero()
@@ -1618,7 +1987,7 @@ func _shot_step() -> void:
 		return
 	shot_wait += 1
 	if shot_wait == 1:
-		if not lineup:
+		if not lineup or sheet:
 			pos = shots[shot_i]
 		_stream(true)
 		_update_cam()

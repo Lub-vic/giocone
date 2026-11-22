@@ -7,7 +7,7 @@ extends Node
 
 const K := 1.68                  # fattore velocita' rispetto al 2D (82 px/s = 5,1 u/s -> 8,6 u/s)
 const BASE_DMG := 10.0
-const REACH := 2.4               # colpo leggero: 29 px nel 2D, piu' ampio per la camera lontana
+const REACH := 2.9               # colpo leggero: 29 px nel 2D, piu' ampio per la camera lontana
 const DEFS := {
 	"goblin": {"hp": 26.0, "spd": 48.0, "dmg": 15.6, "rad": 0.5, "souls": 9, "ai": "melee", "wind": 0.45},
 	"kobold": {"hp": 14.0, "spd": 56.0, "dmg": 10.4, "rad": 0.4, "souls": 4, "ai": "melee", "wind": 0.35},
@@ -58,6 +58,13 @@ var prev: Dictionary = {}
 var ring_mesh: ArrayMesh
 var slash_mesh: ArrayMesh
 var shard_mesh: ArrayMesh
+var bolt_mesh: ArrayMesh
+var pbolts: Array = []
+var cls := "necro"
+var mana := 0.0
+var max_mana := 30.0
+var mana_wait := 0.0
+var bar_mana: ColorRect
 var arrow_mesh: ArrayMesh
 var msg := ""
 var msg_t := 0.0
@@ -90,9 +97,11 @@ func setup() -> void:
 
 
 func reset_world() -> void:
-	for e in enemies:
-		_free_enemy(e)
-	enemies.clear()
+	if not boss.is_empty():
+		boss["dying"] = true
+		_free_enemy(boss)
+		enemies.erase(boss)
+	_clear_enemies()
 	for p in projs:
 		(p["node"] as Node3D).queue_free()
 	projs.clear()
@@ -107,6 +116,13 @@ func reset_world() -> void:
 	inv = 0.5
 	respawn_pos = w.pos
 	_spawn_boss()
+	if cls == "necro":
+		max_hp = 80.0
+		max_st = 90.0
+		max_mana = 100.0
+		hp = max_hp
+		st = max_st
+		mana = max_mana
 	say("SCONFIGGI IL CARCERIERE, FINO IN FONDO ALLA STRADA")
 
 
@@ -132,6 +148,10 @@ func _make_meshes() -> void:
 	var sh := W3DBuilder.new()
 	sh.shard(Vector3(0, 0, 0), Vector3(0, 0, -0.35), 0.06, 0.05, Color(0.9, 0.2, 0.18, 0.3), 0.4, 0.0, 0.0)
 	shard_mesh = sh.mesh()
+	var bm := W3DBuilder.new()
+	bm.shard(Vector3(0, 0, 0.55), Vector3(0, 0, -0.55), 0.17, 0.12, Color(0.55, 0.9, 0.7, 0.05), 0.55, 0.0, 0.0)
+	bm.shard(Vector3(0.0, 0, 0.0), Vector3(0.0, 0.0, -0.9), 0.08, 0.06, Color(0.85, 1.0, 0.9, 0.0), 0.6, 0.0, 0.0)
+	bolt_mesh = bm.mesh()
 	var ar := W3DBuilder.new()
 	ar.shard(Vector3(0, 0, 0.5), Vector3(0, 0, -0.5), 0.07, 0.04, Color(0.95, 0.85, 0.6, 0.2), 0.7, 0.0, 0.0)
 	arrow_mesh = ar.mesh()
@@ -168,10 +188,12 @@ func _bar(x: float, y: float, wd: float, h: float, col: Color) -> ColorRect:
 func _make_ui() -> void:
 	ui = CanvasLayer.new()
 	ui.layer = 6
+	ui.scale = Vector2(2, 2)
 	w.add_child(ui)
 	bar_hp = _bar(8, 8, 120, 8, Color(0.75, 0.12, 0.14))
 	bar_st = _bar(8, 19, 100, 5, Color(0.25, 0.65, 0.3))
-	lbl_info = _lbl(8, 27, 9, Color(0.95, 0.9, 0.75))
+	bar_mana = _bar(8, 27, 100, 4, Color(0.35, 0.4, 0.9))
+	lbl_info = _lbl(8, 35, 9, Color(0.95, 0.9, 0.75))
 	lbl_obj = _lbl(0, 6, 9, Color(1.0, 0.85, 0.4))
 	lbl_obj.size = Vector2(480, 12)
 	lbl_obj.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -217,7 +239,9 @@ func say(s: String) -> void:
 func _hud(dt: float) -> void:
 	bar_hp.size.x = 120.0 * clampf(hp / max_hp, 0.0, 1.0)
 	bar_st.size.x = 100.0 * clampf(st / max_st, 0.0, 1.0)
-	lbl_info.text = "FIALE %d   ANIME %d   UCCISI %d" % [flasks, souls, kills]
+	bar_mana.size.x = 100.0 * clampf(mana / maxf(max_mana, 1.0), 0.0, 1.0)
+	bar_hp.size.x = 120.0 * clampf(hp / max_hp, 0.0, 1.0) * (max_hp / 120.0)
+	lbl_info.text = "%s   FIALE %d   ANIME %d   UCCISI %d   TAB cambia classe%s" % ["NEGROMANTE" if cls == "necro" else "CAVALIERE", flasks, souls, kills, "   1 dardo  2 fulmine" if cls == "necro" else ""]
 	var bp: Vector2 = w.boss_pos
 	var dist := bp.distance_to(w.pos)
 	if boss_dead:
@@ -257,6 +281,9 @@ func _down() -> Dictionary:
 		"roll": Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_K),
 		"use": Input.is_key_pressed(KEY_E),
 		"flask": Input.is_key_pressed(KEY_Q) or Input.is_key_pressed(KEY_F),
+		"s1": Input.is_key_pressed(KEY_1),
+		"s2": Input.is_key_pressed(KEY_2),
+		"swap": Input.is_key_pressed(KEY_TAB),
 	}
 
 
@@ -310,13 +337,139 @@ func update(dt: float) -> void:
 		_hero(dt, dn, just)
 	_enemies(dt)
 	_projectiles(dt)
+	_bolts_update(dt)
 	_effects(dt)
 	_spawner(dt)
 	_hud(dt)
 	w.shake = shake
 
 
+func set_class(k: String) -> void:
+	cls = k
+	var necro := k == "necro"
+	max_hp = 80.0 if necro else 120.0
+	max_st = 90.0 if necro else 100.0
+	max_mana = 100.0 if necro else 30.0
+	hp = max_hp
+	st = max_st
+	mana = max_mana
+	w.hero_kind = "necro" if necro else "hero"
+	w._build_hero()
+	say("NEGROMANTE: BASTONE, 1 DARDO D'OMBRA, 2 FULMINE A CATENA" if necro else "CAVALIERE: SPADA E ROTOLATA")
+
+
+func _bolt(dir: Vector2, d: float, spd: float, pierce: bool, aoe: float) -> void:
+	var n := MeshInstance3D.new()
+	n.mesh = bolt_mesh
+	n.material_override = w.mat
+	n.position = Vector3(w.pos.x + dir.x * 1.3, 1.2, w.pos.y + dir.y * 1.3)
+	n.rotation.y = atan2(-dir.x, -dir.y)
+	n.scale = Vector3.ONE * (1.5 if aoe > 0.0 else 1.0)
+	w.vp.add_child(n)
+	pbolts.append({"node": n, "pos": w.pos + dir * 1.3, "vel": dir * spd, "dmg": d, "pierce": pierce, "aoe": aoe, "life": 1.0, "hit": []})
+
+
+func _chain(d: float) -> void:
+	var cur: Vector2 = w.pos + w.facing * 1.0
+	var done: Array = []
+	var pts: Array = [Vector3(cur.x, 1.3, cur.y)]
+	for hop in 4:
+		var best = null
+		var bd := 10.0 if hop == 0 else 6.0
+		for e in enemies:
+			if done.has(e) or bool(e["dying"]):
+				continue
+			var dd: float = (e["pos"] as Vector2).distance_to(cur)
+			if dd < bd:
+				bd = dd
+				best = e
+		if best == null:
+			break
+		done.append(best)
+		cur = best["pos"]
+		pts.append(Vector3(cur.x, 1.0, cur.y))
+		_hit_enemy(best, d * (1.0 - 0.18 * hop), (best["pos"] as Vector2 - w.pos).normalized(), 3.0 * K, false)
+	if pts.size() < 2:
+		pts.append(Vector3(w.pos.x + w.facing.x * 8.0, 1.3, w.pos.y + w.facing.y * 8.0))
+	var lb := W3DBuilder.new()
+	for i in pts.size() - 1:
+		var a: Vector3 = pts[i]
+		var bb: Vector3 = pts[i + 1]
+		var mid := (a + bb) * 0.5 + Vector3(randf_range(-0.4, 0.4), 0.0, randf_range(-0.4, 0.4))
+		lb.shard(a, mid, 0.09, 0.07, Color(0.8, 1.0, 0.95, 0.0), 0.5, 0.0, 0.0)
+		lb.shard(mid, bb, 0.09, 0.07, Color(0.8, 1.0, 0.95, 0.0), 0.5, 0.0, 0.0)
+	var n := MeshInstance3D.new()
+	n.mesh = lb.mesh()
+	n.material_override = w.mat
+	w.vp.add_child(n)
+	fxs.append({"node": n, "t": 0.0, "life": 0.22, "kind": "fade"})
+	shake = maxf(shake, 0.4)
+
+
+func _bolts_update(dt: float) -> void:
+	for pb in pbolts.duplicate():
+		pb["life"] = float(pb["life"]) - dt
+		var p: Vector2 = pb["pos"]
+		p += (pb["vel"] as Vector2) * dt
+		pb["pos"] = p
+		(pb["node"] as Node3D).position = Vector3(p.x, 1.2, p.y)
+		var gone: bool = float(pb["life"]) <= 0.0 or w._blocked(p, 0.1)
+		if not gone:
+			for e in enemies.duplicate():
+				if (pb["hit"] as Array).has(e) or bool(e["dying"]):
+					continue
+				if (e["pos"] as Vector2).distance_to(p) < float(e["rad"]) + 0.85:
+					(pb["hit"] as Array).append(e)
+					var dir: Vector2 = (pb["vel"] as Vector2).normalized()
+					if float(pb["aoe"]) > 0.0:
+						for e2 in enemies.duplicate():
+							if not bool(e2["dying"]) and (e2["pos"] as Vector2).distance_to(p) < float(pb["aoe"]) + float(e2["rad"]):
+								_hit_enemy(e2, float(pb["dmg"]) * (1.0 if e2 == e else 0.7), ((e2["pos"] as Vector2) - p).normalized(), 5.0 * K, true)
+						_burst(Vector3(p.x, 1.0, p.y), Color(0.5, 0.9, 0.7, 0.2), 14)
+						shake = maxf(shake, 0.7)
+						gone = true
+					else:
+						_hit_enemy(e, float(pb["dmg"]), dir, 4.0 * K, false)
+						if not bool(pb["pierce"]):
+							gone = true
+					break
+		if gone:
+			(pb["node"] as Node3D).queue_free()
+			pbolts.erase(pb)
+
+
 func _hero(dt: float, dn: Dictionary, just: Dictionary) -> void:
+	mana_wait -= dt
+	if cls == "necro":
+		mana = minf(max_mana, mana + 1.6 * dt * 2.0)
+	if bool(just["swap"]):
+		set_class("hero" if cls == "necro" else "necro")
+		return
+	if cls == "necro":
+		var ready := atk_cd <= 0.0 and drink_t <= 0.0 and dash_t <= 0.0
+		if bool(just["attack"]) and ready and st > 0.5 and _spend(10.0):
+			_aim()
+			_bolt(w.facing, BASE_DMG * 1.1, 22.0, false, 0.0)
+			atk_t = 0.18
+			atk_cd = 0.4
+			just["attack"] = false
+		if bool(just["heavy"]) and ready and st > 0.5 and _spend(26.0):
+			_aim()
+			_bolt(w.facing, BASE_DMG * 2.0, 15.0, false, 2.6)
+			atk_t = 0.3
+			atk_cd = 0.8
+			kb -= w.facing * 4.0
+			just["heavy"] = false
+		if bool(just["s1"]) and ready and mana >= 14.0:
+			mana -= 14.0
+			_aim()
+			_bolt(w.facing, BASE_DMG * 1.6, 26.0, true, 0.0)
+			atk_cd = 0.35
+		if bool(just["s2"]) and ready and mana >= 26.0:
+			mana -= 26.0
+			_aim()
+			_chain(BASE_DMG * 2.2)
+			atk_cd = 0.6
 	inv = maxf(0.0, inv - dt)
 	atk_t = maxf(0.0, atk_t - dt)
 	swing_t = maxf(0.0, swing_t - dt)
@@ -380,7 +533,7 @@ func _hero(dt: float, dn: Dictionary, just: Dictionary) -> void:
 
 func _aim() -> void:
 	var best = null
-	var bd := 5.0
+	var bd := 7.0
 	for e in enemies:
 		var d: float = (e["pos"] as Vector2).distance_to(w.pos)
 		if d < bd:
@@ -393,13 +546,12 @@ func _aim() -> void:
 
 
 func _rest() -> void:
+	mana = max_mana
 	hp = max_hp
 	st = max_st
 	flasks = 3
 	respawn_pos = _nearest_fire_pos()
-	for e in enemies:
-		_free_enemy(e)
-	enemies.clear()
+	_clear_enemies()
 	spawn_t = 3.0
 	_burst(Vector3(w.pos.x, 1.0, w.pos.y), Color(1.0, 0.8, 0.45, 0.2), 14)
 	say("TI RIPOSI AL FALO'. I NEMICI TORNANO")
@@ -419,6 +571,7 @@ func _nearest_fire_pos() -> Vector2:
 func _respawn() -> void:
 	dead = false
 	dead_t = 0.0
+	mana = max_mana
 	hp = max_hp
 	st = max_st
 	flasks = 3
@@ -426,9 +579,7 @@ func _respawn() -> void:
 	w.pos = respawn_pos
 	kb = Vector2.ZERO
 	inv = 1.0
-	for e in enemies:
-		_free_enemy(e)
-	enemies.clear()
+	_clear_enemies()
 	spawn_t = 3.0
 	say("TI RISVEGLI AL FALO'")
 
@@ -457,7 +608,7 @@ func _strike(reach: float, arc: float, d: float, force: float, heavy: bool) -> v
 		var v: Vector2 = (e["pos"] as Vector2) - w.pos
 		if v.length() > reach + float(e["rad"]):
 			continue
-		if absf(angle_difference(a0, v.angle())) > arc:
+		if absf(angle_difference(a0, v.angle())) > arc + 0.25:
 			continue
 		_hit_enemy(e, d, v.normalized(), force, heavy)
 
@@ -551,6 +702,15 @@ func _make_ring(radius: float) -> MeshInstance3D:
 	r.visible = false
 	w.vp.add_child(r)
 	return r
+
+
+## elimina i nemici comuni (il boss resta dov'e', se vivo)
+func _clear_enemies() -> void:
+	for e in enemies.duplicate():
+		if e.get("boss", false) and not bool(e["dying"]):
+			continue
+		_free_enemy(e)
+		enemies.erase(e)
 
 
 func _free_enemy(e: Dictionary) -> void:
@@ -924,6 +1084,8 @@ func _effects(dt: float) -> void:
 				nd.rotation.y = float(f["yaw"]) + lerpf(-float(f["sweep"]), float(f["sweep"]), ease)
 				var bs: Vector3 = f["base"]
 				nd.scale = Vector3(bs.x, 1.0 - k * k, bs.z) * (1.0 + 0.12 * k)
+			"fade":
+				pass
 			"burst":
 				var v: Vector3 = f["vel"]
 				v.y -= 9.0 * dt
@@ -950,6 +1112,13 @@ func _effects(dt: float) -> void:
 
 ## prova automatica: l'eroe attacca da solo contro goblin, scheletro e arciere
 func _selftest(just: Dictionary) -> void:
+	if OS.get_cmdline_user_args().has("--necro") and cls != "necro" and t > 0.3:
+		set_class("necro")
+	if cls == "necro" and t > 1.5:
+		if fmod(t, 1.2) < get_process_delta_time():
+			just["s1"] = true
+		if fmod(t, 2.4) < get_process_delta_time():
+			just["s2"] = true
 	if t > 1.0 and t - get_process_delta_time() <= 1.0:
 		_spawn_enemy("goblin", w.pos + Vector2(4, 0))
 		_spawn_enemy("skeleton", w.pos + Vector2(-4, 2))

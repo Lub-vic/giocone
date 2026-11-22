@@ -333,6 +333,8 @@ func _ready() -> void:
 	if OS.get_cmdline_user_args().has("--w3d"):
 		get_tree().change_scene_to_file.call_deferred("res://scenes/w3d.tscn")
 		return
+	if OS.get_cmdline_user_args().has("--skin"):
+		toggle_skin.call_deferred()
 	if OS.get_cmdline_user_args().has("--noai"):   # confronto: terreno procedurale classico
 		settings["aiground"] = false
 	if OS.get_cmdline_user_args().has("--photo"):   # prove della grafica FOTO
@@ -6218,6 +6220,8 @@ var burst_pool := {8: [], 20: [], 48: []}
 
 
 func burst(pos: Vector2, c: Color, n: int, speed: float, life: float) -> void:
+	if skin != null and is_instance_valid(skin):
+		skin.burst3d(pos, c, n, speed, life)
 	var cls := 8 if n <= 8 else (20 if n <= 20 else 48)
 	var pool: Array = burst_pool[cls]
 	var p: CPUParticles2D = null
@@ -7018,9 +7022,28 @@ func opt_activate() -> void:
 			opt_change(1)
 
 
+var skin: Node = null
+
+
+func toggle_skin() -> void:
+	if skin != null and is_instance_valid(skin):
+		skin.queue_free()
+		skin = null
+		say("GRAFICA 2D")
+		return
+	skin = W3DSkin.new()
+	skin.gm = self
+	skin.process_priority = 100
+	add_child(skin)
+	say("GRAFICA 3D (F9 PER TORNARE ALLA 2D)")
+
+
 func _input(ev: InputEvent) -> void:
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F9:
-		get_tree().change_scene_to_file("res://scenes/w3d.tscn")   # prova del motore 3D (villaggio low-poly)
+		if ev.shift_pressed:
+			get_tree().change_scene_to_file("res://scenes/w3d.tscn")   # demo separata del motore 3D (villaggio low-poly)
+		else:
+			toggle_skin()   # il gioco vero disegnato con il motore 3D
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo:
 		var fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
