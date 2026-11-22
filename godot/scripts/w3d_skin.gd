@@ -1098,7 +1098,13 @@ func _make_exact(spr: Sprite2D) -> Node3D:
 			img.decompress()
 		img.convert(Image.FORMAT_RGBA8)
 		var b := W3DBuilder.new()
-		b.voxel(img, 1.0 / 16.0 * 1.1, 4, 3)
+		var iw := img.get_width()
+		if iw >= 48:
+			b.voxel(img, 1.0 / 16.0 * 1.1, 24, 7)      # edifici: blocchi alti con tetto a scalini
+		elif iw >= 26:
+			b.voxel(img, 1.0 / 16.0 * 1.1, 7, 4)
+		else:
+			b.voxel(img, 1.0 / 16.0 * 1.1, 4, 3)
 		mesh = b.mesh()
 		vox_cache[key] = mesh
 	var root := Node3D.new()
@@ -1319,12 +1325,133 @@ func _sync_slash() -> void:
 
 
 # ------------------------------------------------------------------ ciclo principale
+# ------------------------------------------------------------------ mondo aperto: blocchi da 16x16 creati attorno al giocatore
+const WSC := 16
+var wchunks: Dictionary = {}
+var world_on := false
+
+
+func _wtile_col(t: int) -> Color:
+	match t:
+		Game.T_TERRA: return Color(0.22, 0.18, 0.13)
+		Game.T_CIMITERO: return Color(0.15, 0.19, 0.15)
+		Game.T_PALUDE: return Color(0.11, 0.19, 0.14)
+		Game.T_NEVE: return Color(0.46, 0.50, 0.58)
+		Game.T_LAVA: return Color(0.55, 0.14, 0.04, 0.6)
+		Game.T_ROCCIAG: return Color(0.24, 0.24, 0.27)
+		Game.T_SENTIERO: return Color(0.30, 0.26, 0.21)
+		Game.T_SANGUE: return Color(0.22, 0.07, 0.07)
+	return Color(0.2, 0.19, 0.2)
+
+
+func _world_clear() -> void:
+	for k in wchunks.keys():
+		(wchunks[k] as Node3D).queue_free()
+	wchunks.clear()
+	for c in static_root.get_children():
+		c.queue_free()
+
+
+func _world_update() -> void:
+	var pc := Vector2i(floori(pos.x / WSC), floori(pos.y / WSC))
+	for k in wchunks.keys():
+		if absi((k as Vector2i).x - pc.x) > 4 or absi((k as Vector2i).y - pc.y) > 4:
+			(wchunks[k] as Node3D).queue_free()
+			wchunks.erase(k)
+	var best := Vector2i(-9999, -9999)
+	var bd := 1e9
+	for dy in range(-3, 4):
+		for dx in range(-3, 4):
+			var k := pc + Vector2i(dx, dy)
+			if wchunks.has(k) or k.x < 0 or k.y < 0:
+				continue
+			if not gm.gen_chunks.has(Vector2i(k.x * WSC / gm.CH, k.y * WSC / gm.CH)):
+				continue
+			var d := float(dx * dx + dy * dy)
+			if d < bd:
+				bd = d
+				best = k
+	if bd < 1e8:
+		_world_chunk(best)
+
+
+func _world_chunk(k: Vector2i) -> void:
+	var fb := W3DBuilder.new()
+	var ob := W3DBuilder.new()
+	var wb := W3DBuilder.new()
+	fb.rn.seed = k.x * 31 + k.y
+	ob.rn.seed = k.x * 17 + k.y * 5
+	wb.rn.seed = k.x * 13 + k.y * 3
+	ob.sat = 1.2
+	wb.sat = 1.25
+	wb.con = 1.2
+	var w: int = Game.MW
+	for y in range(k.y * WSC, (k.y + 1) * WSC):
+		for x in range(k.x * WSC, (k.x + 1) * WSC):
+			if x >= w or y >= Game.MH:
+				continue
+			var i: int = y * w + x
+			var hv := _hash2(x, y)
+			var hv2 := _hash2(x, y, 5)
+			var bio := int(gm.biome[i])
+			var bd: Dictionary = Game.BIO[bio]
+			if gm.water[i] == 1:
+				fb.quad(Vector3(x, -0.12, y), Vector3(x + 1, -0.12, y), Vector3(x + 1, -0.12, y + 1), Vector3(x, -0.12, y + 1), Color(0.07 + hv * 0.02, 0.12 + hv * 0.03, 0.18 + hv * 0.04))
+				continue
+			if gm.bridge[i] == 1:
+				fb.quad(Vector3(x, 0.02, y), Vector3(x + 1, 0.02, y), Vector3(x + 1, 0.02, y + 1), Vector3(x, 0.02, y + 1), Color(0.24, 0.16, 0.1).lerp(Color(0.34, 0.24, 0.15), hv))
+				continue
+			if gm.grid[i] == 1:
+				var g: Array = bd["g"]
+				var t: int = int(g[int(hv2 * 7.0) % g.size()])
+				var col := _wtile_col(t)
+				if gm.cobble[i] == 1:
+					col = Color(0.27, 0.26, 0.28)
+				elif gm.road[i] == 1:
+					col = Color(0.30, 0.26, 0.21)
+				col = col.lerp(_k(col, 1.5), hv * 0.6)
+				fb.quad(Vector3(x, 0, y), Vector3(x + 1, 0, y), Vector3(x + 1, 0, y + 1), Vector3(x, 0, y + 1), col)
+				# dettagli sparsi: sassi, ciuffi, ossa
+				if hv > 0.93:
+					ob.rock(Vector3(x + 0.5, 0.1, y + 0.5), Vector3(0.3, 0.2, 0.28), Color(0.28, 0.27, 0.29), 0.1, 0.35, hv * 9.0)
+				elif hv > 0.86 and gm.road[i] == 0:
+					ob.shard(Vector3(x + 0.5, 0.0, y + 0.5), Vector3(x + 0.55, 0.4, y + 0.5), 0.1, 0.08, _k(col, 1.8), 0.2, 0.0, 0.1)
+			else:
+				var bt: int = int(bd["b"])
+				if gm.outside[i] == 1:
+					fb.quad(Vector3(x, -0.3, y), Vector3(x + 1, -0.3, y), Vector3(x + 1, -0.3, y + 1), Vector3(x, -0.3, y + 1), Color(0.03, 0.03, 0.04))
+					continue
+				fb.quad(Vector3(x, 0, y), Vector3(x + 1, 0, y), Vector3(x + 1, 0, y + 1), Vector3(x, 0, y + 1), Color(0.07, 0.09, 0.07))
+				if bt == Game.T_CHIOMA:
+					var th := 1.5 + hv * 1.6
+					wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, th * 0.5, y + 0.5)), Vector3(0.22, th, 0.22), Color(0.17, 0.11, 0.08), 0.1, 6)
+					var gc := Color(0.08, 0.2, 0.1).lerp(Color(0.12, 0.28, 0.14), hv2)
+					wb.rock(Vector3(x + 0.5, th + 0.35, y + 0.5), Vector3(1.5 + hv * 0.3, 1.1, 1.5 + hv2 * 0.3), gc, 0.22, 0.45, hv * 7.0)
+				elif bt == Game.T_ACQUA:
+					fb.quad(Vector3(x, -0.12, y), Vector3(x + 1, -0.12, y), Vector3(x + 1, -0.12, y + 1), Vector3(x, -0.12, y + 1), Color(0.07, 0.13, 0.18))
+				else:
+					var rh := 0.9 + hv * 1.5
+					wb.rock(Vector3(x + 0.5, rh * 0.5, y + 0.5), Vector3(1.15, rh, 1.15), Color(0.2, 0.2, 0.23).lerp(Color(0.3, 0.29, 0.32), hv2), 0.2, 0.4, hv * 11.0)
+	var root := Node3D.new()
+	for pr in [[fb, false], [ob, false], [wb, true]]:
+		var bld: W3DBuilder = pr[0]
+		if bld.v.size() == 0:
+			continue
+		var mi := MeshInstance3D.new()
+		mi.mesh = bld.mesh()
+		mi.material_override = mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if pr[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(mi)
+	static_root.add_child(root)
+	wchunks[k] = root
+
+
 func _process(dt: float) -> void:
 	if gm == null or gm.player == null:
 		return
 	if want_shot and str(gm.state) == "story":
 		gm.state = "play"
-	var want: bool = str(gm.area) != "" and str(gm.area) != "world" and gm.state != "title"
+	var want: bool = str(gm.area) != "" and gm.state != "title"
 	if want != active:
 		active = want
 		post_rect.visible = active
@@ -1334,7 +1461,20 @@ func _process(dt: float) -> void:
 				_drop_dyn(k)
 	if not active:
 		return
-	if built_area != str(gm.area) or built_grid_id != gm.grid.size():
+	if str(gm.area) == "world":
+		if not world_on or built_area != "world":
+			_world_clear()
+			for k in dyn.keys():
+				_drop_dyn(k)
+			room_lamps.clear()
+			decor_lights.clear()
+			room_theme.clear()
+			built_area = "world"
+			world_on = true
+	elif built_area != str(gm.area) or built_grid_id != gm.grid.size() or world_on:
+		if world_on:
+			_world_clear()
+		world_on = false
 		_rebuild_static()
 		for l in gm.fx.get_children():
 			if l is Label:
@@ -1342,6 +1482,8 @@ func _process(dt: float) -> void:
 	lamp_t += dt
 	_show_2d(false)
 	pos = gm.player.position / 16.0
+	if world_on:
+		_world_update()
 	# aggiorna gli oggetti del gioco
 	for n in gm.ents.get_children():
 		_sync_node2d(n, n == gm.player)
