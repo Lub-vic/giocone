@@ -333,7 +333,7 @@ func _ready() -> void:
 	if OS.get_cmdline_user_args().has("--w3d"):
 		get_tree().change_scene_to_file.call_deferred("res://scenes/w3d.tscn")
 		return
-	if OS.get_cmdline_user_args().has("--skin"):
+	if not OS.get_cmdline_user_args().has("--2d"):   # si parte in 3D (F9 per la grafica 2D)
 		toggle_skin.call_deferred()
 	if OS.get_cmdline_user_args().has("--noai"):   # confronto: terreno procedurale classico
 		settings["aiground"] = false

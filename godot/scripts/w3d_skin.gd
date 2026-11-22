@@ -747,7 +747,7 @@ func _real_lights(dt: float) -> void:
 		if not is_instance_valid(l):
 			continue
 		var gp: Vector2 = (l as Node2D).global_position / 16.0
-		cand.append([gp.distance_squared_to(pos), Vector3(gp.x, 1.9, gp.y), minf(4.2, float(f[1]) * 3.4), Color(1.0, 0.7, 0.4)])
+		cand.append([gp.distance_squared_to(pos), Vector3(gp.x, 1.9, gp.y), minf(4.2, float(f[1]) * 3.4) * (0.55 if world_on else 1.0), Color(1.0, 0.7, 0.4)])
 	for dl in decor_lights:
 		var dv: Vector3 = dl
 		cand.append([Vector2(dv.x, dv.z).distance_squared_to(pos), dv, 3.0, Color(1.0, 0.62, 0.32)])
@@ -780,6 +780,11 @@ func _real_lights(dt: float) -> void:
 		ol.light_energy = ce * fl
 		ol.visible = ce > 0.02
 	hero_light.position = Vector3(pos.x, 3.0, pos.y)
+	# nel mondo aperto: luce piu' fredda e desaturata, lampade piu' piccole (niente dominante arancione)
+	hero_light.light_color = Color(0.78, 0.84, 1.0) if world_on else Color(1.0, 0.82, 0.6)
+	hero_light.light_energy = 0.55 if world_on else 0.7
+	env.ambient_light_energy = 0.30 if world_on else 0.16
+	env.ambient_light_color = Color(0.40, 0.44, 0.58) if world_on else Color(0.36, 0.38, 0.52)
 
 
 # ------------------------------------------------------------------ effetti 3D: scintille, impatti, lampi di colpo, contorni
@@ -1132,6 +1137,10 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 	if spr == null or spr.texture == null:
 		return
 	var n2 := n as Node2D
+	if not is_player and world_on and (n2.position / 16.0).distance_squared_to(pos) > 54.0 * 54.0:
+		if dyn.has(id):
+			_drop_dyn(id)
+		return
 	if not dyn.has(id):
 		var node: Node3D
 		var kind := ""
@@ -1409,13 +1418,39 @@ func _world_chunk(k: Vector2i) -> void:
 					col = Color(0.27, 0.26, 0.28)
 				elif gm.road[i] == 1:
 					col = Color(0.30, 0.26, 0.21)
+				# macchie di terreno a bassa frequenza: il suolo non e' uniforme
+				var pt := _hash2(x >> 2, y >> 2, 3)
+				var natural: bool = gm.road[i] == 0 and gm.cobble[i] == 0
+				if natural:
+					col = col.lerp(Color(0.10, 0.17, 0.09) if t != Game.T_NEVE else Color(0.6, 0.64, 0.7), 0.5 * smoothstep(0.45, 0.9, pt))
 				col = col.lerp(_k(col, 1.5), hv * 0.6)
 				fb.quad(Vector3(x, 0, y), Vector3(x + 1, 0, y), Vector3(x + 1, 0, y + 1), Vector3(x, 0, y + 1), col)
-				# dettagli sparsi: sassi, ciuffi, ossa
-				if hv > 0.93:
-					ob.rock(Vector3(x + 0.5, 0.1, y + 0.5), Vector3(0.3, 0.2, 0.28), Color(0.28, 0.27, 0.29), 0.1, 0.35, hv * 9.0)
-				elif hv > 0.86 and gm.road[i] == 0:
-					ob.shard(Vector3(x + 0.5, 0.0, y + 0.5), Vector3(x + 0.55, 0.4, y + 0.5), 0.1, 0.08, _k(col, 1.8), 0.2, 0.0, 0.1)
+				if natural and t != Game.T_LAVA:
+					var veg := pt > 0.4 and t != Game.T_NEVE
+					# ciuffi d'erba o steli secchi, piu' fitti nelle macchie
+					if hv > (0.45 if veg else 0.9):
+						var gcol := Color(0.10, 0.20, 0.09).lerp(Color(0.20, 0.27, 0.10), hv2)
+						if t == Game.T_PALUDE:
+							gcol = Color(0.08, 0.20, 0.15).lerp(Color(0.14, 0.28, 0.16), hv2)
+						elif t == Game.T_CIMITERO:
+							gcol = Color(0.14, 0.2, 0.12).lerp(Color(0.26, 0.26, 0.15), hv2)
+						elif t == Game.T_NEVE:
+							gcol = Color(0.55, 0.6, 0.66)
+						for q in 3:
+							var qx := x + 0.2 + _hash2(x, y, 60 + q) * 0.6
+							var qz := y + 0.2 + _hash2(x, y, 70 + q) * 0.6
+							var lean := (_hash2(x, y, 80 + q) - 0.5) * 0.35
+							ob.shard(Vector3(qx, 0.0, qz), Vector3(qx + lean, 0.28 + hv2 * 0.3, qz + lean * 0.6), 0.1, 0.08, gcol, 0.2, 0.0, 0.1)
+					# cespugli
+					if veg and hv2 > 0.955:
+						ob.rock(Vector3(x + 0.5, 0.22, y + 0.5), Vector3(0.8, 0.45, 0.8), Color(0.09, 0.19, 0.09).lerp(Color(0.16, 0.26, 0.11), hv), 0.22, 0.5, hv * 13.0)
+					# fiori pallidi e funghi luminosi nella palude
+					if hv2 > 0.985 and veg:
+						if t == Game.T_PALUDE:
+							ob.cyl(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 0.18, y + 0.5)), 0.04, 0.05, 0.36, 5, Color(0.7, 0.75, 0.6), 0.1)
+							ob.cyl(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 0.4, y + 0.5)), 0.18, 0.05, 0.12, 6, Color(0.3, 0.9, 0.7, 0.2), 0.0)
+						else:
+							ob.rock(Vector3(x + 0.5, 0.1, y + 0.5), Vector3(0.12, 0.1, 0.12), Color(0.55, 0.5, 0.65), 0.1, 0.2, hv * 5.0)
 			else:
 				var bt: int = int(bd["b"])
 				if gm.outside[i] == 1:
