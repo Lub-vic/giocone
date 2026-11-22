@@ -65,6 +65,7 @@ static func tone(b: int) -> Color:
 		var t: Color = BIO[clampi(b, 0, BIO.size() - 1)]["tint"]
 		_tones[b] = Color.WHITE.lerp(t, 0.6)
 	return _tones[b]
+static var aiground := false      # terreno dipinto dall'AI (assets/aiground): texture pixel art senza giunture
 static var photo := false      # grafica FOTO (prova): sprite da assets/sprites_photo, se presenti
 static var _light: Texture2D
 
@@ -98,7 +99,10 @@ static func tex(n: String) -> Texture2D:
 	if not _cache.has(n):
 		var path := "res://assets/sprites/%s.png" % n
 		var ph := "res://assets/sprites_photo/%s.png" % n
-		if photo and ResourceLoader.exists(ph):
+		var ai := "res://assets/aisprites/%s.png" % n
+		if aiground and not photo and ResourceLoader.exists(ai):
+			_cache[n] = load(ai)
+		elif photo and ResourceLoader.exists(ph):
 			_cache[n] = load(ph)
 		elif ResourceLoader.exists(path):
 			_cache[n] = load(path)
@@ -115,6 +119,13 @@ static func tex(n: String) -> Texture2D:
 
 ## parametri del terreno fotografico per lo shader del suolo
 static func photo_ground(mat: ShaderMaterial) -> void:
+	if aiground and not photo and ResourceLoader.exists("res://assets/aiground/ground_a.png"):
+		mat.set_shader_parameter("photo_on", true)
+		mat.set_shader_parameter("ai_on", true)
+		for k in [["photo_ga", "ground_a"], ["photo_ma", "ground_b"], ["photo_path", "path"], ["photo_cob", "cobble"]]:
+			mat.set_shader_parameter(k[0], load("res://assets/aiground/%s.png" % k[1]))
+		return
+	mat.set_shader_parameter("ai_on", false)
 	var on := photo and ResourceLoader.exists("res://assets/photo/ground_a.png")
 	mat.set_shader_parameter("photo_on", on)
 	if on:

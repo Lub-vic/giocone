@@ -195,6 +195,7 @@ var wall_layer: TileMapLayer
 var ents: Node2D
 var fx: Node2D
 var hud: Hud
+var ground_only := false          # debug: solo il terreno, senza luci ne' interfaccia (per --groundshot)
 var cm: CanvasModulate
 var fog_rect: ColorRect
 var fog_mat: ShaderMaterial
@@ -245,7 +246,7 @@ var doors: Array = []
 var carved: Array = []
 var use_pad := false
 var show_fps := false
-var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "photo": false, "auto_fire": false}
+var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "photo": false, "aiground": false, "auto_fire": false}
 var opt_sel := 0
 var pause_sel := 0
 var beast_sel := 0            # bestiario: scheda selezionata
@@ -267,6 +268,7 @@ const OPTIONS := [
 	{"k": "aim_manual", "n": "MIRA MANUALE", "t": "toggle"},
 	{"k": "auto_fire", "n": "FUOCO AUTOMATICO", "t": "toggle"},
 	{"k": "photo", "n": "GRAFICA FOTO (PROVA)", "t": "toggle"},
+	{"k": "aiground", "n": "TERRENO AI (PROVA)", "t": "toggle"},
 	{"k": "ctrl", "n": "CONTROLLI", "t": "action"},
 	{"k": "back", "n": "INDIETRO", "t": "action"},
 ]
@@ -328,6 +330,11 @@ func _ready() -> void:
 		load_settings()
 	if OS.has_feature("mobile") and not FileAccess.file_exists("user://settings.cfg"):
 		settings["auto_fire"] = true   # col touch il fuoco automatico e' molto piu' comodo
+	if OS.get_cmdline_user_args().has("--w3d"):
+		get_tree().change_scene_to_file.call_deferred("res://scenes/w3d.tscn")
+		return
+	if OS.get_cmdline_user_args().has("--noai"):   # confronto: terreno procedurale classico
+		settings["aiground"] = false
 	if OS.get_cmdline_user_args().has("--photo"):   # prove della grafica FOTO
 		settings["photo"] = true
 	randomize()
@@ -6960,6 +6967,9 @@ func apply_settings() -> void:
 	if sfx_node != null:
 		sfx_node.set_levels(float(settings["sfx"]) / 10.0, float(settings["amb"]) / 10.0)
 	show_fps = bool(settings["fps"])
+	if Game.aiground != bool(settings.get("aiground", false)):
+		Game.aiground = bool(settings.get("aiground", false))
+		Game._cache.clear()
 	if Game.photo != bool(settings.get("photo", false)):
 		Game.photo = bool(settings.get("photo", false))
 		Game._cache.clear()
@@ -6982,7 +6992,7 @@ func opt_change(dir: int) -> void:
 		return
 	apply_settings()
 	save_settings()
-	if k == "photo" and area != "" and player != null:
+	if (k == "photo" or k == "aiground") and area != "" and player != null:
 		# la grafica cambia ricaricando: si salva e si torna al titolo (CONTINUA riprende da qui)
 		save_game()
 		Engine.time_scale = 1.0
@@ -7009,6 +7019,9 @@ func opt_activate() -> void:
 
 
 func _input(ev: InputEvent) -> void:
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F9:
+		get_tree().change_scene_to_file("res://scenes/w3d.tscn")   # prova del motore 3D (villaggio low-poly)
+		return
 	if ev is InputEventKey and ev.pressed and not ev.echo:
 		var fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
 		if ev.keycode == KEY_F11 or (ev.keycode == KEY_ENTER and ev.alt_pressed):
@@ -8754,6 +8767,52 @@ func _process(_dt: float) -> void:
 			print("MAP zoom=", map_zoom)
 		if tgs == 40 and not OS.get_cmdline_user_args().has("--shot"):
 			get_tree().quit()
+	if OS.get_cmdline_user_args().size() > 0 and str(OS.get_cmdline_user_args()[0]).begins_with("--gs="):
+		# debug: salva il terreno a tessere 480x270 attorno a una cella (--gs=cx,cy,colonne,righe), per ricomporlo in Python
+		tgs += 1
+		var gs := PackedStringArray(["144", "592", "3", "3"])
+		for arg in OS.get_cmdline_user_args():
+			if str(arg).begins_with("--gs="):
+				gs = str(arg).substr(5).split(",")
+		var gcols := int(gs[2])
+		var grows := int(gs[3])
+		if tgs == 3:
+			state = "play"
+			ground_only = true
+			ensure_area(cell_pos(Vector2i(int(gs[0]), int(gs[1]))), 3)
+			if gs.size() > 4 and gs[4] == "all":
+				# scena completa (oggetti e vegetazione) senza personaggi, nemici, luci e interfaccia
+				for en in enemies:
+					en.visible = false
+				for vv in villagers:
+					vv.visible = false
+				for cr in critters:
+					cr.visible = false
+				player.visible = false
+				for pl2 in get_tree().root.find_children("*", "PointLight2D", true, false):
+					(pl2 as PointLight2D).enabled = false
+			else:
+				ents.visible = false
+			fx.visible = false
+			if fog_rect != null:
+				fog_rect.visible = false
+				fog_rect.set_process(false)
+			for ch in get_children():
+				if ch is CanvasLayer:
+					ch.visible = false
+		if tgs >= 8 and (tgs - 8) % 8 == 0:
+			var gi := (tgs - 8) / 8
+			if gi > 0 and gi <= gcols * grows:
+				var prev := gi - 1
+				get_viewport().get_texture().get_image().save_png("user://gs_%d_%d.png" % [prev / gcols, prev % gcols])
+			if gi >= gcols * grows:
+				get_tree().quit()
+			else:
+				var c0 := cell_pos(Vector2i(int(gs[0]), int(gs[1])))
+				var gp := c0 + Vector2((gi % gcols - (gcols - 1) * 0.5) * 448.0, (gi / gcols - (grows - 1) * 0.5) * 240.0)
+				player.position = gp
+				player.cam.reset_smoothing()
+				print("GS tile ", gi / gcols, ",", gi % gcols, " centro=", gp)
 	if OS.get_cmdline_user_args().has("--cathshot"):
 		tgs += 1
 		if tgs == 3:
@@ -9866,6 +9925,9 @@ func _process(_dt: float) -> void:
 		tgt = Color(minf(tgt.r * dk * nt.r, 1.0), minf(tgt.g * dk * nt.g, 1.0), minf(tgt.b * dk * nt.b, 1.0))
 	if area == "world":
 		tgt = tgt * Chrono.world_tint()   # l'era cambia il colore del mondo
+	if ground_only:
+		tgt = Color.WHITE
+		cm.color = Color.WHITE
 	cm.color = cm.color.lerp(tgt, 1.0 - exp(-real * 1.6))
 	if wr_node != null and is_instance_valid(wr_node):
 		wr_node.set_boost(cm.color)
