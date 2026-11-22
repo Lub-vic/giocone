@@ -38,6 +38,15 @@ func tri(a: Vector3, b: Vector3, d: Vector3, col: Color) -> void:
 	c.append(col)
 
 
+func tri3(a: Vector3, b: Vector3, d: Vector3, ca: Color, cb: Color, cd: Color) -> void:
+	v.append(a)
+	v.append(b)
+	v.append(d)
+	c.append(ca)
+	c.append(cb)
+	c.append(cd)
+
+
 func quad(a: Vector3, b: Vector3, d: Vector3, e: Vector3, col: Color) -> void:
 	tri(a, b, d, col)
 	tri(a, d, e, col)
@@ -329,6 +338,11 @@ func shard(p0: Vector3, p1: Vector3, w1_: float, w2_: float, col: Color, t := 0.
 		tri(p0, ring[n], ring[i], shade(low, j))
 
 
+func scale_xz(sx: float, sz2: float) -> void:
+	for i in v.size():
+		v[i] = Vector3(v[i].x * sx, v[i].y, v[i].z * sz2)
+
+
 func shift(off: Vector3) -> void:
 	for i in v.size():
 		v[i] += off
@@ -413,17 +427,30 @@ func topdown(img: Image, vox: float) -> void:
 
 
 ## celle dall'alto da un'immagine a colori + una di altezze (livelli): Vector2i(x, z) -> {h, c}
-func hcells(img: Image, himg: Image) -> Dictionary:
+func hcells(img: Image, himg: Image, step := 1) -> Dictionary:
 	var w := img.get_width()
 	var hgt := img.get_height()
 	var cells := {}
-	for y in hgt:
-		for x in w:
-			var c := img.get_pixel(x, y)
-			if c.a < 0.5:
+	for by in range(0, hgt, step):
+		for bx in range(0, w, step):
+			var r := 0.0
+			var g := 0.0
+			var bl := 0.0
+			var n := 0
+			var mh := 0
+			for yy in range(by, mini(by + step, hgt)):
+				for xx in range(bx, mini(bx + step, w)):
+					var c := img.get_pixel(xx, yy)
+					if c.a < 0.5:
+						continue
+					r += c.r
+					g += c.g
+					bl += c.b
+					n += 1
+					mh = maxi(mh, int(round(himg.get_pixel(xx, yy).r * 255.0)))
+			if n * 2 < step * step:
 				continue
-			var lv := int(round(himg.get_pixel(x, y).r * 255.0))
-			cells[Vector2i(x, y - hgt / 2)] = {"h": maxi(1, lv), "c": c}
+			cells[Vector2i(bx / step, by / step - hgt / (2 * step))] = {"h": maxi(1, int(ceil(float(mh) / step))), "c": Color(r / n, g / n, bl / n, 1.0)}
 	return cells
 
 

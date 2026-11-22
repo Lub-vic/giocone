@@ -338,6 +338,7 @@ static func _jackpot(main, id: String) -> void:
 			var a := Ally.new()
 			a.setup(main)
 			a.ttl = 25.0
+			a.kind = "drone"
 			a.dmg *= 2.0
 			a.speed = 100.0
 			a.mode = "follow"
@@ -349,6 +350,7 @@ static func _jackpot(main, id: String) -> void:
 			var g := Ally.new()
 			g.setup(main)
 			g.ttl = 30.0
+			g.kind = "golem"
 			g.max_hp *= 4.0
 			g.hp = g.max_hp
 			g.dmg *= 1.6

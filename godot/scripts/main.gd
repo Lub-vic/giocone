@@ -114,18 +114,19 @@ const LORE := [
 ]
 
 const STORY := [
-	"LA CENERE E' CADUTA SULLA VALLE DI VESPRA.",
-	"I MORTI SI SONO DESTATI, E UN SIGNORE SENZA NOME",
-	"REGNA NELLA CRIPTA SOTTO LA CATTEDRALE.",
+	"VESPRA. LA CENERE SCENDE DA TRE NOTTI E I MORTI NON RESTANO PIU' SOTTOTERRA.",
 	"",
-	"TRE CUSTODI SIGILLANO LA SUA TOMBA:",
-	"IL CIMITERO, LA CATTEDRALE E LE FORGE.",
+	"KILGORE T. SI SVEGLIA IN UNA CELLA, LE MANI SPORCHE DI TERRA DI TOMBA.",
+	"NON RICORDA COME CI SIA FINITO. RICORDA UN SOLO NOME:",
+	"QUELLO DEL SIGNORE DELLA CRIPTA.",
 	"",
-	"ESCI DALLE CELLE. ABBATTI I CUSTODI.",
-	"APRI LA CRIPTA E METTI FINE AL SUO REGNO.",
+	"UNA VOCE SOTTO LE PIETRE LO CHIAMA PER NOME.",
+	"I VIVI LA CHIAMANO MAGIA. LUI SA CHE E' UN DEBITO.",
 	"",
-	"DORMI NEGLI ACCAMPAMENTI PER CRESCERE. ESPLORA:",
-	"RELIQUIE E ALTARI SONO NASCOSTI OVUNQUE.",
+	"ESCI DALLE CELLE: SCONFIGGI IL CARCERIERE.",
+	"POI SCENDI NELLA CRIPTA E SCOPRI CHI HA CHIAMATO CHI.",
+	"",
+	"DORMI AI FALO' PER CRESCERE. LE RELIQUIE TI ASPETTANO.",
 ]
 
 var DUNS := {
@@ -249,6 +250,9 @@ var show_fps := false
 var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "photo": false, "aiground": false, "auto_fire": false}
 var opt_sel := 0
 var pause_sel := 0
+var debug_sel := 0
+var debug_list: Array = []
+var mm3d: Texture2D = null      # minimappa del mondo 3D (la riempie la skin)
 var beast_sel := 0            # bestiario: scheda selezionata
 var map_zoom := 0              # mappa del mondo: 0 intera, 1 ingrandita attorno al giocatore
 var map_pan := Vector2.ZERO
@@ -397,9 +401,9 @@ void fragment(){
 		state = "title"
 		return
 	if not testing:
-		state = "class"
+		start_game({}, "negromante")
 		return
-	start_game({}, "cavaliere")
+	start_game({}, "negromante")
 	if OS.get_cmdline_user_args().has("--zoom"):
 		player.zmode = 1
 		player.cam.zoom = Vector2(0.55, 0.55)
@@ -751,7 +755,7 @@ func end_run(win: bool) -> void:
 	state = "results"
 
 
-func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
+func start_game(ld: Dictionary, cls_id := "negromante") -> void:
 	if not testing:
 		state = "loading"
 		await get_tree().process_frame
@@ -880,7 +884,7 @@ func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
 		player.hp = player.max_hp
 		player.st = player.max_st
 		player.flasks = player.max_flasks
-	var d0_start: bool = ld.is_empty() and (not testing or OS.get_cmdline_user_args().has("--startd0"))
+	var d0_start: bool = ld.is_empty() and (not testing or OS.get_cmdline_user_args().has("--startd0"))   # nuova partita: si parte nelle segrete
 	if d0_start:
 		build_area("d0")
 		player.position = Vector2(center(rooms[0])) * Game.TS + Vector2(8, 36)
@@ -903,7 +907,7 @@ func start_game(ld: Dictionary, cls_id := "cavaliere") -> void:
 		player.position = cell_pos(c) + Vector2(0, 18)
 	player.cam.reset_smoothing()
 	state = "story" if d0_start else "play"
-	say("LE CELLE DEL RISVEGLIO" if ld.is_empty() else "BENTORNATO")
+	say("KILGORE T. SI RISVEGLIA" if d0_start else "BENTORNATO")
 
 
 func new_cycle() -> void:
@@ -5804,6 +5808,27 @@ func gen_dungeon() -> void:
 	biome.resize(n)
 	biome.fill(dun["bio"])
 	var tries := 0
+	var house_attached: bool = str(dun.get("type", "")) == "house"
+	if house_attached:
+		# casa: una stanza sola (case piccole) oppure due stanze attaccate, divise da un muro con un passaggio
+		var ap := area.split("|")
+		var hh := hash(Vector2i(int(ap[2]) if ap.size() > 3 else 0, int(ap[3]) if ap.size() > 3 else 0))
+		var two: bool = absi(hh) % 3 != 0
+		var rw: Array = dun.get("rw", [7, 10])
+		var rh: Array = dun.get("rh", [6, 8])
+		var w0 := randi_range(rw[0], rw[1])
+		var h0 := randi_range(rh[0], rh[1])
+		if not two:
+			w0 = randi_range(maxi(6, rw[0] - 1), rw[0] + 1)
+			h0 = randi_range(maxi(5, rh[0] - 1), rh[0] + 1)
+		var w1 := randi_range(rw[0] - 1, rw[1] - 2)
+		var h1 := randi_range(rh[0] - 1, rh[1])
+		var total := w0 + (1 + w1 if two else 0)
+		var x0 := Game.MW / 2 - total / 2
+		rooms.append(Rect2i(x0, Game.MH / 2 - h0 / 2, w0, h0))
+		if two:
+			rooms.append(Rect2i(x0 + w0 + 1, Game.MH / 2 - h1 / 2, w1, h1))
+		tries = 9999
 	if dun.get("arena", false):
 		rooms.append(Rect2i(Game.MW / 2 - 6, Game.MH - 14, 12, 9))
 		rooms.append(Rect2i(Game.MW / 2 - 18, 4, 36, 28))
@@ -5828,10 +5853,23 @@ func gen_dungeon() -> void:
 			for x in range(r.position.x, r.end.x):
 				grid[idx(Vector2i(x, y))] = 1
 				room_of[idx(Vector2i(x, y))] = i
-	for i in range(1, rooms.size()):
-		carve(center(rooms[i - 1]), center(rooms[i]))
-		if randf() < 0.3:
-			carve(center(rooms[i]), center(rooms[randi() % i]))
+	if house_attached:
+		if rooms.size() > 1:
+			# passaggio nel muro divisorio, due celle, al centro della parte in comune
+			var ra: Rect2i = rooms[0]
+			var rb: Rect2i = rooms[1]
+			var y0 := maxi(ra.position.y, rb.position.y)
+			var y1 := mini(ra.end.y, rb.end.y)
+			var dy := (y0 + y1) / 2 - 1
+			var wx := ra.end.x
+			for q in 2:
+				grid[idx(Vector2i(wx, dy + q))] = 1
+				carved.append(Vector2i(wx, dy + q))
+	else:
+		for i in range(1, rooms.size()):
+			carve(center(rooms[i - 1]), center(rooms[i]))
+			if randf() < 0.3:
+				carve(center(rooms[i]), center(rooms[randi() % i]))
 	var rows: Array = dun["rows"]
 	for i in rooms.size():
 		themes.append(rows[randi() % rows.size()])
@@ -6127,10 +6165,14 @@ func solid(c: Vector2i) -> bool:
 
 
 func solid_at(p: Vector2) -> bool:
+	if skin != null and is_instance_valid(skin) and skin.world_on:
+		return not skin.world_free(p, 3.0)
 	return solid(Vector2i(floori(p.x / Game.TS), floori(p.y / Game.TS)))
 
 
 func free_at(p: Vector2, r: float) -> bool:
+	if skin != null and is_instance_valid(skin) and skin.world_on:
+		return skin.world_free(p, r)
 	return not (solid_at(p + Vector2(-r, -r + 3)) or solid_at(p + Vector2(r, -r + 3))
 		or solid_at(p + Vector2(-r, r)) or solid_at(p + Vector2(r, r)))
 
@@ -7104,7 +7146,7 @@ func _activate_title_selection() -> void:
 			0:
 				start_game(title_save)
 			1:
-				state = "class"
+				start_game({}, "negromante")
 			3:
 				launch_editor()
 			_:
@@ -7250,6 +7292,27 @@ func launch_editor() -> void:
 
 
 func _unhandled_input(ev: InputEvent) -> void:
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F2 and state in ["play", "pause", "debug"]:
+		if state == "debug":
+			state = "play"
+		else:
+			debug_list = [["world", "MONDO APERTO"]]
+			for dk in DUNS.keys():
+				debug_list.append([dk, str(DUNS[dk]["n"])])
+			debug_sel = 0
+			state = "debug"
+		return
+	if state == "debug":
+		if ev.is_action_pressed("ui_down"):
+			debug_sel = (debug_sel + 1) % debug_list.size()
+		elif ev.is_action_pressed("ui_up"):
+			debug_sel = (debug_sel + debug_list.size() - 1) % debug_list.size()
+		elif ev.is_action_pressed("ui_cancel"):
+			state = "play"
+		elif ev.is_action_pressed("ui_accept"):
+			state = "play"
+			change_area(str(debug_list[debug_sel][0]))
+		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10:
 		launch_editor()
 		return
@@ -10032,7 +10095,10 @@ func _process(_dt: float) -> void:
 				for d in doors:
 					var dp: Vector2 = d["pos"]
 					var dy: float = player.position.y - dp.y
-					if absf(player.position.x - dp.x) < float(d["hw"]) and dy > 0.0 and dy < 15.0:
+					var inside: bool = absf(player.position.x - dp.x) < float(d["hw"]) and dy > 0.0 and dy < 15.0
+					if d.has("r"):
+						inside = player.position.distance_to(dp) < 11.0
+					if inside:
 						var lk := door_lock_msg(str(d["dest"]))
 						if lk != "":
 							say(lk)

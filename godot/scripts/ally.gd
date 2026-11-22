@@ -16,6 +16,7 @@ var idx := 0
 var count := 1
 var t := randf() * 5.0
 var spr: Sprite2D
+var kind := ""       # "drone" / "golem" per gli alleati evocati (modello 3D)
 var ttl := -1.0     # > 0: alleato temporaneo (es. drone evocato)
 
 

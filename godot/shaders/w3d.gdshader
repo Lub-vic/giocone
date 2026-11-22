@@ -83,7 +83,7 @@ void fragment() {
 			float a = L.w * smoothstep(12.0, 1.5, len);
 			a *= a;
 			float nl = max(dot(wn, dd / len), 0.0) * 0.6 + 0.4;
-			vec3 lc = dot(lamp_col[i], vec3(1.0)) > 0.01 ? lamp_col[i] : vec3(0.95, 0.80, 0.58);
+			vec3 lc = dot(lamp_col[i], vec3(1.0)) > 0.01 ? lamp_col[i] : vec3(0.90, 0.76, 0.64);
 			add += lc * a * nl;
 		}
 	}
@@ -91,7 +91,7 @@ void fragment() {
 	// alone dell'eroe: cuore caldo e pallido che sfuma dolcemente, per pixel (nessun blocco, nessun quadrato)
 	float hg = 1.0 - smoothstep(0.0, 21.0, dist);
 	hg = hg * (0.45 + 0.55 * hg);
-	add += vec3(0.95, 0.86, 0.68) * hero_glow * hg * (0.6 + 0.4 * max(wn.y, 0.0)) * 2.3;
+	add += vec3(0.90, 0.83, 0.74) * hero_glow * hg * (0.6 + 0.4 * max(wn.y, 0.0)) * 2.3;
 	float lum = 1.0 - smoothstep(fade_a * 0.45, fade_b, dist);
 	float floor_l = floor_min + (1.0 - floor_min) * lum;   // il buio non e' mai totale: i colori restano leggibili anche lontano dalle luci
 	ALBEDO = col * floor_l * lum_mix(lum);

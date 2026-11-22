@@ -228,7 +228,7 @@ func _draw() -> void:
 			_txt("...", Vector2(5 + 6.0 * minf(30.0, str(qs[0]).length()), oy + 9.0), Color(0.7, 0.92, 0.85, oa * 0.9))
 	if p.zmode > 0:
 		_txt("MODALITA ORDA" if p.zmode == 1 else "MODALITA TATTICA", Vector2(0, 20), Color(1.0, 0.6, 0.9) if p.zmode == 1 else Color(0.6, 0.9, 1.0), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "dialog", "craft", "map", "bestiary"]
+	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "dialog", "craft", "map", "bestiary", "debug"]
 	if not overlay:
 		_equip_panel(p)
 		_item_line(p)
@@ -285,6 +285,8 @@ func _draw() -> void:
 				_txt("Tieni livello e potenziamenti: mappa nuova, nemici piu' forti", Vector2(0, 182), Color(1, 0.7, 0.4), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		"pause":
 			_pause()
+		"debug":
+			_debug()
 		"options":
 			_options()
 		"controls":
@@ -298,6 +300,45 @@ func _draw() -> void:
 
 
 # ---------------------------------------------------------------- pannelli
+var td_ui: Dictionary = {}
+
+
+## sprite dall'alto (usato dalla grafica 3D) se esiste, altrimenti nil
+func _td_tex(name: String) -> Texture2D:
+	if main.skin != null and is_instance_valid(main.skin) and ResourceLoader.exists("res://assets/topdown/%s.png" % name):
+		if td_ui.has(name):
+			return td_ui[name]
+		var im: Image = (load("res://assets/topdown/%s.png" % name) as Texture2D).get_image()
+		if im.is_compressed():
+			im.decompress()
+		im.convert(Image.FORMAT_RGBA8)
+		var it := ImageTexture.create_from_image(im)
+		td_ui[name] = it
+		return it
+	return null
+
+
+func _ui_tex(name: String) -> Texture2D:
+	var t := _td_tex(name)
+	return t if t != null else Game.tex(name)
+
+
+func _debug() -> void:
+	var r := Rect2(110, 20, size.x - 220, size.y - 40)
+	_frame(r, true, 0.95)
+	_txt("DEBUG - SALTA A UN'AREA", Vector2(0, 28), GOLD_L, 11, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	_txt("SU/GIU SCEGLI   INVIO VAI   F2 CHIUDI", Vector2(0, size.y - 34), Color(0.7, 0.7, 0.8), 8, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	var n: int = main.debug_list.size()
+	var first := clampi(main.debug_sel - 6, 0, maxi(0, n - 13))
+	for i in range(first, mini(n, first + 13)):
+		var y := 48.0 + (i - first) * 14.0
+		var sel: bool = i == main.debug_sel
+		if sel:
+			draw_rect(Rect2(r.position.x + 8, y - 12, r.size.x - 16, 14), Color(0.4, 0.28, 0.1, 0.8))
+		_txt(str(main.debug_list[i][1]), Vector2(r.position.x + 14, y), GOLD_L if sel else Color(0.75, 0.73, 0.85), 9)
+		_txt(str(main.debug_list[i][0]).to_upper(), Vector2(r.end.x - 60, y), Color(0.55, 0.55, 0.7), 8)
+
+
 func _menu(p: Player) -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.6))
 	var r := Rect2(size.x / 2 - 150, 22, 300, 244)
@@ -491,7 +532,10 @@ func _minimap() -> void:
 	var sc := 1.0
 	var dst := Rect2(int(size.x - cw * sc - 6), 6, int(cw * sc), int(ch * sc))
 	_frame(dst.grow(4), true, 0.9)
-	draw_texture_rect_region(main.mm_tex, dst, Rect2(ox, oy, cw, ch))
+	if main.mm3d != null and main.area == "world":
+		draw_texture_rect(main.mm3d, dst, false)
+	else:
+		draw_texture_rect_region(main.mm_tex, dst, Rect2(ox, oy, cw, ch))
 	for pr in main.props:
 		var cc: Vector2i = pr.cell
 		if cc.x < ox or cc.y < oy or cc.x >= ox + cw or cc.y >= oy + ch:
@@ -543,7 +587,7 @@ func _bestiary() -> void:
 		var st: Dictionary = Bestiary.stats(E[i][0])
 		if st.is_empty():
 			continue
-		var t: Texture2D = Game.tex(str(st["spr"]))
+		var t: Texture2D = _ui_tex(str(st["spr"]))
 		var k := minf(1.0, 21.0 / maxf(t.get_width(), t.get_height()))
 		var sz := Vector2(t.get_width(), t.get_height()) * k
 		draw_texture_rect(t, Rect2(cell.position + (cell.size - sz) / 2.0, sz), false,
@@ -555,7 +599,7 @@ func _bestiary() -> void:
 	_frame(r, true, 0.92)
 	var st2: Dictionary = Bestiary.stats(en[0])
 	if not st2.is_empty():
-		var t2: Texture2D = Game.tex(str(st2["spr"]))
+		var t2: Texture2D = _ui_tex(str(st2["spr"]))
 		var k2 := minf(3.0, 64.0 / maxf(t2.get_width(), t2.get_height()))
 		var sz2 := Vector2(t2.get_width(), t2.get_height()) * k2
 		draw_texture_rect(t2, Rect2(Vector2(r.position.x + r.size.x / 2.0 - sz2.x / 2.0, r.position.y + 8), sz2), false,
@@ -903,10 +947,15 @@ func _inv(p: Player) -> void:
 	# ---- personaggio
 	_txt("EQUIPAGGIAMENTO", Vector2(lx, 18), GOLD_L)
 	var cx := lx + 74.0
-	draw_texture_rect(Game.tex(str(Rpg.CLASSES[p.cls]["spr"]) + "_b"), Rect2(cx - 30, 34, 60, 60), false)
-	draw_set_transform(Vector2(cx + 16, 73), 0.18, Vector2(2.4, 2.4))
-	draw_texture(Game.tex(str(p.weapon().get("hs", "hw_" + str(p.weapon()["f"])))), Vector2(-12, -18))
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	var td_hero: Texture2D = _td_tex(str(Rpg.CLASSES[p.cls]["spr"]))
+	if td_hero != null:
+		# con la grafica 3D il personaggio e' mostrato come in gioco (visto dall'alto, con la sua arma)
+		draw_texture_rect(td_hero, Rect2(cx - 40, 24, 80, 80), false)
+	else:
+		draw_texture_rect(Game.tex(str(Rpg.CLASSES[p.cls]["spr"]) + "_b"), Rect2(cx - 30, 34, 60, 60), false)
+		draw_set_transform(Vector2(cx + 16, 73), 0.18, Vector2(2.4, 2.4))
+		draw_texture(Game.tex(str(p.weapon().get("hs", "hw_" + str(p.weapon()["f"])))), Vector2(-12, -18))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	var labels := ["ARMA", "ARMA", "ELMO", "TORSO", "GAMBE", "-", "-", "-", "-", "-", "-", "-"]
 	for i in 12:
 		_slot(sl[i], labels[i], main.inv_slot_entry(i), s0 and main.inv_slot == i)
@@ -1155,7 +1204,7 @@ func _class_select() -> void:
 		var r := Rect2(8 + i * 116, 36, 110, 216)
 		var sel: bool = i == main.class_sel
 		_frame(r, sel, 0.97 if sel else 0.85)
-		var t: Texture2D = Game.tex(c["spr"])
+		var t: Texture2D = _ui_tex(str(c["spr"]))
 		draw_texture_rect(t, Rect2(r.position.x + 35, r.position.y + 10, 40, 40), false)
 		_txt(c["n"], Vector2(r.position.x, r.position.y + 66), Color(1, 0.92, 0.6) if sel else Color(0.72, 0.7, 0.82), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 		draw_rect(Rect2(r.position.x + 12, r.position.y + 71, r.size.x - 24, 1), GOLD_D)

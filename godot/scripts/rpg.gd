@@ -40,8 +40,8 @@ const CLASSES := {
 		"spells": ["scudo", "nova"], "d": "Resistente e bilanciato. Spada, scudo sacro e nova di fuoco."},
 	"cacciatore": {"n": "CACCIATORE", "spr": "hunter", "hp": 90.0, "st": 120.0, "mana": 50.0, "spd": 90.0, "regen": 1.0, "weapon": "bow",
 		"spells": ["dardo", "rigenera"], "d": "Veloce, colpisce da lontano con l'arco e si rigenera."},
-	"negromante": {"n": "NEGROMANTE", "spr": "necro", "hp": 80.0, "st": 90.0, "mana": 100.0, "spd": 82.0, "regen": 1.6, "weapon": "staff",
-		"spells": ["dardo", "fulmine"], "d": "Fragile ma devastante: dardi d'ombra e catene di fulmini."},
+	"negromante": {"n": "KILGORE T.", "spr": "necro", "hp": 80.0, "st": 90.0, "mana": 100.0, "spd": 82.0, "regen": 1.6, "weapon": "staff",
+		"spells": ["dardo", "fulmine"], "d": "Un uomo che ha stretto un patto con i morti: dardi d'ombra e catene di fulmini."},
 	"chierico": {"n": "CHIERICO", "spr": "cleric", "hp": 110.0, "st": 100.0, "mana": 80.0, "spd": 80.0, "regen": 1.3, "weapon": "hammer",
 		"spells": ["cura", "scudo"], "d": "Martello e fede: cura se stesso e si protegge."},
 }

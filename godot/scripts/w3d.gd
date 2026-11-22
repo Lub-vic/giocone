@@ -18,6 +18,22 @@ const WOOD := Color(0.17, 0.115, 0.085)
 const STONE := Color(0.24, 0.235, 0.25)
 
 var seed_v := 1337
+var clear_pts: Array = []        # Vector3(x, z, raggio): zone da tenere libere (falo', portali, oggetti di gioco)
+var no_base_fires := false
+var field_n := 0
+var pier_n := 0
+var first_pier := Vector2(-9999, -9999)
+var first_field := Vector2(-9999, -9999)
+var edge_fn := Callable()        # (Vector2 punto) -> true se e' fuori dalla mappa di gioco (vuoto)
+var house_doors: Dictionary = {}     # chiave arrotondata -> Vector3(x, z, yaw della facciata)
+var bio_cache: Dictionary = {}
+var stream_margin := 30.0
+var stream_drop := 56.0
+var step_us: Dictionary = {}
+var step_n: Dictionary = {}
+var grid_road_fn := Callable()    # se valido: le strade vengono dalla mappa di gioco (p -> {d, nearest, tan, w})
+var no_base_houses := false
+var bio_fn := Callable()          # (Vector2 punto) -> indice di bioma (0 = villaggio)
 var vp: SubViewport
 var sheet := false
 var extra_mats: Array = []
@@ -27,6 +43,7 @@ var cam: Camera3D
 var sun: DirectionalLight3D
 var mat: ShaderMaterial
 var mat_chr: ShaderMaterial
+var mat_prop: ShaderMaterial
 var patterns := false
 var post_rect: TextureRect
 var post_mat: ShaderMaterial
@@ -66,6 +83,7 @@ var npcs: Array = []
 var char_style := 0
 var vox_cache: Dictionary = {}
 const TD_VOX := 0.0625 * 0.95
+const TD_STEP := 2          # cubetti piu' grossi = personaggi meno definiti
 var hero_kind := "necro"
 var omni_pos: Array = [Vector3.ZERO, Vector3.ZERO, Vector3.ZERO]
 var omni_en: Array = [0.0, 0.0, 0.0]
@@ -180,6 +198,11 @@ func _build_view() -> void:
 	mat_chr.set_shader_parameter("gamma_in", 2.0 if sheet else 1.0)
 	mat_chr.set_shader_parameter("boost", 1.35 if sheet else 1.9)
 	mat_chr.set_shader_parameter("sat_k", 1.3 if sheet else 1.7)
+	mat_prop = ShaderMaterial.new()
+	mat_prop.shader = mat.shader
+	mat_prop.set_shader_parameter("gamma_in", 1.0)
+	mat_prop.set_shader_parameter("boost", 1.7)
+	mat_prop.set_shader_parameter("sat_k", 1.35)
 	var cl := CanvasLayer.new()
 	cl.layer = 1
 	add_child(cl)
@@ -281,6 +304,8 @@ func _add_poly(pts: Array, w: float) -> void:
 
 
 func _road_near(p: Vector2) -> Dictionary:
+	if grid_road_fn.is_valid():
+		return grid_road_fn.call(p)
 	var best := 1e9
 	var bn := p
 	var bt := Vector2.RIGHT
@@ -300,6 +325,9 @@ func _road_near(p: Vector2) -> Dictionary:
 
 
 func _road_dist_sub(p: Vector2, sub: Array) -> Vector2:
+	if grid_road_fn.is_valid():
+		var gd: Dictionary = grid_road_fn.call(p)
+		return Vector2(gd["d"], gd["w"])
 	var best := 1e9
 	var bw := 2.0
 	for s in sub:
@@ -319,13 +347,13 @@ func _stream(all: bool) -> void:
 		return
 	var pc := Vector2i(floori(pos.x / CHS), floori(pos.y / CHS))
 	var want: Array = []
-	var rad := int(ceil((fade_a + 30.0) / CHS))
+	var rad := int(ceil((fade_a + stream_margin) / CHS))
 	for dz in range(-rad, rad + 1):
 		for dx in range(-rad, rad + 1):
 			var k := pc + Vector2i(dx, dz)
 			var ctr := Vector2((k.x + 0.5) * CHS, (k.y + 0.5) * CHS)
 			var d := ctr.distance_to(pos)
-			if d < fade_a + 30.0 and not chunks.has(k) and not job_keys.has(k):
+			if d < fade_a + stream_margin and not chunks.has(k) and not job_keys.has(k):
 				want.append([d, k])
 	want.sort_custom(func(a, b): return a[0] < b[0])
 	for w in want:
@@ -334,12 +362,12 @@ func _stream(all: bool) -> void:
 		_run_jobs(1e9)
 	for k in chunks.keys():
 		var ctr2 := Vector2((k.x + 0.5) * CHS, (k.y + 0.5) * CHS)
-		if ctr2.distance_to(pos) > fade_a + 56.0:
+		if ctr2.distance_to(pos) > fade_a + stream_drop:
 			(chunks[k]["node"] as Node3D).queue_free()
 			chunks.erase(k)
 	for i in range(jobs.size() - 1, -1, -1):
 		var jk: Vector2i = jobs[i]["k"]
-		if Vector2((jk.x + 0.5) * CHS, (jk.y + 0.5) * CHS).distance_to(pos) > fade_a + 56.0:
+		if Vector2((jk.x + 0.5) * CHS, (jk.y + 0.5) * CHS).distance_to(pos) > fade_a + stream_drop:
 			job_keys.erase(jk)
 			jobs.remove_at(i)
 
@@ -364,6 +392,7 @@ func _enqueue(k: Vector2i) -> void:
 	o.con = 1.45
 	v.sat = 1.3
 	v.con = 1.2
+	g.gain = 0.82
 	jobs.append({"k": k, "x0": x0, "z0": z0, "g": g, "o": o, "v": v, "cols": [], "lamps": [], "sub": sub, "hs": [], "step": 0, "us": 0})
 	job_keys[k] = true
 
@@ -373,8 +402,12 @@ func _run_jobs(budget_ms: float) -> void:
 	while not jobs.is_empty():
 		var j: Dictionary = jobs[0]
 		var t1 := Time.get_ticks_usec()
+		var st: int = j["step"]
 		var done := _job_step(j)
-		j["us"] = int(j["us"]) + Time.get_ticks_usec() - t1
+		var dus := Time.get_ticks_usec() - t1
+		j["us"] = int(j["us"]) + dus
+		step_us[st] = int(step_us.get(st, 0)) + dus
+		step_n[st] = int(step_n.get(st, 0)) + 1
 		if done:
 			gen_ms = lerpf(gen_ms, float(j["us"]) / 1000.0, 0.2)
 			jobs.pop_front()
@@ -387,23 +420,35 @@ func _job_step(j: Dictionary) -> bool:
 	var s: int = j["step"]
 	var n := int(CHS / GS)
 	if s == 0:
-		var hs: Array = []
-		for jj in n + 1:
+		# altezze del terreno ai vertici, a fette di 8 righe
+		if not j.has("vc"):
+			j["vc"] = 0
+			j["hs"] = []
+		var hs: Array = j["hs"]
+		var cur: int = j["vc"]
+		for jj in range(cur, mini(cur + 8, n + 1)):
 			for ii in n + 1:
 				var p := Vector2(float(j["x0"]) + ii * GS, float(j["z0"]) + jj * GS)
 				var rdv := _road_dist_sub(p, j["sub"])
 				hs.append(_height(p, maxf(rdv.x - rdv.y * 0.5, 0.0) + 1.5))
-		j["hs"] = hs
-	if s <= 3:
-		_ground_rows(j, s * (n / 4), (s + 1) * (n / 4))
-	elif s <= 6:
+		j["vc"] = cur + 8
+		if cur + 8 <= n:
+			return false
+		j["gc"] = 0
+	elif s == 1:
+		var gc: int = j["gc"]
+		_ground_rows(j, gc, mini(gc + 6, n))
+		j["gc"] = gc + 6
+		if gc + 6 < n:
+			return false
+	elif s <= 4:
 		var k: Vector2i = j["k"]
 		for q in 3:
-			var li := (s - 4) * 3 + q
+			var li := (s - 2) * 3 + q
 			_lot(j, k.x * 3 + li % 3, k.y * 3 + li / 3)
-	elif s <= 8:
-		_grass(j, s - 7)
-	elif s == 9:
+	elif s <= 6:
+		_grass(j, s - 5)
+	elif s == 7:
 		_big_things(j)
 	else:
 		_finalize(j)
@@ -424,12 +469,16 @@ func _finalize(j: Dictionary) -> void:
 		if mid.x < x0 or mid.x >= x0 + CHS or mid.y < z0 or mid.y >= z0 + CHS:
 			continue
 		var hh := fposmod(sin(float(i) * 12.9898 + float(seed_v) * 0.37) * 43758.5453, 1.0)
-		if hh < 0.8 and mid.length() < 170.0:
+		if hh < 0.8 and mid.length() < 170.0 and not grid_road_fn.is_valid():
 			var tn := (segs_b[i] - segs_a[i]).normalized().orthogonal()
 			var lp := mid + tn * (segs_w[i] * 0.5 + 1.0) * (1.0 if hh < 0.4 else -1.0)
+			if edge_fn.is_valid() and bool(edge_fn.call(lp)):
+				continue
 			_lamp_post(o, lp, lamps, cols)
-	for bp in bonfires:
+	for bp in ([] if no_base_fires else bonfires):
 		var bv: Vector2 = bp
+		if edge_fn.is_valid() and bool(edge_fn.call(bv)):
+			continue
 		if bv.x >= x0 and bv.x < x0 + CHS and bv.y >= z0 and bv.y < z0 + CHS:
 			_pyre(o, bv, o.rn, cols, lamps)
 			for q in 5:
@@ -453,24 +502,86 @@ func _finalize(j: Dictionary) -> void:
 
 # ------------------------------------------------------------------ terreno
 func _height(p: Vector2, rd: float) -> float:
+	if edge_fn.is_valid() and bool(edge_fn.call(p)):
+		return -0.5
 	return n_h.get_noise_2d(p.x, p.y) * 0.2 * smoothstep(1.4, 3.4, rd)
 
 
+func _bio_at(p: Vector2) -> int:
+	return int(bio_fn.call(p)) if bio_fn.is_valid() else 0
+
+
+const BIO_GROUND := [Color(0, 0, 0, 0), Color(0.10, 0.12, 0.17, 0.55), Color(0.05, 0.12, 0.06, 0.6), Color(0.06, 0.14, 0.12, 0.65),
+		Color(0.20, 0.18, 0.25, 0.5), Color(0.50, 0.58, 0.68, 0.75), Color(0.16, 0.06, 0.04, 0.6)]
+
+
+func _near_edge(p: Vector2, d: float) -> bool:
+	return bool(edge_fn.call(p + Vector2(d, 0))) or bool(edge_fn.call(p - Vector2(d, 0))) or bool(edge_fn.call(p + Vector2(0, d))) or bool(edge_fn.call(p - Vector2(0, d)))
+
+
 func _ground_col(p: Vector2, rd: float, rw: float) -> Color:
+	if edge_fn.is_valid() and not bool(edge_fn.call(p)) and _near_edge(p, 1.3):
+		# riva: sabbia scura e ciottoli bagnati
+		var sn := n_soil.get_noise_2d(p.x * 3.0, p.y * 3.0) * 0.5 + 0.5
+		return Color(0.2, 0.18, 0.15).lerp(Color(0.12, 0.11, 0.1), sn)
+	if edge_fn.is_valid() and bool(edge_fn.call(p)):
+		# oltre la costa dell'isola: acqua scura
+		var wn := n_soil.get_noise_2d(p.x * 2.0, p.y * 2.0) * 0.5 + 0.5
+		var wv := sin(p.x * 3.1 + p.y * 1.7) * sin(p.y * 2.3 - p.x * 1.1) * 0.5 + 0.5
+		return Color(0.02, 0.05, 0.08).lerp(Color(0.06, 0.12, 0.17), wn * 0.6 + wv * 0.4)
+	var c0 := _ground_col0(p, rd, rw)
+	if bio_fn.is_valid() and rd > rw * 0.5 + 0.6:
+		# il bioma sfuma dolcemente (media su 9 punti), senza gradini grossi
+		var tk := Vector2i(floori(p.x / 0.8), floori(p.y / 0.8))
+		if bio_cache.has(tk):
+			var tc: Color = bio_cache[tk]
+			return c0.lerp(Color(tc.r, tc.g, tc.b), tc.a) if tc.a > 0.0 else c0
+		var sr := 0.0
+		var sg := 0.0
+		var sb := 0.0
+		var sa := 0.0
+		for oi in 9:
+			var of := Vector2(((oi % 3) - 1) * 1.7, ((oi / 3) - 1) * 1.7)
+			var bg: Color = BIO_GROUND[clampi(_bio_at(p + of), 0, 6)]
+			sr += bg.r * bg.a
+			sg += bg.g * bg.a
+			sb += bg.b * bg.a
+			sa += bg.a
+		if bio_cache.size() > 40000:
+			bio_cache.clear()
+		if sa > 0.01:
+			bio_cache[tk] = Color(sr / sa, sg / sa, sb / sa, sa / 9.0)
+			c0 = c0.lerp(Color(sr / sa, sg / sa, sb / sa), sa / 9.0)
+		else:
+			bio_cache[tk] = Color(0, 0, 0, 0.0)
+	return c0
+
+
+func _ground_col0(p: Vector2, rd: float, rw: float) -> Color:
 	var a := n_soil.get_noise_2d(p.x, p.y)
-	var col := Color(0.15, 0.13, 0.12)
-	col = col.lerp(Color(0.085, 0.07, 0.07), clampf(-a * 1.8, 0.0, 1.0))
-	col = col.lerp(Color(0.21, 0.18, 0.155), clampf((a - 0.25) * 2.0, 0.0, 0.7))
+	var col := Color(0.115, 0.1, 0.092)
+	col = col.lerp(Color(0.06, 0.05, 0.05), clampf(-a * 1.8, 0.0, 1.0))
+	col = col.lerp(Color(0.16, 0.14, 0.12), clampf((a - 0.25) * 2.0, 0.0, 0.7))
 	var vg := n_veg.get_noise_2d(p.x, p.y)
 	if vg > 0.1:
 		col = col.lerp(Color(0.08, 0.105, 0.07), clampf((vg - 0.1) * 2.2, 0.0, 0.85))
 	var st := n_stain.get_noise_2d(p.x + 400.0, p.y - 300.0)
 	if st > 0.5:
-		col = col.lerp(Color(0.15, 0.035, 0.035), clampf((st - 0.5) * 3.0, 0.0, 0.7))
+		col = col.lerp(Color(0.11, 0.05, 0.045), clampf((st - 0.5) * 2.0, 0.0, 0.35))
 	var edge := rw * 0.5
 	if rd < edge + 0.9:
-		col = col.lerp(Color(0.17, 0.15, 0.135), smoothstep(edge + 0.9, edge - 0.3, rd))
+		col = col.lerp(Color(0.17, 0.15, 0.135), smoothstep(edge + 0.22, edge - 0.08, rd))
 	return col
+
+
+func _edge_col(g: W3DBuilder, sub: Array, px: float, pz: float) -> Color:
+	var pp := Vector2(px, pz)
+	var rd := _road_dist_sub(pp, sub)
+	var col := _ground_col(pp, rd.x, rd.y)
+	var ed := rd.x - rd.y * 0.5
+	var bump := clampf(1.0 - absf(ed - 0.1) / 0.28, 0.0, 1.0)
+	col = Color(col.r * (1.0 - 0.35 * bump), col.g * (1.0 - 0.35 * bump), col.b * (1.0 - 0.35 * bump), col.a)
+	return g.shade(col, 0.06)
 
 
 func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
@@ -480,11 +591,27 @@ func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
 	var x0: float = j["x0"]
 	var z0: float = j["z0"]
 	var n := int(CHS / GS)
+	var crow: Array = []
+	var rrow: Array = []
+	crow.resize(n)
+	rrow.resize(n)
 	for jj in range(r0, r1):
 		for ii in n:
 			var p := Vector2(x0 + (ii + 0.5) * GS, z0 + (jj + 0.5) * GS)
-			var rdv: Vector2 = _road_dist_sub(p, sub)
-			var col := _ground_col(p, rdv.x, rdv.y)
+			# colore e distanza dalla strada calcolati a blocchi 2x2 (variano lentamente): molto piu' veloce
+			if (jj & 1) == 0 and (ii & 1) == 0:
+				var pc := Vector2(x0 + (ii + 1.0) * GS, z0 + (jj + 1.0) * GS)
+				var rd0: Vector2 = _road_dist_sub(pc, sub)
+				rrow[ii] = rd0
+				crow[ii] = _ground_col(pc, rd0.x, rd0.y)
+			elif (ii & 1) == 1:
+				rrow[ii] = rrow[ii - 1]
+				crow[ii] = crow[ii - 1]
+			elif (jj & 1) == 1:
+				pass
+			var rdv: Vector2 = rrow[ii]
+			var col: Color = crow[ii]
+			var near_road: bool = rdv.x - rdv.y * 0.5 < 1.6
 			var h00: float = hs[jj * (n + 1) + ii]
 			var h10: float = hs[jj * (n + 1) + ii + 1]
 			var h11: float = hs[(jj + 1) * (n + 1) + ii + 1]
@@ -493,16 +620,35 @@ func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
 			var b := Vector3(x0 + (ii + 1) * GS, h10, z0 + jj * GS)
 			var d := Vector3(x0 + (ii + 1) * GS, h11, z0 + (jj + 1) * GS)
 			var e := Vector3(x0 + ii * GS, h01, z0 + (jj + 1) * GS)
-			if (ii + jj) % 2 == 0:
-				g.tri(a, b, d, g.shade(col, 0.035))
-				g.tri(a, d, e, g.shade(col, 0.035))
+			if near_road:
+				# vicino alla strada i colori sono per vertice: il bordo e' netto ma diagonale, senza scalini a quadroni
+				var ca := _edge_col(g, sub, a.x, a.z)
+				var cb := _edge_col(g, sub, b.x, b.z)
+				var cd := _edge_col(g, sub, d.x, d.z)
+				var ce := _edge_col(g, sub, e.x, e.z)
+				if (ii + jj) % 2 == 0:
+					g.tri3(a, b, d, ca, cb, cd)
+					g.tri3(a, d, e, ca, cd, ce)
+				else:
+					g.tri3(a, b, e, ca, cb, ce)
+					g.tri3(b, d, e, cb, cd, ce)
+			elif (ii + jj) % 2 == 0:
+				g.tri(a, b, d, g.shade(col, 0.07))
+				g.tri(a, d, e, g.shade(col, 0.07))
 			else:
-				g.tri(a, b, e, g.shade(col, 0.035))
-				g.tri(b, d, e, g.shade(col, 0.035))
+				g.tri(a, b, e, g.shade(col, 0.07))
+				g.tri(b, d, e, g.shade(col, 0.07))
 			# ciottoli della strada principale: un sasso piatto per cella
-			if rdv.x < rdv.y * 0.5 + 0.1 and rdv.y > 2.3 and p.length() < 130.0 and g.rn.randf() < 0.92:
+			if rdv.x < rdv.y * 0.5 + 0.1 and rdv.y > 2.3 and (p.length() < 130.0 or grid_road_fn.is_valid()) and g.rn.randf() < 0.92 and not (edge_fn.is_valid() and bool(edge_fn.call(p))):
 				var sp := Vector3(p.x + g.rn.randf_range(-0.1, 0.1), _height(p, 3.0) + 0.03, p.y + g.rn.randf_range(-0.15, 0.15))
-				g.rock(sp, Vector3(g.rn.randf_range(0.24, 0.4), 0.09, g.rn.randf_range(0.2, 0.36)), Color(0.19, 0.19, 0.2), 0.18, 0.25, g.rn.randf() * TAU)
+				# ciottolo: un rombo piatto (2 triangoli) invece di un sasso intero
+				var cw := g.rn.randf_range(0.12, 0.2)
+				var cd := g.rn.randf_range(0.1, 0.18)
+				var cy := g.rn.randf() * TAU
+				var cx := Vector3(cos(cy) * cw, 0.0, sin(cy) * cw)
+				var cz := Vector3(-sin(cy) * cd, 0.0, cos(cy) * cd)
+				var ccol := g.shade(Color(0.19, 0.19, 0.2), 0.25)
+				g.quad(sp - cx - cz, sp + cx - cz, sp + cx + cz, sp - cx + cz, ccol)
 
 
 ## erba secca: ciuffi di lame lungo un campo di densita', piu' fitti e alti dove l'erba e' folta
@@ -532,6 +678,17 @@ func _grass(j: Dictionary, half: int) -> void:
 
 func _tuft(o: W3DBuilder, p: Vector3, dens: float, tone: float) -> void:
 	var pal := [Color(0.07, 0.10, 0.055), Color(0.10, 0.13, 0.07), Color(0.17, 0.15, 0.09), Color(0.13, 0.09, 0.06), Color(0.09, 0.11, 0.10), Color(0.20, 0.17, 0.10)]
+	var tb := _bio_at(Vector2(p.x, p.z)) if bio_fn.is_valid() else 0
+	if tb == 1:
+		pal = [Color(0.10, 0.13, 0.13), Color(0.14, 0.17, 0.15), Color(0.2, 0.2, 0.2), Color(0.08, 0.1, 0.12), Color(0.16, 0.18, 0.2), Color(0.12, 0.14, 0.1)]
+	elif tb == 2:
+		pal = [Color(0.04, 0.12, 0.05), Color(0.06, 0.17, 0.07), Color(0.10, 0.2, 0.08), Color(0.05, 0.1, 0.06), Color(0.08, 0.15, 0.09), Color(0.12, 0.2, 0.1)]
+	elif tb == 3:
+		pal = [Color(0.05, 0.14, 0.10), Color(0.08, 0.18, 0.13), Color(0.12, 0.22, 0.12), Color(0.06, 0.1, 0.09), Color(0.1, 0.2, 0.16), Color(0.16, 0.24, 0.12)]
+	elif tb == 5:
+		pal = [Color(0.6, 0.7, 0.8), Color(0.7, 0.78, 0.86), Color(0.5, 0.62, 0.74), Color(0.8, 0.86, 0.9), Color(0.55, 0.7, 0.8), Color(0.65, 0.75, 0.85)]
+	elif tb == 6:
+		pal = [Color(0.2, 0.08, 0.05), Color(0.28, 0.1, 0.06), Color(0.14, 0.07, 0.06), Color(0.3, 0.16, 0.08), Color(0.18, 0.1, 0.1), Color(0.35, 0.12, 0.06)]
 	var i0 := int(tone * 5.99)
 	var col: Color = (pal[i0] as Color).lerp(pal[(i0 + 1 + o.rn.randi() % 2) % 6], o.rn.randf_range(0.0, 0.6))
 	col.a = 0.9
@@ -553,7 +710,19 @@ func _bone(o: W3DBuilder, p: Vector3) -> void:
 		o.rock(p + Vector3(0.3, 0.1, 0.1), Vector3(0.2, 0.2, 0.2), Color(0.66, 0.63, 0.55), 0.08, 0.2, yaw)
 
 
+func _clear_at(p: Vector2, r: float) -> bool:
+	for cp in clear_pts:
+		var cv: Vector3 = cp
+		if p.distance_to(Vector2(cv.x, cv.y)) < cv.z + r:
+			return true
+	return false
+
+
 func _free(p: Vector2, r: float, cols: Array) -> bool:
+	if not clear_pts.is_empty() and _clear_at(p, r):
+		return false
+	if edge_fn.is_valid() and bool(edge_fn.call(p)):
+		return false
 	for cl in cols:
 		if cl[0] == "c":
 			if p.distance_to(cl[1]) < cl[2] + r:
@@ -699,7 +868,10 @@ func _zone_grave(gx: int, gz: int) -> bool:
 		return zones[key]
 	var h := fposmod(sin(float(gx) * 12.9898 + float(gz) * 78.233 + float(seed_v)) * 43758.5453, 1.0)
 	var res := false
-	if h < 0.13:
+	var gthr := 0.13
+	if bio_fn.is_valid() and _bio_at(Vector2((gx * 3 + 1.5) * LC, (gz * 3 + 1.5) * LC)) == 1:
+		gthr = 0.55
+	if h < gthr:
 		var ctr := Vector2((gx * 3 + 1.5) * LC, (gz * 3 + 1.5) * LC)
 		res = float(_road_near(ctr)["d"]) > 13.0
 	zones[key] = res
@@ -716,6 +888,16 @@ func _lot(j: Dictionary, ix: int, iz: int) -> void:
 	o.rn.seed = r.randi()
 	var cp: Vector2 = pl["cp"]
 	var kind: String = pl["kind"]
+	if kind != "road" and not clear_pts.is_empty() and _clear_at(cp, 3.0):
+		return
+	if edge_fn.is_valid() and bool(edge_fn.call(cp)):
+		return
+	if edge_fn.is_valid() and kind != "road":
+		var wdr := _water_dir(cp)
+		if wdr.z > 0.0 and r.randf() < 0.55:
+			_pier(o, cp, wdr, r, cols, lamps)
+	if no_base_houses and kind == "house":
+		kind = "yard"
 	var rn_: Dictionary = pl["road"]
 	var tan_: Vector2 = rn_["tan"]
 	var toward: Vector2 = (rn_["nearest"] - cp).normalized()
@@ -776,9 +958,140 @@ func _roadside(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Ra
 		_sign(o, cp, yaw, r, cols)
 
 
+
+## campo di grano: file di spighe dorate su terra arata, con staccionata e spaventapasseri
+## direzione (e distanza) dell'acqua piu' vicina entro 7 unita'; Vector3(dx, dz, dist) oppure z = -1 se non c'e'
+func _water_dir(cp: Vector2) -> Vector3:
+	var best := Vector3(0, 0, -1)
+	var bd := 99.0
+	for k in 12:
+		var a := TAU * k / 12.0
+		var dv := Vector2(cos(a), sin(a))
+		for dist in [1.5, 2.5, 3.5, 4.5, 5.5, 6.5]:
+			if bool(edge_fn.call(cp + dv * dist)):
+				if dist < bd:
+					bd = dist
+					best = Vector3(dv.x, dv.y, dist)
+				break
+	return best
+
+
+## molo di assi con pali, lanterna in fondo e una barca ormeggiata
+func _pier(o: W3DBuilder, cp: Vector2, wd: Vector3, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
+	pier_n += 1
+	if OS.get_cmdline_user_args().has("--hold"):
+		print("PIER ", cp)
+	if first_pier.x < -9000.0 or cp.length() < first_pier.length():
+		first_pier = cp
+	var dv := Vector2(wd.x, wd.y)
+	var sp := cp + dv * maxf(wd.z - 0.9, 0.0)
+	var ang := -atan2(dv.y, dv.x)
+	var t := Transform3D(Basis(Vector3.UP, ang), Vector3(sp.x, 0, sp.y))
+	var ln := r.randf_range(4.5, 6.5)
+	var wood := Color(0.26, 0.17, 0.1)
+	var n := int((ln + 1.8) / 0.38)
+	for i in n:
+		var x := -1.8 + i * 0.38
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(x, 0.1, 0)), Vector3(0.34, 0.07, 1.25), wood.lerp(Color(0.34, 0.22, 0.12), r.randf()), 0.1, 8)
+	for sz in [-1, 1]:
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(ln * 0.5 - 0.9, 0.04, sz * 0.58)), Vector3(ln + 1.8, 0.08, 0.1), Color(0.18, 0.11, 0.07), 0.08, 8)
+		for q in range(1, 4):
+			o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(q * ln / 3.5, -0.7, sz * 0.58)), 0.1, 0.09, 0.95, 5, Color(0.15, 0.1, 0.07), 0.1)
+	var lpv: Vector3 = t * Vector3(ln, 0.0, -0.55)
+	o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(ln, 0.1, -0.55)), 0.06, 0.05, 1.3, 5, Color(0.14, 0.1, 0.07), 0.08)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(ln, 1.5, -0.55)), Vector3(0.24, 0.3, 0.24), Color(0.95, 0.8, 0.6, 0.15), 0.0, 8)
+	lamps.append(Vector4(lpv.x, 1.6, lpv.z, 1.1))
+	var side := 1.0 if r.randf() < 0.5 else -1.0
+	var bt := t * Transform3D(Basis(Vector3.UP, r.randf_range(-0.1, 0.1)), Vector3(ln * 0.55, -0.3, side * 1.45))
+	o.box(bt * Transform3D(Basis.IDENTITY, Vector3(0, 0.08, 0)), Vector3(2.3, 0.28, 0.95), Color(0.22, 0.14, 0.09), 0.1, 8)
+	o.box(bt * Transform3D(Basis.IDENTITY, Vector3(0, 0.26, 0.4)), Vector3(2.1, 0.12, 0.1), Color(0.3, 0.2, 0.12), 0.08, 8)
+	o.box(bt * Transform3D(Basis.IDENTITY, Vector3(0, 0.26, -0.4)), Vector3(2.1, 0.12, 0.1), Color(0.3, 0.2, 0.12), 0.08, 8)
+	o.box(bt * Transform3D(Basis.IDENTITY, Vector3(1.2, 0.2, 0.0)), Vector3(0.1, 0.1, 0.8), Color(0.3, 0.2, 0.12), 0.08, 8)
+	o.box(bt * Transform3D(Basis.IDENTITY, Vector3(0.0, 0.16, 0.0)), Vector3(1.5, 0.05, 0.7), Color(0.1, 0.07, 0.05), 0.0, 8)
+	o.shard(bt * Vector3(-0.8, 0.1, 0.0), bt * Vector3(-1.5, 0.35, 0.0), 0.2, 0.05, Color(0.22, 0.14, 0.09), 0.3, 0.05, 0.03)
+	o.shard(bt * Vector3(1.0, 0.1, 0.0), bt * Vector3(1.7, 0.45, 0.0), 0.2, 0.04, Color(0.22, 0.14, 0.09), 0.3, 0.05, 0.03)
+	for k in 6:
+		var qp := sp + Vector2(-dv.y, dv.x) * r.randf_range(-3.5, 3.5) - dv * r.randf_range(0.3, 1.2)
+		if bool(edge_fn.call(qp)):
+			continue
+		for j in 4:
+			var b0 := Vector3(qp.x + r.randf_range(-0.15, 0.15), 0.0, qp.y + r.randf_range(-0.15, 0.15))
+			o.shard(b0, b0 + Vector3(r.randf_range(-0.1, 0.1), r.randf_range(0.5, 0.9), r.randf_range(-0.1, 0.1)), 0.06, 0.01, Color(0.12, 0.2, 0.1).lerp(Color(0.25, 0.25, 0.12), r.randf()), 0.3, 0.1, 0.05)
+
+
+func _wheat_field(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array) -> void:
+	field_n += 1
+	if field_n == 1:
+		first_field = p
+	if field_n == 1 and OS.get_cmdline_user_args().has("--hold"):
+		print("FIELD at ", p, " off=", house_doors.size())
+	var w := r.randf_range(5.2, 6.6)
+	var d := r.randf_range(4.2, 5.4)
+	var t := Transform3D(Basis(Vector3.UP, yaw), Vector3(p.x, 0, p.y))
+	var rows := int(d / 0.5)
+	for i in rows:
+		var z := -d * 0.5 + (i + 0.5) * 0.5
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.02, z)), Vector3(w, 0.05, 0.3), Color(0.12, 0.085, 0.055), 0.12, 8)
+		var n := int(w / 0.3)
+		for j in n:
+			var x := -w * 0.5 + (j + r.randf()) * 0.3
+			var base: Vector3 = t * Vector3(x, 0.0, z + r.randf_range(-0.05, 0.05))
+			var tip: Vector3 = t * Vector3(x + r.randf_range(-0.08, 0.08), 0.65 + r.randf() * 0.4, z + r.randf_range(-0.08, 0.08))
+			var wc := Color(0.66, 0.5, 0.16).lerp(Color(0.82, 0.66, 0.26), r.randf())
+			o.shard(base, tip, 0.13, 0.02, wc, 0.35, 0.12, 0.06)
+			# la spiga: un grano piu' chiaro in punta
+			o.shard(tip - (tip - base) * 0.25, tip + Vector3(0, 0.1, 0), 0.08, 0.015, Color(0.92, 0.76, 0.32), 0.3, 0.05, 0.03)
+	var hx := w * 0.5 + 0.5
+	var hz := d * 0.5 + 0.5
+	var cs := [Vector2(-hx, -hz), Vector2(hx, -hz), Vector2(hx, hz), Vector2(-hx, hz)]
+	var wc2: Array = []
+	for c2 in cs:
+		var wv: Vector3 = t * Vector3(c2.x, 0, c2.y)
+		wc2.append(Vector2(wv.x, wv.z))
+	for si in 4:
+		_fence_run(o, wc2[si], wc2[(si + 1) % 4], r, cols, si == 1)
+	if r.randf() < 0.7:
+		_scarecrow(o, p + Vector2(r.randf_range(-1.0, 1.0), r.randf_range(-0.8, 0.8)), r, cols)
+
+
+## orto: aiuole di cavoli e zucche con un cespuglio di bacche
+func _veg_patch(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array) -> void:
+	var t := Transform3D(Basis(Vector3.UP, yaw), Vector3(p.x, 0, p.y))
+	for i in 4:
+		var z := -1.6 + i * 1.05
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.07, z)), Vector3(4.6, 0.14, 0.7), Color(0.14, 0.09, 0.06), 0.12, 8)
+		for j in 7:
+			var x := -2.0 + j * 0.66 + r.randf_range(-0.08, 0.08)
+			var q: Vector3 = t * Vector3(x, 0.2, z)
+			if i % 2 == 0:
+				o.blob(q, Vector3(0.24, 0.2, 0.24), Color(0.18, 0.3, 0.12).lerp(Color(0.26, 0.38, 0.16), r.randf()), 6, 3, 0.12, 0.05)
+			else:
+				o.blob(q + Vector3(0, 0.05, 0), Vector3(0.22, 0.18, 0.22), Color(0.7, 0.32, 0.08).lerp(Color(0.8, 0.45, 0.1), r.randf()), 6, 3, 0.1, 0.04)
+	var a := cp_corner(t, -2.7, -2.4)
+	var b := cp_corner(t, 2.7, -2.4)
+	var c := cp_corner(t, 2.7, 2.0)
+	var d := cp_corner(t, -2.7, 2.0)
+	_fence_run(o, a, b, r, cols, false)
+	_fence_run(o, b, c, r, cols, false)
+	_fence_run(o, c, d, r, cols, true)
+	_fence_run(o, d, a, r, cols, false)
+
+
+func cp_corner(t: Transform3D, x: float, z: float) -> Vector2:
+	var v: Vector3 = t * Vector3(x, 0, z)
+	return Vector2(v.x, v.z)
+
+
 func _yard(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: RandomNumberGenerator, cols: Array, core: float) -> void:
 	var roll := r.randf()
 	var yaw := atan2(-tan_.y, tan_.x)
+	# vicino al paese: campi di grano e orti
+	if core > 0.12 and roll < 0.34:
+		_wheat_field(o, cp, yaw, r, cols)
+		return
+	if core > 0.12 and roll < 0.46:
+		_veg_patch(o, cp, yaw, r, cols)
+		return
 	if roll < 0.2 and core > 0.15:
 		_well(o, cp, r, cols)
 	elif roll < 0.42:
@@ -1071,6 +1384,8 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 	o.cyl(t0 * Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(cxl, wh * 0.4, czl)), 0.5, 0.42, roof_y + 1.0 - wh * 0.4, 5, Color(0.22, 0.2, 0.2), 0.16)
 	var dz := r.randf_range(-d * 0.5 + 1.3, d * 0.5 - 1.3)
 	var ab := t0.basis
+	var dwp: Vector3 = t0 * Vector3(w * 0.5 + 0.8, 0, dz)
+	house_doors[Vector2i(roundi(dwp.x * 2.0), roundi(dwp.z * 2.0))] = Vector3(dwp.x, dwp.z, yaw)
 	o.box(Transform3D(ab, t0 * Vector3(w * 0.5 + 0.1, 1.0, dz)), Vector3(0.42, 2.1, 1.2), Color(0.05, 0.035, 0.035), 0.1, 8)
 	o.box(Transform3D(ab, t0 * Vector3(w * 0.5 + 0.55, 0.12, dz)), Vector3(0.9, 0.24, 1.6), Color(0.24, 0.23, 0.23), 0.12, 8)
 	if r.randf() < 0.85:
@@ -1732,8 +2047,8 @@ func td_get(name: String) -> Dictionary:
 			(q as Image).decompress()
 		(q as Image).convert(Image.FORMAT_RGBA8)
 	var b := W3DBuilder.new()
-	var cells := b.hcells(im, hm)
-	var res := {"cells": cells, "w": im.get_width()}
+	var cells := b.hcells(im, hm, TD_STEP)
+	var res := {"cells": cells, "w": im.get_width() / TD_STEP}
 	td_cells[name] = res
 	return res
 
@@ -1744,7 +2059,7 @@ func td_mesh(name: String) -> ArrayMesh:
 		return vox_cache[key]
 	var d := td_get(name)
 	var b := W3DBuilder.new()
-	b.build_cells(d["cells"], int(d["w"]), TD_VOX)
+	b.build_cells(d["cells"], int(d["w"]), TD_VOX * TD_STEP)
 	var m := b.mesh()
 	vox_cache[key] = m
 	return m
@@ -1925,6 +2240,7 @@ func _process(dt: float) -> void:
 func _mp(k: String, v: Variant) -> void:
 	mat.set_shader_parameter(k, v)
 	mat_chr.set_shader_parameter(k, v)
+	mat_prop.set_shader_parameter(k, v)
 	if k in ["curve", "fade_a", "fade_b"]:
 		for om in extra_mats:
 			(om as ShaderMaterial).set_shader_parameter(k, v)

@@ -28,8 +28,8 @@ void fragment() {
 	}
 	c += bl * 0.09 * vec3(1.0, 0.9, 0.78);
 	float ll = luma(c);
-	c = mix(vec3(ll), c, 0.5);
-	c *= mix(vec3(0.88, 0.94, 1.12), vec3(1.06, 0.98, 0.9), smoothstep(0.08, 0.5, ll));
+	c = mix(vec3(ll), c, 0.85);
+	c *= mix(vec3(0.88, 0.94, 1.12), vec3(1.03, 0.99, 0.95), smoothstep(0.08, 0.5, ll));
 	vec2 q = uv - 0.5;
 	c *= 1.0 - smoothstep(0.28, 0.82, length(q * vec2(1.0, 0.9))) * 0.75;
 	c = floor(c * 40.0 + 0.5) / 40.0;

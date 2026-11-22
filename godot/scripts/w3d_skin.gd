@@ -52,6 +52,17 @@ func _ready() -> void:
 	vp.add_child(static_root)
 	_make_fx_meshes()
 	post_rect.visible = false
+	sharp_layer = CanvasLayer.new()
+	sharp_layer.layer = 128
+	var sr := ColorRect.new()
+	sr.set_anchors_preset(Control.PRESET_FULL_RECT)
+	sr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sm := ShaderMaterial.new()
+	sm.shader = load("res://shaders/w3d_sharpen.gdshader")
+	sr.material = sm
+	sharp_layer.add_child(sr)
+	sharp_layer.visible = false
+	add_child(sharp_layer)
 	fwd = RenderingServer.get_current_rendering_method() == "forward_plus"
 	shadow_disc = not fwd
 	if fwd:
@@ -176,6 +187,10 @@ func _hash2(x: int, y: int, s := 0) -> float:
 	return fposmod(sin(float(x) * 12.9898 + float(y) * 78.233 + float(s) * 37.719) * 43758.5453, 1.0)
 
 
+func ci_is_stone(_c: Vector2i) -> bool:
+	return false
+
+
 func _rebuild_static() -> void:
 	for c in static_root.get_children():
 		c.queue_free()
@@ -206,11 +221,38 @@ func _rebuild_static() -> void:
 	var mh: int = Game.MH
 	var dark := _k(fc, 0.42)
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var wood: bool = str(gm.dun.get("type", "")) == "house" if gm.dun is Dictionary else false
 	for y in mh:
 		for x in mw:
 			var c := Vector2i(x, y)
 			var hv := _hash2(x, y)
 			var hv2 := _hash2(x, y, 5)
+			if wood:
+				if gm.is_floor(c):
+					# pavimento di assi: tre strisce per cella, un po' diverse una dall'altra, con fessure scure
+					var big := _hash2(x >> 1, y >> 1, 3)
+					var base_wood := Color(0.42, 0.28, 0.16).lerp(Color(0.32, 0.21, 0.12), big)
+					if (x + y) % 5 == 0 and ci_is_stone(c):
+						base_wood = Color(0.26, 0.25, 0.26)
+					for sj in 3:
+						var pc := base_wood.lerp(_k(base_wood, 1.35), _hash2(x * 3 + sj, y, 7) * 0.7)
+						var z0 := y + sj / 3.0
+						fb.quad(Vector3(x, 0.0, z0), Vector3(x + 1, 0.0, z0), Vector3(x + 1, 0.0, z0 + 1.0 / 3.0), Vector3(x, 0.0, z0 + 1.0 / 3.0), _k(base_wood, 0.35))
+						fb.quad(Vector3(x, 0.012, z0 + 0.012), Vector3(x + 1, 0.012, z0 + 0.012), Vector3(x + 1, 0.012, z0 + 0.32), Vector3(x, 0.012, z0 + 0.32), fb.shade(pc, 0.05))
+				else:
+					var near_w := false
+					for dy2 in range(-1, 2):
+						for dx2 in range(-1, 2):
+							if gm.is_floor(Vector2i(x + dx2, y + dy2)):
+								near_w = true
+					if near_w:
+						var wh := 2.7
+						var wcol := Color(0.24, 0.15, 0.09).lerp(Color(0.18, 0.11, 0.07), hv)
+						wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, wh * 0.5, y + 0.5)), Vector3(1.0, wh, 1.0), wcol, 0.08, 8)
+						# travi di legno orizzontali a due altezze lungo le pareti
+						for hy in [0.55, 1.5]:
+							wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, hy, y + 0.5)), Vector3(1.04, 0.1, 1.04), _k(wcol, 0.68), 0.05, 8)
+				continue
 			if gm.is_floor(c):
 				# fondo scuro (le fughe) e lastra leggermente rialzata, con tono diverso per ogni lastra
 				fb.quad(Vector3(x, 0, y), Vector3(x + 1, 0, y), Vector3(x + 1, 0, y + 1), Vector3(x, 0, y + 1), dark)
@@ -280,6 +322,14 @@ func _rebuild_static() -> void:
 	pb.gain = 1.3
 	if gm.rooms is Array and gm.rooms.size() > 0:
 		_build_decor(pb, decor_lights)
+	if wood and gm.rooms is Array:
+		# case: una lampada a olio al centro di ogni stanza, luce calda e bassa
+		for rw3 in gm.rooms:
+			var rc3: Rect2i = rw3
+			var cc3 := Vector2(rc3.position) + Vector2(rc3.size) * 0.5
+			decor_lights.append(Vector3(cc3.x, 1.7, cc3.y))
+			ob.cyl(Transform3D(Basis.IDENTITY, Vector3(cc3.x, 0.0, cc3.y)), 0.18, 0.12, 0.5, 6, Color(0.2, 0.12, 0.07), 0.08)
+			ob.box(Transform3D(Basis.IDENTITY, Vector3(cc3.x, 0.62, cc3.y)), Vector3(0.16, 0.2, 0.16), Color(1.0, 0.75, 0.4, 0.15), 0.0, 8)
 	for pr in [[fb, false], [wb, true], [ob, true], [pb, true]]:
 		var bld: W3DBuilder = pr[0]
 		if bld.v.size() == 0:
@@ -718,7 +768,7 @@ const SHADOWED := 3
 func _make_pool() -> void:
 	for i in POOL_N:
 		var ol := OmniLight3D.new()
-		ol.light_color = Color(1.0, 0.72, 0.42)
+		ol.light_color = Color(0.96, 0.77, 0.62)
 		ol.omni_range = 12.0
 		ol.omni_attenuation = 1.35
 		ol.shadow_enabled = i < SHADOWED
@@ -732,7 +782,7 @@ func _make_pool() -> void:
 		pool_pos.append(Vector3.ZERO)
 		pool_en.append(0.0)
 	hero_light = OmniLight3D.new()
-	hero_light.light_color = Color(1.0, 0.82, 0.6)
+	hero_light.light_color = Color(0.95, 0.85, 0.74)
 	hero_light.omni_range = 9.0
 	hero_light.omni_attenuation = 1.5
 	hero_light.light_energy = 0.7
@@ -747,10 +797,10 @@ func _real_lights(dt: float) -> void:
 		if not is_instance_valid(l):
 			continue
 		var gp: Vector2 = (l as Node2D).global_position / 16.0
-		cand.append([gp.distance_squared_to(pos), Vector3(gp.x, 1.9, gp.y), minf(4.2, float(f[1]) * 3.4) * (0.55 if world_on else 1.0), Color(1.0, 0.7, 0.4)])
+		cand.append([gp.distance_squared_to(pos), Vector3(gp.x, 1.9, gp.y), minf(4.2, float(f[1]) * 3.4) * (0.55 if world_on else 1.0), Color(0.96, 0.76, 0.62)])
 	for dl in decor_lights:
 		var dv: Vector3 = dl
-		cand.append([Vector2(dv.x, dv.z).distance_squared_to(pos), dv, 3.0, Color(1.0, 0.62, 0.32)])
+		cand.append([Vector2(dv.x, dv.z).distance_squared_to(pos), dv, 3.0, Color(0.96, 0.72, 0.56)])
 	for rl in room_lamps:
 		var rp: Vector2 = rl[0]
 		cand.append([rp.distance_squared_to(pos) * 1.6, Vector3(rp.x, 3.6, rp.y), 0.55, rl[1]])
@@ -781,10 +831,169 @@ func _real_lights(dt: float) -> void:
 		ol.visible = ce > 0.02
 	hero_light.position = Vector3(pos.x, 3.0, pos.y)
 	# nel mondo aperto: luce piu' fredda e desaturata, lampade piu' piccole (niente dominante arancione)
-	hero_light.light_color = Color(0.78, 0.84, 1.0) if world_on else Color(1.0, 0.82, 0.6)
+	hero_light.light_color = Color(0.78, 0.84, 1.0) if world_on else Color(0.95, 0.85, 0.74)
 	hero_light.light_energy = 0.55 if world_on else 0.7
 	env.ambient_light_energy = 0.30 if world_on else 0.16
 	env.ambient_light_color = Color(0.40, 0.44, 0.58) if world_on else Color(0.36, 0.38, 0.52)
+
+
+
+# ------------------------------------------------------------------ bolla spazio-temporale (Cronotone) in 3D
+var bub_nodes: Dictionary = {}
+var bub_meshes: Dictionary = {}
+
+
+func _bub_mesh(key: String) -> ArrayMesh:
+	if bub_meshes.has(key):
+		return bub_meshes[key]
+	var b := W3DBuilder.new()
+	b.rn.seed = 77
+	match key:
+		"disc":
+			b.cyl(Transform3D(Basis.IDENTITY, Vector3.ZERO), 1.0, 1.0, 0.02, 24, Color(0.02, 0.015, 0.05), 0.0)
+		"ring":
+			for i in 36:
+				var a0 := TAU * i / 36.0
+				var a1 := TAU * (i + 1) / 36.0
+				var p0 := Vector3(cos(a0), 0, sin(a0))
+				var p1 := Vector3(cos(a1), 0, sin(a1))
+				b.quad(p0 * 0.96, p1 * 0.96, p1 * 1.04, p0 * 1.04, Color(1, 1, 1, 0.0))
+		"arc":
+			for i in 14:
+				var a0 := i * 0.3
+				var a1 := a0 + 0.3
+				var p0 := Vector3(cos(a0), 0, sin(a0))
+				var p1 := Vector3(cos(a1), 0, sin(a1))
+				b.quad(p0 * 0.95, p1 * 0.95, p1 * 1.03, p0 * 1.03, Color(1, 1, 1, 0.0))
+		"arms":
+			for arm in 3:
+				for i in 13:
+					var u0 := i / 13.0
+					var u1 := (i + 1) / 13.0
+					var a0 := arm * TAU / 3.0 + u0 * 3.2
+					var a1 := arm * TAU / 3.0 + u1 * 3.2
+					var r0 := 0.18 + 0.78 * u0
+					var r1 := 0.18 + 0.78 * u1
+					var p0 := Vector3(cos(a0), 0, sin(a0)) * r0
+					var p1 := Vector3(cos(a1), 0, sin(a1)) * r1
+					b.quad(p0, p1, p1 + Vector3(0.03, 0.0, 0.03), p0 + Vector3(0.03, 0.0, 0.03), Color(1, 1, 1, 0.05))
+		"hand":
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0.45, 0.0, 0)), Vector3(0.9, 0.02, 0.05), Color(1, 1, 1, 0.0), 0.0, 0)
+		"tick":
+			b.box(Transform3D(Basis.IDENTITY, Vector3.ZERO), Vector3(0.1, 0.03, 0.04), Color(1, 1, 1, 0.0), 0.0, 0)
+		"spark":
+			b.blob(Vector3.ZERO, Vector3(0.07, 0.07, 0.07), Color(1, 1, 1, 0.0), 5, 3, 0.0, 0.0)
+	var m: ArrayMesh = b.mesh()
+	bub_meshes[key] = m
+	return m
+
+
+func _bub_mi(parent: Node3D, key: String, col: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = _bub_mesh(key)
+	var mt := StandardMaterial3D.new()
+	mt.albedo_color = col if key != "disc" else Color(0.03, 0.02, 0.08)
+	mt.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mi.material_override = mt
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	return mi
+
+
+func _sync_bubble(n: ChronoBubble) -> void:
+	var id: int = n.get_instance_id()
+	if not bub_nodes.has(id):
+		var root := Node3D.new()
+		vp.add_child(root)
+		var col: Color = n.col
+		var nd := {"root": root, "seen": 0.0, "src": weakref(n)}
+		nd["disc"] = _bub_mi(root, "disc", col)
+		nd["ring"] = _bub_mi(root, "ring", col)
+		nd["ring2"] = _bub_mi(root, "arc", Color(1, 1, 1))
+		nd["ring3"] = _bub_mi(root, "arc", col)
+		nd["arms"] = _bub_mi(root, "arms", col)
+		nd["hand"] = _bub_mi(root, "hand", Color(1, 1, 1))
+		nd["hand2"] = _bub_mi(root, "hand", col)
+		var ticks: Array = []
+		for i in 12:
+			ticks.append(_bub_mi(root, "tick", Color(1, 1, 1)))
+		nd["ticks"] = ticks
+		var sparks: Array = []
+		for i in 6:
+			sparks.append(_bub_mi(root, "spark", Color(1, 1, 1)))
+		nd["sparks"] = sparks
+		var item := Node3D.new()
+		var imi := MeshInstance3D.new()
+		var iid := str(n.res["id"])
+		imi.mesh = W3DChrono.mesh(iid) if W3DChrono.has(iid) else W3DChrono.mesh("generic")
+		imi.material_override = mat_prop
+		item.add_child(imi)
+		root.add_child(item)
+		nd["item"] = item
+		bub_nodes[id] = nd
+	var d: Dictionary = bub_nodes[id]
+	d["seen"] = lamp_t
+	var root3: Node3D = d["root"]
+	root3.position = Vector3(n.position.x / 16.0, 0.12, n.position.y / 16.0)
+	var t: float = n.t
+	var grow := 1.0 - pow(1.0 - clampf(t / ChronoBubble.T_OPEN, 0.0, 1.0), 3.0)
+	var tf := t - ChronoBubble.T_OPEN - ChronoBubble.T_HOLD
+	var kfly := clampf(tf / ChronoBubble.T_FLY, 0.0, 1.0)
+	var r := n.radius / 16.0 * grow * (1.0 - 0.85 * kfly * kfly) * 1.15
+	var fw: float = n.fwd
+	root3.visible = r > 0.03
+	(d["disc"] as Node3D).scale = Vector3(r, 1, r)
+	(d["ring"] as Node3D).scale = Vector3(r, 1, r)
+	(d["ring"] as Node3D).position.y = 0.04
+	(d["arms"] as Node3D).scale = Vector3(r, 1, r)
+	(d["arms"] as Node3D).rotation.y = fw * t * 3.2
+	(d["arms"] as Node3D).position.y = 0.05
+	(d["ring2"] as Node3D).scale = Vector3(r * 0.82, 1, r * 0.82)
+	(d["ring2"] as Node3D).rotation.y = fw * t * 2.0
+	(d["ring2"] as Node3D).position.y = 0.06
+	(d["ring3"] as Node3D).scale = Vector3(r * 1.18, 1, r * 1.18)
+	(d["ring3"] as Node3D).rotation.y = -fw * t * 1.5
+	(d["ring3"] as Node3D).position.y = 0.06
+	var hand := fw * t * 4.0
+	(d["hand"] as Node3D).scale = Vector3(r, 1, r)
+	(d["hand"] as Node3D).rotation.y = -hand
+	(d["hand"] as Node3D).position.y = 0.07
+	(d["hand2"] as Node3D).scale = Vector3(r * 0.65, 1, r * 0.65)
+	(d["hand2"] as Node3D).rotation.y = -hand * 0.25
+	(d["hand2"] as Node3D).position.y = 0.07
+	var tks: Array = d["ticks"]
+	for i in tks.size():
+		var a := i * TAU / 12.0
+		var tk: Node3D = tks[i]
+		tk.position = Vector3(cos(a), 0.06, sin(a)) * r * 1.08
+		tk.rotation.y = -a
+		tk.scale = Vector3(1.0 if i % 3 == 0 else 0.6, 1, 1)
+	var sps: Array = d["sparks"]
+	for i in sps.size():
+		var a2 := fw * t * 2.4 + i * TAU / 6.0
+		var rr := r * (1.15 + 0.2 * sin(t * 3.0 + i))
+		(sps[i] as Node3D).position = Vector3(cos(a2) * rr, 0.3 + 0.25 * sin(t * 4.0 + i), sin(a2) * rr)
+	var item3: Node3D = d["item"]
+	item3.visible = t > ChronoBubble.T_OPEN * 0.6
+	var k := float(n.spr.get_meta("k")) * 16.0 / 22.0 * 1.15
+	var appear := clampf((t - ChronoBubble.T_OPEN * 0.6) / 0.4, 0.0, 1.0)
+	if tf <= 0.0:
+		item3.position = Vector3(0, 0.6 + sin(t * 5.0) * 0.08, 0)
+		item3.scale = Vector3.ONE * k * appear
+	else:
+		var tgt := Vector3((gm.player.position.x - n.position.x) / 16.0, 0.9, (gm.player.position.y - n.position.y) / 16.0)
+		item3.position = Vector3(0, 0.6, 0).lerp(tgt, kfly * kfly)
+		item3.scale = Vector3.ONE * k * (1.0 - 0.5 * kfly)
+	item3.rotation.y = t * 1.6 * fw
+
+
+func _bubbles_cleanup() -> void:
+	for id in bub_nodes.keys():
+		var d: Dictionary = bub_nodes[id]
+		var sr = (d["src"] as WeakRef).get_ref()
+		if sr == null or not is_instance_valid(sr) or float(d["seen"]) < lamp_t - 0.2:
+			(d["root"] as Node3D).queue_free()
+			bub_nodes.erase(id)
 
 
 # ------------------------------------------------------------------ effetti 3D: scintille, impatti, lampi di colpo, contorni
@@ -936,13 +1145,16 @@ func _explode(spr: Sprite2D, base: Vector3, scl: float, tdn := "") -> void:
 
 
 func _explode_td(name: String, base: Vector3, scl: float) -> void:
+	if name.begins_with("ch:"):
+		burst3d(Vector2(base.x, base.z) * 16.0, Color(1.0, 0.7, 0.3), 26, 90.0, 0.7)
+		return
 	var d := td_get(name)
 	var cells: Dictionary = d["cells"]
 	if cells.is_empty() or booms.size() > 6:
 		return
-	var vox := TD_VOX * scl
+	var vox := TD_VOX * TD_STEP * scl
 	var keys := cells.keys()
-	var step := 1 if keys.size() <= 260 else 2
+	var step := 1
 	var items: Array = []
 	for i in range(0, keys.size(), step):
 		items.append(keys[i])
@@ -1045,6 +1257,50 @@ func _sprite_center(n: Node2D, spr: Sprite2D) -> Vector2:
 
 
 func _make_generic(n: Node2D, spr: Sprite2D) -> Node3D:
+	var pk := str(n.get("kind")) if n.get("kind") != null else ""
+	if pk != "" and not (n is Enemy or n is Villager or n is Ally or n is Critter) and W3DProps.ok(pk):
+		var tw := float(spr.texture.get_width()) / 16.0
+		var th := float(spr.texture.get_height()) / 16.0
+		var mkey := "p3_%s_%d" % [pk, n.get_instance_id() % 3]
+		var pmesh: ArrayMesh
+		var from_base := false
+		if vox_cache.has(mkey):
+			pmesh = vox_cache[mkey]
+			from_base = bool(vox_cache.get(mkey + "_b", false))
+		else:
+			pmesh = _base_prop(pk, tw, th, hash(mkey))
+			if pmesh != null:
+				from_base = true
+				vox_cache[mkey] = pmesh
+				vox_cache[mkey + "_b"] = true
+		if pmesh == null:
+			var im: Image = spr.texture.get_image()
+			if im.is_compressed():
+				im.decompress()
+			im.convert(Image.FORMAT_RGBA8)
+			var sr := 0.0
+			var sg := 0.0
+			var sb := 0.0
+			var cnt := 0
+			for yy in range(0, im.get_height(), 2):
+				for xx in range(0, im.get_width(), 2):
+					var pc := im.get_pixel(xx, yy)
+					if pc.a > 0.5:
+						sr += pc.r
+						sg += pc.g
+						sb += pc.b
+						cnt += 1
+			var av := Color(sr / maxf(cnt, 1), sg / maxf(cnt, 1), sb / maxf(cnt, 1))
+			pmesh = W3DProps.build(pk, tw, th, av, hash(mkey))
+			vox_cache[mkey] = pmesh
+		var proot := Node3D.new()
+		var pmi := MeshInstance3D.new()
+		pmi.mesh = pmesh
+		pmi.material_override = mat if from_base else mat_prop
+		pmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		proot.add_child(pmi)
+		vp.add_child(proot)
+		return proot
 	var root := Node3D.new()
 	var mi := MeshInstance3D.new()
 	mi.mesh = _tex_mesh(spr.texture, 0.12)
@@ -1058,6 +1314,8 @@ func _make_generic(n: Node2D, spr: Sprite2D) -> Node3D:
 ## personaggio "esatto": lo sprite originale, ogni pixel un cubetto (stessi colori e stessa silhouette)
 func _td_name(n: Node, is_player: bool) -> String:
 	var nm := ""
+	if is_player and not (gm.player.veh as Dictionary).is_empty():
+		return "ch:" + str(gm.player.veh["id"])
 	if is_player:
 		nm = {"cavaliere": "hero", "cacciatore": "hunter", "negromante": "necro", "chierico": "cleric"}.get(str(gm.player.cls), "")
 	elif n is Enemy:
@@ -1068,8 +1326,12 @@ func _td_name(n: Node, is_player: bool) -> String:
 			nm = str(Enemy.DEFS[k][0])
 		else:
 			nm = k
+	elif n is Prop and str((n as Prop).kind) == "elder":
+		nm = "necro"
 	elif n is Ally:
 		nm = "skeleton"
+		if str((n as Ally).kind) != "":
+			return "ch:" + str((n as Ally).kind)
 	elif n is Villager:
 		var rid := str((n as Villager).role)
 		if Villager.ROLES.has(rid):
@@ -1084,8 +1346,13 @@ func _td_name(n: Node, is_player: bool) -> String:
 func _make_td(name: String) -> Node3D:
 	var root := Node3D.new()
 	var mi := MeshInstance3D.new()
-	mi.mesh = td_mesh(name)
-	mi.material_override = mat_chr
+	if name.begins_with("ch:"):
+		mi.mesh = W3DChrono.mesh(name.substr(3))
+		mi.material_override = mat_prop
+		mi.rotation.y = PI * 0.5
+	else:
+		mi.mesh = td_mesh(name)
+		mi.material_override = mat_chr
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	root.add_child(mi)
 	vp.add_child(root)
@@ -1137,6 +1404,11 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 	if spr == null or spr.texture == null:
 		return
 	var n2 := n as Node2D
+	var func_prop: bool = n is Prop and not bool((n as Prop).scene)
+	if world_on and not (is_player or func_prop or n is Enemy or n is Villager or n is Ally or n is Critter):
+		if dyn.has(id):
+			_drop_dyn(id)
+		return
 	if not is_player and world_on and (n2.position / 16.0).distance_squared_to(pos) > 54.0 * 54.0:
 		if dyn.has(id):
 			_drop_dyn(id)
@@ -1155,7 +1427,7 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 			var ek := str((n as Enemy).kind)
 			if KNOWN.has(ek) and (n as Enemy).scl <= 1.01:
 				kind = ek
-		var chr := n is Enemy or n is Villager or n is Ally or n is Critter or is_player
+		var chr := n is Enemy or n is Villager or n is Ally or n is Critter or is_player or (n is Prop and str((n as Prop).kind) == "elder")
 		var tdn := ""
 		if char_mode == 0 and chr:
 			tdn = _td_name(n, is_player)
@@ -1169,6 +1441,8 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 		elif kind != "":
 			node = _make_char(kind)
 			model = true
+		elif world_on and n is Prop and not W3DProps.ok(str((n as Prop).kind)):
+			node = _make_exact(spr)
 		else:
 			node = _make_generic(n2, spr)
 		var okey := ""
@@ -1184,6 +1458,9 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 			_add_outline(node, okey)
 		dyn[id] = {"node": node, "kind": kind, "model": model, "last": n2.position, "ph": randf() * 6.0, "flow": 0.0, "td": tdn}
 	var d: Dictionary = dyn[id]
+	if is_player and char_mode == 0 and str(d.get("td", "")) != _td_name(n, true):
+		_drop_dyn(id)       # sceso o salito da un mezzo: il modello cambia
+		return
 	var node3: Node3D = d["node"]
 	var c := _sprite_center(n2, spr)
 	var is_model: bool = d["model"]
@@ -1212,7 +1489,7 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 		_flow_anim(node3, float(d["flow"]), lamp_t + float(d["ph"]))
 		if is_player:
 			var p: Player = gm.player
-			node3.visible = p.spr.visible
+			node3.visible = p.spr.visible or not (p.veh as Dictionary).is_empty()
 			if p.atk_t > 0.0 and p.atk_dur > 0.0 and str(Rpg.FAM[p.weapon()["f"]]["ranged"]) == "false":
 				var k := 1.0 - p.atk_t / p.atk_dur
 				node3.rotation.y += lerpf(-0.9, 0.9, k * k * (3.0 - 2.0 * k))
@@ -1253,6 +1530,9 @@ func _sync_fx() -> void:
 	for n in gm.fx.get_children():
 		if not is_instance_valid(n):
 			continue
+		if n is ChronoBubble:
+			_sync_bubble(n)
+			continue
 		var id: int = n.get_instance_id()
 		if n is Hazard:
 			var h: Hazard = n
@@ -1288,24 +1568,55 @@ func _sync_fx() -> void:
 				pn.position.y = 0.6 + sin(lamp_t * 6.0 + float(id % 7)) * 0.1
 			dyn[id]["seen"] = lamp_t
 			dyn[id]["lp"] = n2.position
-		elif n is Label and not n.has_meta("tracked"):
-			n.set_meta("tracked", true)
-			var l3 := Label3D.new()
-			var lb := n as Label
-			l3.text = lb.text
-			l3.font = Game.font()
-			l3.font_size = 40
-			l3.pixel_size = 0.014
-			l3.modulate = lb.get_theme_color("font_color")
-			l3.outline_size = 10
-			l3.no_depth_test = true
-			l3.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-			l3.position = Vector3(lb.position.x / 16.0 + 0.5, 2.6, lb.position.y / 16.0 + 0.3)
-			vp.add_child(l3)
-			var tw := create_tween()
-			tw.tween_property(l3, "position:y", 4.2, 0.7)
-			tw.parallel().tween_property(l3, "modulate:a", 0.0, 0.7).set_delay(0.25)
-			tw.tween_callback(l3.queue_free)
+		elif n is Label:
+			_sync_popup(n as Label)
+
+
+## scritte fluttuanti (danni, popup): restano le etichette 2D del gioco (stesso font nitido dell'interfaccia),
+## ma vengono posizionate sullo schermo proiettando il punto del mondo 3D
+var pop_layer: CanvasLayer
+var pop_nodes: Dictionary = {}
+
+
+func _sync_popup(lb: Label) -> void:
+	if pop_layer == null:
+		pop_layer = CanvasLayer.new()
+		pop_layer.layer = 6
+		add_child(pop_layer)
+	var id := lb.get_instance_id()
+	var ov: Label
+	if pop_nodes.has(id):
+		ov = pop_nodes[id]["l"]
+	else:
+		ov = Label.new()
+		ov.text = lb.text
+		ov.theme = lb.theme
+		ov.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		for th in ["font", "font_size", "font_color", "font_outline_color", "outline_size", "line_spacing"]:
+			pass
+		ov.add_theme_font_override("font", lb.get_theme_font("font"))
+		ov.add_theme_font_size_override("font_size", lb.get_theme_font_size("font_size"))
+		ov.add_theme_color_override("font_color", lb.get_theme_color("font_color"))
+		ov.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		ov.add_theme_constant_override("outline_size", 2)
+		ov.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		pop_layer.add_child(ov)
+		pop_nodes[id] = {"l": ov, "src": weakref(lb)}
+	var wp := Vector3(lb.position.x / 16.0 + 0.5, 1.6 + lb.position.y * 0.0, lb.position.y / 16.0)
+	var sp: Vector2 = cam.unproject_position(wp)
+	var k := Vector2(960.0, 540.0) / Vector2(vp.size)
+	ov.position = (sp * k - ov.size * 0.5).floor()
+	ov.modulate.a = lb.modulate.a
+	ov.visible = not cam.is_position_behind(wp)
+
+
+func _popups_cleanup() -> void:
+	for id in pop_nodes.keys():
+		var d: Dictionary = pop_nodes[id]
+		var sr = (d["src"] as WeakRef).get_ref()
+		if sr == null or not is_instance_valid(sr):
+			(d["l"] as Label).queue_free()
+			pop_nodes.erase(id)
 
 
 func _sync_slash() -> void:
@@ -1334,6 +1645,69 @@ func _sync_slash() -> void:
 
 
 # ------------------------------------------------------------------ ciclo principale
+## oggetti costruiti con le stesse funzioni del motore 3D originale (stesso stile del mondo che piaceva)
+func _base_prop(kind: String, tw: float, th: float, sd: int) -> ArrayMesh:
+	var o := W3DBuilder.new()
+	var r := RandomNumberGenerator.new()
+	r.seed = sd
+	o.rn.seed = sd
+	o.sat = 1.55
+	o.con = 1.45
+	var cols: Array = []
+	var lamps: Array = []
+	var z := Vector2.ZERO
+	var sx := 1.0
+	var sz2 := 1.0
+	if kind.begins_with("roof_") or kind.begins_with("chapel_top") or kind.begins_with("smithy_top") or kind.begins_with("archive_top") 			or kind.begins_with("sanatorium_top") or kind.begins_with("mill_top") or kind.begins_with("cathedral_top"):
+		_house(o, z, 0.0, r, cols, lamps)
+		sx = tw / 4.5
+		sz2 = th / 5.1
+		if kind.begins_with("cathedral_top"):
+			for q in 2:
+				o.box(Transform3D(Basis.IDENTITY, Vector3((q * 2 - 1) * 2.2, 3.4, 2.6)), Vector3(1.2, 6.8, 1.2), Color(0.2, 0.19, 0.22), 0.1, 0)
+				o.cyl(Transform3D(Basis.IDENTITY, Vector3((q * 2 - 1) * 2.2, 6.8, 2.6)), 0.9, 0.0, 2.2, 4, Color(0.12, 0.11, 0.14), 0.1)
+	elif kind.begins_with("top_dead") or kind.begins_with("top_sick") or kind.begins_with("tbig_"):
+		_dead_tree(o, z, r, cols)
+		if kind.begins_with("tbig_"):
+			sx = 1.35
+			sz2 = 1.35
+	elif kind.begins_with("barrel_top"):
+		_barrel(o, z, r, cols)
+	elif kind.begins_with("crate_top"):
+		_crate(o, z, r, cols)
+	elif kind.begins_with("hay_top"):
+		_hay(o, z, r, cols)
+	elif kind.begins_with("woodpile"):
+		_woodpile(o, z, 0.0, r, cols)
+	elif kind.begins_with("cart_top"):
+		_cart(o, z, 0.0, r, cols)
+	elif kind.begins_with("well_top"):
+		_well(o, z, r, cols)
+	elif kind.begins_with("lamp_top"):
+		_lamp_post(o, z, lamps, cols)
+	elif kind.begins_with("bonfire"):
+		_pyre(o, z, r, cols, lamps)
+	elif kind.begins_with("signpost"):
+		_sign(o, z, 0.0, r, cols)
+	elif kind.begins_with("bush_"):
+		_bush(o, z, r, cols)
+	elif kind.begins_with("log_top"):
+		_fallen_log(o, z, r)
+	elif kind.begins_with("ruin_tower"):
+		_ruin(o, z, r, cols)
+	elif kind.begins_with("mausoleum_top"):
+		_mausoleum(o, z, 0.0, r, cols, lamps)
+	elif kind.begins_with("grave_"):
+		_grave_item(o, z, r, cols, lamps)
+	else:
+		return null
+	if o.v.size() == 0:
+		return null
+	if sx != 1.0 or sz2 != 1.0:
+		o.scale_xz(sx, sz2)
+	return o.mesh()
+
+
 # ------------------------------------------------------------------ mondo aperto: blocchi da 16x16 creati attorno al giocatore
 const WSC := 16
 var wchunks: Dictionary = {}
@@ -1353,6 +1727,23 @@ func _wtile_col(t: int) -> Color:
 	return Color(0.2, 0.19, 0.2)
 
 
+## altezza del terreno: rilievo dolce, piatto vicino a strade, ponti e acqua
+func _wh(vx: float, vz: float) -> float:
+	var cx := floori(vx)
+	var cz := floori(vz)
+	var rd := 3.0
+	for dz in range(-1, 1):
+		for dx in range(-1, 1):
+			var qx := cx + dx
+			var qz := cz + dz
+			if qx < 0 or qz < 0 or qx >= Game.MW or qz >= Game.MH:
+				continue
+			var qi := qz * Game.MW + qx
+			if gm.road[qi] == 1 or gm.cobble[qi] == 1 or gm.water[qi] == 1 or gm.bridge[qi] == 1 or gm.grid[qi] == 0:
+				rd = 0.5
+	return n_h.get_noise_2d(vx, vz) * 0.2 * smoothstep(1.4, 3.4, rd)
+
+
 func _world_clear() -> void:
 	for k in wchunks.keys():
 		(wchunks[k] as Node3D).queue_free()
@@ -1361,27 +1752,339 @@ func _world_clear() -> void:
 		c.queue_free()
 
 
+var world_off := Vector2.ZERO
+var fixed_cam := false
+var perf_on := OS.get_cmdline_user_args().has("--perf")
+var perf_n := 0
+var lamp_n := 0.0
+var perf_proc := 0.0
+var perf_phys := 0.0
+var no2d_done := false
+var sharp_layer: CanvasLayer
+var test_done := false
+var bub_shot_t := -1.0
+var bub_shot_n := 0
+var perf_t := 0.0
+var perf_max := 0.0
+var wframe := 0
+
+
+## il mondo aperto e' generato dal motore 3D originale (stesse strade, case, cimiteri, erba), spostato sul mondo di gioco
+var doors_seen: Dictionary = {}
+var mm_t := 0.0
+
+
+## true se il punto (coordinate del motore 3D) cade fuori dall'isola di gioco
+func _edge_game(p: Vector2) -> bool:
+	var c := Vector2i(floori(p.x + world_off.x), floori(p.y + world_off.y))
+	if not gm.inb(c):
+		return true
+	var ei: int = gm.idx(c)
+	return gm.outside[ei] == 1 and gm.grid[ei] == 0 and gm.gen_chunks.has(Vector2i(c.x / gm.CH, c.y / gm.CH))
+
+
+## minimappa del mondo 3D: strade, case e bordo dell'isola nella finestra di 70x50 celle attorno al giocatore
+func _update_minimap() -> void:
+	var W: int = Game.MW
+	var H: int = Game.MH
+	var cw := mini(70, W)
+	var ch := mini(50, H)
+	var pc := Vector2i(floori(gm.player.position.x / 16.0), floori(gm.player.position.y / 16.0))
+	var ox := clampi(pc.x - cw / 2, 0, W - cw)
+	var oy := clampi(pc.y - ch / 2, 0, H - ch)
+	var im := Image.create(cw, ch, false, Image.FORMAT_RGBA8)
+	im.fill(Color(0.07, 0.065, 0.07))
+	for y in ch:
+		for x in cw:
+			var c := Vector2i(ox + x, oy + y)
+			if gm.outside[gm.idx(c)] == 1 and gm.grid[gm.idx(c)] == 0 and gm.gen_chunks.has(Vector2i(c.x / gm.CH, c.y / gm.CH)):
+				im.set_pixel(x, y, Color(0.02, 0.05, 0.08))
+	for i in segs_a.size():
+		var a: Vector2 = segs_a[i] + world_off - Vector2(ox, oy)
+		var b: Vector2 = segs_b[i] + world_off - Vector2(ox, oy)
+		if maxf(a.x, b.x) < -2 or minf(a.x, b.x) > cw + 2 or maxf(a.y, b.y) < -2 or minf(a.y, b.y) > ch + 2:
+			continue
+		var steps := int(a.distance_to(b) * 1.5) + 1
+		var hw := maxi(0, int(segs_w[i] * 0.5))
+		for q in steps + 1:
+			var pt := a.lerp(b, float(q) / steps)
+			for dy in range(-hw, hw + 1):
+				for dx in range(-hw, hw + 1):
+					var px := int(pt.x) + dx
+					var py := int(pt.y) + dy
+					if px >= 0 and py >= 0 and px < cw and py < ch and not (gm.outside[gm.idx(Vector2i(ox + px, oy + py))] == 1 and gm.grid[gm.idx(Vector2i(ox + px, oy + py))] == 0):
+						im.set_pixel(px, py, Color(0.5, 0.45, 0.36))
+	for key in house_doors:
+		var dv: Vector3 = house_doors[key]
+		var hp := Vector2(dv.x, dv.y) + world_off - Vector2(ox, oy)
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var px2 := int(hp.x) + dx
+				var py2 := int(hp.y) + dy
+				if px2 >= 0 and py2 >= 0 and px2 < cw and py2 < ch:
+					im.set_pixel(px2, py2, Color(0.55, 0.32, 0.2))
+	gm.mm3d = ImageTexture.create_from_image(im)
+
+
+
+## le case generate dal motore 3D hanno una porta vera: diventa un ingresso per l'interno
+func _sync_doors() -> void:
+	for key in house_doors:
+		if doors_seen.has(key):
+			continue
+		doors_seen[key] = true
+		var dv: Vector3 = house_doors[key]
+		var gp := Vector2(dv.x, dv.y) + world_off
+		var dest := "int|house|%d|%d" % [roundi(gp.x), roundi(gp.y)]
+		var out := gp + Vector2(cos(dv.z), -sin(dv.z)) * 2.4
+		gm.doors.append({"pos": gp * 16.0, "hw": 0.0, "dest": dest, "cell": Vector2i(floori(out.x), floori(out.y)), "r": true})
+
+
 func _world_update() -> void:
-	var pc := Vector2i(floori(pos.x / WSC), floori(pos.y / WSC))
-	for k in wchunks.keys():
-		if absi((k as Vector2i).x - pc.x) > 4 or absi((k as Vector2i).y - pc.y) > 4:
-			(wchunks[k] as Node3D).queue_free()
-			wchunks.erase(k)
-	var best := Vector2i(-9999, -9999)
-	var bd := 1e9
-	for dy in range(-3, 4):
+	_sync_doors()
+	var sp := pos
+	pos = sp - world_off
+	wframe += 1
+	if wframe % 5 == 1:
+		_stream(false)
+	_run_jobs(3.5)
+	pos = sp
+	for k in chunks:
+		var nd: Node3D = chunks[k]["node"]
+		if not nd.has_meta("off"):
+			nd.position = Vector3(world_off.x, 0.0, world_off.y)
+			nd.set_meta("off", true)
+
+
+func _world_init() -> void:
+	for k in chunks:
+		(chunks[k]["node"] as Node3D).queue_free()
+	chunks.clear()
+	jobs.clear()
+	job_keys.clear()
+	plans.clear()
+	zones.clear()
+	seed_v = 1337
+	for nn in [[n_soil, 0, 0.05], [n_veg, 31, 0.045], [n_veg2, 32, 0.19], [n_shrub, 41, 0.06], [n_rock, 51, 0.05], [n_tree, 61, 0.03], [n_stain, 23, 0.03], [n_h, 5, 0.11]]:
+		var fn: FastNoiseLite = nn[0]
+		fn.seed = seed_v + int(nn[1])
+		fn.frequency = float(nn[2])
+	_gen_roads()
+	# il falo' del villaggio di gioco coincide con il primo falo' del motore: stesse strade organiche, stessa partenza
+	world_off = Vector2(gm.SEEDS[0]) + Vector2(3.5, 0.5) - (bonfires[1] as Vector2)
+	if OS.get_cmdline_user_args().has("--listkinds"):
+		var cnt := {}
+		for g in gm.ents.get_children():
+			if g is Prop and g.spr != null and g.spr.texture != null and g.spr.texture.get_width() >= 40:
+				cnt[g.kind] = int(cnt.get(g.kind, 0)) + 1
+		print("KINDS ", cnt)
+	no_base_fires = false
+	edge_fn = Callable(self, "_edge_game")
+	house_doors.clear()
+	doors_seen.clear()
+	gm.doors.clear()
+	stream_margin = 14.0
+	stream_drop = 40.0
+	seed_v = 1337
+	no_base_houses = false
+	grid_road_fn = Callable()
+	bio_fn = Callable(self, "_bio_game")
+	clear_pts.clear()
+	clear_pts.append(Vector3(gm.player.position.x / 16.0 - world_off.x, gm.player.position.y / 16.0 - world_off.y, 2.5))
+	for g in gm.props:
+		if not is_instance_valid(g) or bool(g.scene) or not (str(g.kind) in ["portal", "bonfire", "elder"]):
+			continue
+		var gc := Vector2(g.cell) + Vector2(0.5, 0.5) - world_off
+		clear_pts.append(Vector3(gc.x, gc.y, 4.5 if g.kind == "portal" else 2.4))
+	var sp := pos
+	pos = sp - world_off
+	_stream(true)
+	pos = sp
+	_world_update()
+
+
+## collisione del mondo aperto: i solidi sono quelli visibili in 3D
+func world_free(p: Vector2, r: float) -> bool:
+	var c := Vector2i(floori(p.x / 16.0), floori(p.y / 16.0))
+	if not gm.inb(c) or (gm.outside[gm.idx(c)] == 1 and gm.grid[gm.idx(c)] == 0):
+		return false
+	if _gcol_hit(p / 16.0, r / 16.0 * 0.8):
+		return false
+	return not _blocked(p / 16.0 - world_off, r / 16.0 * 0.8)
+
+
+const STRUCT_PFX := ["roof_", "cathedral_top", "chapel_top", "tower_top", "smithy_top", "archive_top", "sanatorium_top", "mill_top",
+		"mausoleum_top", "arch_top", "ruin_tower", "pond_", "stump_big", "tbig_", "top_dead", "top_sick", "wall_top", "circle_top", "cart_top", "lamp_top"]
+var gcols: Dictionary = {}
+
+
+func _is_struct(kind: String) -> bool:
+	for p in STRUCT_PFX:
+		if kind.begins_with(p):
+			return true
+	return false
+
+
+func _bio_game(p: Vector2) -> int:
+	var c := Vector2i(floori(p.x + world_off.x), floori(p.y + world_off.y))
+	if not gm.inb(c):
+		return 0
+	var b := int(gm.biome[gm.idx(c)])
+	if b == 0 and not gm.gen_chunks.has(Vector2i(c.x / gm.CH, c.y / gm.CH)):
+		return 0
+	return b
+
+
+func _register_structs() -> void:
+	gcols.clear()
+	for g in gm.ents.get_children():
+		if not (g is Prop) or not bool(g.scene) or g.spr == null or g.spr.texture == null:
+			continue
+		var kd := str(g.kind)
+		if not _is_struct(kd):
+			continue
+		var c := _sprite_center(g, g.spr) / 16.0
+		var hs := Vector2(g.spr.texture.get_width(), g.spr.texture.get_height()) / 32.0
+		var wk := not (kd.begins_with("pond_") or kd.begins_with("circle_") or kd.begins_with("arch_"))
+		if kd.begins_with("top_") or kd.begins_with("tbig_") or kd.begins_with("stump_"):
+			hs = Vector2(0.45, 0.45) if not kd.begins_with("tbig_") else Vector2(0.8, 0.8)
+		elif kd.begins_with("roof_") or kd.begins_with("wall_") or kd.contains("_top"):
+			hs *= 0.9
+		if wk:
+			var key := Vector2i(floori(c.x / 8.0), floori(c.y / 8.0))
+			if not gcols.has(key):
+				gcols[key] = []
+			(gcols[key] as Array).append([c, hs])
+		if hs.x > 0.9 or hs.y > 0.9:
+			var cc := c - world_off
+			clear_pts.append(Vector3(cc.x, cc.y, maxf(hs.x, hs.y) + 0.8))
+
+
+func _gcol_hit(p: Vector2, r: float) -> bool:
+	var k := Vector2i(floori(p.x / 8.0), floori(p.y / 8.0))
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var kk := k + Vector2i(dx, dz)
+			if not gcols.has(kk):
+				continue
+			for e in gcols[kk]:
+				var c: Vector2 = e[0]
+				var hs: Vector2 = e[1]
+				if absf(p.x - c.x) < hs.x + r and absf(p.y - c.y) < hs.y + r:
+					return true
+	return false
+
+
+var road_cache: Dictionary = {}
+
+
+## strade del mondo di gioco viste dal motore 3D: distanza dal bordo piu' vicino delle celle di strada/selciato
+func _grid_road(p: Vector2) -> Dictionary:
+	var key := Vector2i(roundi(p.x * 2.0), roundi(p.y * 2.0))
+	if road_cache.has(key):
+		return road_cache[key]
+	var gp := p + world_off
+	var cx := floori(gp.x)
+	var cz := floori(gp.y)
+	var best := 99.0
+	var bn := p
+	for dz in range(-3, 4):
 		for dx in range(-3, 4):
-			var k := pc + Vector2i(dx, dy)
-			if wchunks.has(k) or k.x < 0 or k.y < 0:
+			var c := Vector2i(cx + dx, cz + dz)
+			if not gm.inb(c):
 				continue
-			if not gm.gen_chunks.has(Vector2i(k.x * WSC / gm.CH, k.y * WSC / gm.CH)):
+			var ci: int = gm.idx(c)
+			if gm.road[ci] != 1 and gm.cobble[ci] != 1:
 				continue
-			var d := float(dx * dx + dy * dy)
-			if d < bd:
-				bd = d
-				best = k
-	if bd < 1e8:
-		_world_chunk(best)
+			var ex := maxf(absf(gp.x - (c.x + 0.5)) - 0.5, 0.0)
+			var ez := maxf(absf(gp.y - (c.y + 0.5)) - 0.5, 0.0)
+			var d := sqrt(ex * ex + ez * ez)
+			if d < best:
+				best = d
+				bn = Vector2(c.x + 0.5, c.y + 0.5) - world_off
+	var tg := (p - bn).orthogonal()
+	var res := {"d": best + 1.0 if best < 98.0 else 99.0, "nearest": bn, "tan": tg.normalized() if tg.length() > 0.01 else Vector2.RIGHT, "w": 2.0}
+	if road_cache.size() > 60000:
+		road_cache.clear()
+	road_cache[key] = res
+	return res
+
+
+var unstick_t := 0.0
+var world_real := 0 if OS.get_cmdline_user_args().has("--noreal") else 4
+var world_light_k := 30.0
+
+
+## i nemici nati dentro un edificio 3D vengono spostati sul punto libero piu' vicino
+func _unstick(dt: float) -> void:
+	unstick_t -= dt
+	if unstick_t > 0.0:
+		return
+	unstick_t = 0.8
+	for e in gm.enemies:
+		if not is_instance_valid(e):
+			continue
+		var ep: Vector2 = (e as Node2D).position
+		if ep.distance_to(gm.player.position) > 900.0 or world_free(ep, 5.0):
+			continue
+		var done := false
+		for ring in range(1, 9):
+			for a in 12:
+				var q := ep + Vector2.from_angle(TAU * a / 12.0) * ring * 16.0
+				if world_free(q, 5.0):
+					(e as Node2D).position = q
+					done = true
+					break
+			if done:
+				break
+
+
+func _world_lamps() -> void:
+	var cand: Array = []
+	for k in chunks:
+		for l in chunks[k]["lamps"]:
+			var lv: Vector4 = l
+			var wp := Vector2(lv.x, lv.z) + world_off
+			cand.append([wp.distance_squared_to(pos), Vector4(wp.x, lv.y, wp.y, lv.w)])
+	for f in gm.flick:
+		var fl2 = f[0]
+		if not is_instance_valid(fl2):
+			continue
+		var fp: Vector2 = (fl2 as Node2D).global_position / 16.0
+		cand.append([fp.distance_squared_to(pos), Vector4(fp.x, 1.6, fp.y, minf(1.4, float(f[1]) * 0.6))])
+	cand.sort_custom(func(a, b): return a[0] < b[0])
+	# le luci piu' vicine sono vere (con ombre proiettate da case, alberi e personaggi); le altre restano finte
+	var nreal := mini(world_real, cand.size())
+	for ri in pool.size():
+		var rl: OmniLight3D = pool[ri]
+		if ri < nreal:
+			var rv: Vector4 = cand[ri][1]
+			var rfl := 1.0 + sin(lamp_t * 11.0 + rv.x * 3.1) * 0.07 + sin(lamp_t * 23.0 + rv.z) * 0.04
+			rl.position = Vector3(rv.x, 7.5, rv.z)      # sopra lanterne e fiamme: la luce non nasce dentro la geometria che la copre
+			rl.shadow_normal_bias = 2.0
+			rl.shadow_bias = 0.3
+			rl.omni_shadow_mode = OmniLight3D.SHADOW_CUBE
+			rl.shadow_enabled = ri < 3
+			rl.light_color = Color(0.96, 0.76, 0.62)
+			rl.omni_range = 14.0
+			rl.light_energy = rv.w * world_light_k * rfl
+			rl.visible = true
+		else:
+			rl.visible = false
+	cand = cand.slice(nreal)
+	var arr := PackedVector4Array()
+	var lc := PackedVector3Array()
+	for i in 16:
+		if i < cand.size():
+			var lv2: Vector4 = cand[i][1]
+			var fl := 1.0 + sin(lamp_t * 11.0 + lv2.x * 3.1) * 0.09 + sin(lamp_t * 23.0 + lv2.z) * 0.05
+			arr.append(Vector4(lv2.x, lv2.y, lv2.z, lv2.w * fl))
+			lc.append(Vector3(0.92, 0.74, 0.60))
+		else:
+			arr.append(Vector4(0, 0, 0, 0))
+			lc.append(Vector3(0, 0, 0))
+	_mp("lamps", arr)
+	_mp("lamp_col", lc)
 
 
 func _world_chunk(k: Vector2i) -> void:
@@ -1391,9 +2094,10 @@ func _world_chunk(k: Vector2i) -> void:
 	fb.rn.seed = k.x * 31 + k.y
 	ob.rn.seed = k.x * 17 + k.y * 5
 	wb.rn.seed = k.x * 13 + k.y * 3
-	ob.sat = 1.2
-	wb.sat = 1.25
-	wb.con = 1.2
+	ob.sat = 1.3
+	ob.con = 1.2
+	wb.sat = 1.55
+	wb.con = 1.45
 	var w: int = Game.MW
 	for y in range(k.y * WSC, (k.y + 1) * WSC):
 		for x in range(k.x * WSC, (k.x + 1) * WSC):
@@ -1419,45 +2123,51 @@ func _world_chunk(k: Vector2i) -> void:
 				elif gm.road[i] == 1:
 					col = Color(0.30, 0.26, 0.21)
 				# macchie di terreno a bassa frequenza: il suolo non e' uniforme
-				var pt := _hash2(x >> 2, y >> 2, 3)
 				var natural: bool = gm.road[i] == 0 and gm.cobble[i] == 0
-				if natural:
-					col = col.lerp(Color(0.10, 0.17, 0.09) if t != Game.T_NEVE else Color(0.6, 0.64, 0.7), 0.5 * smoothstep(0.45, 0.9, pt))
-				col = col.lerp(_k(col, 1.5), hv * 0.6)
-				fb.quad(Vector3(x, 0, y), Vector3(x + 1, 0, y), Vector3(x + 1, 0, y + 1), Vector3(x, 0, y + 1), col)
-				if natural and t != Game.T_LAVA:
-					var veg := pt > 0.4 and t != Game.T_NEVE
-					# ciuffi d'erba o steli secchi, piu' fitti nelle macchie
-					if hv > (0.45 if veg else 0.9):
-						var gcol := Color(0.10, 0.20, 0.09).lerp(Color(0.20, 0.27, 0.10), hv2)
-						if t == Game.T_PALUDE:
-							gcol = Color(0.08, 0.20, 0.15).lerp(Color(0.14, 0.28, 0.16), hv2)
-						elif t == Game.T_CIMITERO:
-							gcol = Color(0.14, 0.2, 0.12).lerp(Color(0.26, 0.26, 0.15), hv2)
-						elif t == Game.T_NEVE:
-							gcol = Color(0.55, 0.6, 0.66)
-						for q in 3:
-							var qx := x + 0.2 + _hash2(x, y, 60 + q) * 0.6
-							var qz := y + 0.2 + _hash2(x, y, 70 + q) * 0.6
-							var lean := (_hash2(x, y, 80 + q) - 0.5) * 0.35
-							ob.shard(Vector3(qx, 0.0, qz), Vector3(qx + lean, 0.28 + hv2 * 0.3, qz + lean * 0.6), 0.1, 0.08, gcol, 0.2, 0.0, 0.1)
-					# cespugli
-					if veg and hv2 > 0.955:
-						ob.rock(Vector3(x + 0.5, 0.22, y + 0.5), Vector3(0.8, 0.45, 0.8), Color(0.09, 0.19, 0.09).lerp(Color(0.16, 0.26, 0.11), hv), 0.22, 0.5, hv * 13.0)
-					# fiori pallidi e funghi luminosi nella palude
-					if hv2 > 0.985 and veg:
-						if t == Game.T_PALUDE:
-							ob.cyl(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 0.18, y + 0.5)), 0.04, 0.05, 0.36, 5, Color(0.7, 0.75, 0.6), 0.1)
-							ob.cyl(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 0.4, y + 0.5)), 0.18, 0.05, 0.12, 6, Color(0.3, 0.9, 0.7, 0.2), 0.0)
+				var base_col := col
+				for sj in 2:
+					for si in 2:
+						var gp := Vector2(x + (si + 0.5) * 0.5, y + (sj + 0.5) * 0.5)
+						var gc := _ground_col(gp, 50.0, 0.0) if natural else _ground_col(gp, 0.0, 3.0).lerp(Color(0.2, 0.19, 0.2), 0.35 if gm.cobble[i] == 1 else 0.0)
+						if natural and t != Game.T_TERRA:
+							gc = gc.lerp(_wtile_col(t), 0.45)
+						if t == Game.T_NEVE and natural:
+							gc = _wtile_col(t).lerp(gc, 0.25)
+						gc = fb.shade(gc, 0.035)
+						var x0 := x + si * 0.5
+						var z0 := y + sj * 0.5
+						var a := Vector3(x0, _wh(x0, z0), z0)
+						var b := Vector3(x0 + 0.5, _wh(x0 + 0.5, z0), z0)
+						var d := Vector3(x0 + 0.5, _wh(x0 + 0.5, z0 + 0.5), z0 + 0.5)
+						var e := Vector3(x0, _wh(x0, z0 + 0.5), z0 + 0.5)
+						if (si + sj + x + y) % 2 == 0:
+							fb.tri(a, b, d, gc)
+							fb.tri(a, d, e, gc)
 						else:
-							ob.rock(Vector3(x + 0.5, 0.1, y + 0.5), Vector3(0.12, 0.1, 0.12), Color(0.55, 0.5, 0.65), 0.1, 0.2, hv * 5.0)
+							fb.tri(a, b, e, gc)
+							fb.tri(b, d, e, gc)
+				if natural and t != Game.T_LAVA and t != Game.T_NEVE:
+					# erba secca come nel motore originale: ciuffi lungo i campi di densita'
+					for q in 3:
+						var gp2 := Vector2(x + _hash2(x, y, 60 + q), y + _hash2(x, y, 70 + q))
+						var vg := n_veg.get_noise_2d(gp2.x, gp2.y) * 0.5 + 0.5
+						var dens := smoothstep(0.32, 0.78, vg + n_veg2.get_noise_2d(gp2.x, gp2.y) * 0.12)
+						if _hash2(x, y, 90 + q) < dens:
+							_tuft(ob, Vector3(gp2.x, 0.0, gp2.y), dens, n_veg2.get_noise_2d(gp2.x + 50.0, gp2.y) * 0.5 + 0.5)
+					if hv > 0.97:
+						ob.rock(Vector3(x + 0.5, 0.1, y + 0.5), Vector3(0.3, 0.2, 0.28), Color(0.19, 0.19, 0.2), 0.1, 0.35, hv * 9.0)
 			else:
 				var bt: int = int(bd["b"])
 				if gm.outside[i] == 1:
 					fb.quad(Vector3(x, -0.3, y), Vector3(x + 1, -0.3, y), Vector3(x + 1, -0.3, y + 1), Vector3(x, -0.3, y + 1), Color(0.03, 0.03, 0.04))
 					continue
 				fb.quad(Vector3(x, 0, y), Vector3(x + 1, 0, y), Vector3(x + 1, 0, y + 1), Vector3(x, 0, y + 1), Color(0.07, 0.09, 0.07))
-				if bt == Game.T_CHIOMA:
+				if bt == Game.T_CHIOMA and _hash2(x, y, 4) < 0.5:
+					var tcols: Array = []
+					var tr := RandomNumberGenerator.new()
+					tr.seed = x * 7919 + y
+					_dead_tree(wb, Vector2(x + 0.5, y + 0.5), tr, tcols)
+				elif bt == Game.T_CHIOMA:
 					var th := 1.5 + hv * 1.6
 					wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, th * 0.5, y + 0.5)), Vector3(0.22, th, 0.22), Color(0.17, 0.11, 0.08), 0.1, 6)
 					var gc := Color(0.08, 0.2, 0.1).lerp(Color(0.12, 0.28, 0.14), hv2)
@@ -1481,15 +2191,140 @@ func _world_chunk(k: Vector2i) -> void:
 	wchunks[k] = root
 
 
+var skin_us := 0
+var wu_us := 0
+var fx_us := 0
+var lamp_us := 0
+var sync_us := 0
+
+
 func _process(dt: float) -> void:
+	var tt := Time.get_ticks_usec()
+	_process_inner(dt)
+	skin_us += Time.get_ticks_usec() - tt
+
+
+func _process_inner(dt: float) -> void:
 	if gm == null or gm.player == null:
 		return
 	if want_shot and str(gm.state) == "story":
+		gm.state = "play"
+	if OS.get_cmdline_user_args().has("--skinitems") and lamp_t > 1.0 and not test_done:
+		test_done = true
+		var ids: Array = W3DChrono.MODELS.keys()
+		for i in ids.size():
+			var mi3 := MeshInstance3D.new()
+			mi3.mesh = W3DChrono.mesh(str(ids[i]))
+			mi3.material_override = mat_prop
+			mi3.position = Vector3(pos.x - 11.0 + (i % 9) * 2.9, 0.0, pos.y - 7.5 + (i / 9) * 3.0)
+			vp.add_child(mi3)
+		bub_shot_t = lamp_t + 1.0
+	for ua in OS.get_cmdline_user_args():
+		if str(ua).begins_with("--skinui=") and lamp_t > 1.5 and not test_done:
+			test_done = true
+			if str(ua).substr(9) == "bestiary":
+				for be in Bestiary.ENTRIES:
+					if not gm.persist.has("bestiary"):
+						gm.persist["bestiary"] = {}
+					gm.persist["bestiary"][be[0]] = 3
+				gm.beast_sel = 4
+				gm.open_bestiary()
+			else:
+				gm.inv_toggle()
+			bub_shot_t = lamp_t + 0.8
+	if OS.get_cmdline_user_args().has("--skindoor") and world_on and lamp_t > 4.0 and not test_done and gm.doors.size() > 0:
+		test_done = true
+		var dd0: Dictionary = gm.doors[0]
+		print("DOOR n=", gm.doors.size(), " dest=", dd0["dest"], " pos=", dd0["pos"])
+		gm.player.position = (dd0["pos"] as Vector2) + Vector2(3, 3)
+		bub_shot_t = lamp_t + 6.0
+	if OS.get_cmdline_user_args().has("--skindoor") and test_done and lamp_t > 6.0 and lamp_t < 6.05:
+		print("DOOR area now=", gm.area)
+	if OS.get_cmdline_user_args().has("--dbgmenu") and lamp_t > 2.0 and not test_done:
+		test_done = true
+		var ke := InputEventKey.new()
+		ke.keycode = KEY_F2
+		ke.pressed = true
+		Input.parse_input_event(ke)
+		bub_shot_t = lamp_t + 0.8
+		print("DBG state before=", gm.state)
+	if OS.get_cmdline_user_args().has("--skinfield") and world_on and lamp_t > 3.0 and not test_done and first_field.x > -9000.0:
+		test_done = true
+		gm.player.position = (first_field + Vector2(0, 3.0) + world_off) * 16.0
+		bub_shot_t = lamp_t + 3.0
+	if OS.get_cmdline_user_args().has("--pierdbg") and world_on and lamp_t > 3.0 and not test_done:
+		test_done = true
+		var cnt := 0
+		var wat := 0
+		for lz in range(-8, 9):
+			for lx in range(-20, 3):
+				var q := Vector2(lx * 8.0 + 4.0, lz * 8.0 + 4.0)
+				var wdv := _water_dir(q)
+				var ed: bool = _edge_game(q)
+				if ed:
+					wat += 1
+				elif wdv.z > 0.0:
+					cnt += 1
+		print("PIERDBG water_lots=", wat, " lots_near_water=", cnt, " off=", world_off)
+	if OS.get_cmdline_user_args().has("--skinpier") and world_on and lamp_t > 3.0 and not test_done:
+		test_done = true
+		var target := Vector2(-9999, -9999)
+		for lx in range(-3, 3):
+			for lz in range(-8, 9):
+				var q := Vector2(lx * 8.0 + 4.0, lz * 8.0 + 4.0)
+				if not _edge_game(q) and _water_dir(q).z > 0.0 and target.x < -9000.0:
+					target = q
+		if target.x < -9000.0:
+			for lx in range(-24, -3):
+				for lz in range(-8, 9):
+					var q2 := Vector2(lx * 8.0 + 4.0, lz * 8.0 + 4.0)
+					if not _edge_game(q2) and _water_dir(q2).z > 0.0 and target.x < -9000.0:
+						target = q2
+		print("PIERTARGET ", target)
+		gm.player.position = (target + world_off) * 16.0
+		gm.ensure_area(gm.player.position, 3)
+		var sp0 := target
+		pos = sp0
+		_stream(true)
+		pos = target + world_off
+		bub_shot_t = lamp_t + 2.0
+	if OS.get_cmdline_user_args().has("--skinedge") and world_on and lamp_t > 3.0 and not test_done:
+		test_done = true
+		var ex := 60
+		while ex < 400 and gm.outside[gm.idx(Vector2i(ex, 592))] == 1:
+			ex += 2
+		gm.player.position = Vector2(float(ex + 4), 592.0) * 16.0
+		print("EDGE first inside x=", ex)
+		bub_shot_t = lamp_t + 3.0
+	if bub_shot_t > 0.0 and lamp_t > bub_shot_t:
+		get_viewport().get_texture().get_image().save_png("user://bub_%d.png" % bub_shot_n)
+		bub_shot_n += 1
+		bub_shot_t = lamp_t + 0.25 if bub_shot_n < 3 else -1.0
+	for ta in OS.get_cmdline_user_args():
+		if str(ta).begins_with("--skinbubble=") and lamp_t > 1.2 and not test_done:
+			test_done = true
+			var tid := str(ta).substr(13)
+			var cls := "jackpot" if Chrono.JACKPOT.has(tid) else ("gun" if Chrono.GUN.has(tid) else ("use" if Chrono.USE.has(tid) else "junk"))
+			ChronoBubble.spawn(gm, {"id": tid, "cls": cls}, false)
+			bub_shot_t = lamp_t + 0.95
+		if str(ta).begins_with("--skinveh=") and lamp_t > 2.0 and not test_done:
+			test_done = true
+			gm.player.board(str(ta).substr(10))
+	if OS.get_cmdline_user_args().has("--noshadow"):
+		sun.shadow_enabled = false
+	if OS.get_cmdline_user_args().has("--no2d") and world_on and not no2d_done:
+		no2d_done = true
+		for g in gm.ents.get_children():
+			if g is Prop and bool(g.scene):
+				g.process_mode = Node.PROCESS_MODE_DISABLED
+		print("NO2D done")
+	if (perf_on or OS.get_cmdline_user_args().has("--hold")) and (str(gm.state) == "story" or str(gm.state) == "title"):
 		gm.state = "play"
 	var want: bool = str(gm.area) != "" and gm.state != "title"
 	if want != active:
 		active = want
 		post_rect.visible = active
+		sharp_layer.visible = active
 		_show_2d(not active)
 		if not active:
 			for k in dyn.keys():
@@ -1506,24 +2341,89 @@ func _process(dt: float) -> void:
 			room_theme.clear()
 			built_area = "world"
 			world_on = true
+			vp.size = Vector2i(400, 225)      # mondo aperto: risoluzione piu' bassa = oggetti piu' pixellati (e piu' veloce)
+			post_mat.set_shader_parameter("px", Vector2(400, 225))
+			_world_clear()
+			_world_init()
 	elif built_area != str(gm.area) or built_grid_id != gm.grid.size() or world_on:
 		if world_on:
 			_world_clear()
+			for k in chunks:
+				(chunks[k]["node"] as Node3D).queue_free()
+			chunks.clear()
+			jobs.clear()
+			job_keys.clear()
 		world_on = false
+		gm.mm3d = null
+		edge_fn = Callable()
+		grid_road_fn = Callable()
+		vp.size = Vector2i(960, 540)
+		post_mat.set_shader_parameter("px", Vector2(960, 540))
 		_rebuild_static()
 		for l in gm.fx.get_children():
 			if l is Label:
 				l.set_meta("tracked", true)
 	lamp_t += dt
+	lamp_n += 1.0
+	if perf_on:
+		if int(lamp_t * 2.0) != int((lamp_t - dt) * 2.0):
+			print("T ", snappedf(lamp_t, 0.1), " chunks=", chunks.size(), " jobs=", jobs.size(), " pos=", pos, " fade=", snappedf(fade_a, 0.1))
+		if lamp_t > 6.0:
+			perf_n += 1
+			perf_t += dt
+			perf_max = maxf(perf_max, dt)
+			perf_proc += Performance.get_monitor(Performance.TIME_PROCESS)
+			perf_phys += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)
+			if dt > 0.07:
+				print("HITCH ", snappedf(lamp_t, 0.1), " ", snappedf(dt * 1000.0, 1.0), "ms jobs=", jobs.size(), " chunks=", chunks.size())
+		if lamp_t > 16.0:
+			var tot := {}
+			for kk in step_us:
+				tot[kk] = [int(step_us[kk]) / 1000, step_n[kk]]
+			print("STEPS(ms,n) ", tot)
+			print("SKIN ms/frame=", snappedf(float(skin_us) / 1000.0 / maxf(lamp_n, 1.0), 0.1), " world_update=", snappedf(float(wu_us) / 1000.0 / maxf(lamp_n, 1.0), 0.1), " sync=", snappedf(float(sync_us) / 1000.0 / maxf(lamp_n, 1.0), 0.1), " fx=", snappedf(float(fx_us) / 1000.0 / maxf(lamp_n, 1.0), 0.1), " lamps=", snappedf(float(lamp_us) / 1000.0 / maxf(lamp_n, 1.0), 0.1))
+			print("PROC ms/frame=", snappedf(perf_proc / maxf(perf_n, 1) * 1000.0, 0.1), " phys=", snappedf(perf_phys / maxf(perf_n, 1) * 1000.0, 0.1), " draws=", Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), " prims=", Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME), " nodes=", Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
+			print("PERF fps=", snappedf(perf_n / maxf(perf_t, 0.001), 0.1), " worst_ms=", snappedf(perf_max * 1000.0, 1.0), " chunks=", chunks.size(), " jobs=", jobs.size(), " gen_ms=", snappedf(gen_ms, 1.0), " fade_a=", snappedf(fade_a, 0.1), " state=", gm.state, " world=", world_on, " area=", gm.area)
+			get_tree().quit()
 	_show_2d(false)
 	pos = gm.player.position / 16.0
 	if world_on:
+		var tw := Time.get_ticks_usec()
 		_world_update()
+		_unstick(dt)
+		mm_t -= dt
+		if mm_t <= 0.0:
+			mm_t = 0.35
+			_update_minimap()
+		wu_us += Time.get_ticks_usec() - tw
 	# aggiorna gli oggetti del gioco
-	for n in gm.ents.get_children():
-		_sync_node2d(n, n == gm.player)
+	var ts0 := Time.get_ticks_usec()
+	if world_on:
+		_sync_node2d(gm.player, true)
+		var ppx: Vector2 = gm.player.position
+		for lst in [gm.enemies, gm.villagers, gm.allies, gm.critters, gm.props]:
+			for n in lst:
+				if not is_instance_valid(n):
+					continue
+				var np2: Vector2 = (n as Node2D).position
+				if np2.distance_squared_to(ppx) > 640000.0:      # oltre ~50 unita': non serve nemmeno controllarlo
+					var nid: int = n.get_instance_id()
+					if dyn.has(nid):
+						_drop_dyn(nid)
+					continue
+				if lst == gm.props and bool(n.scene):
+					continue
+				_sync_node2d(n, false)
+	else:
+		for n in gm.ents.get_children():
+			_sync_node2d(n, n == gm.player)
+	sync_us += Time.get_ticks_usec() - ts0
+	var tf0 := Time.get_ticks_usec()
 	_sync_fx()
+	_bubbles_cleanup()
+	_popups_cleanup()
 	_sync_slash()
+	fx_us += Time.get_ticks_usec() - tf0
 	# elimina cio' che non esiste piu'; i proiettili spariscono subito e lasciano scintille d'impatto
 	for id in dyn.keys():
 		var dd: Dictionary = dyn[id]
@@ -1541,7 +2441,32 @@ func _process(dt: float) -> void:
 	_update_cam()
 	dust.position = Vector3(pos.x, 3.0, pos.y)
 	RenderingServer.global_shader_parameter_set("w3d_player", Vector3(pos.x, 0, pos.y))
+	fade_a = lerpf(fade_a, 27.0 if world_on else 48.0, 0.15)
+	if not fixed_cam:
+		cam_h = lerpf(cam_h, 30.0 if world_on else 22.0, 0.08)
 	if fwd:
+		env.ssao_enabled = not world_on
+		env.volumetric_fog_enabled = not world_on
+		env.glow_enabled = not world_on
+		# nel mondo aperto: luce del motore originale (sole freddo con ombre + ambiente), niente tonemapping cinematografico
+		sun.visible = world_on
+		env.tonemap_mode = Environment.TONE_MAPPER_LINEAR if world_on else Environment.TONE_MAPPER_FILMIC
+		env.tonemap_exposure = 1.0 if world_on else 0.9
+		env.fog_enabled = true
+		env.fog_density = 0.0035 if world_on else 0.012
+		env.fog_light_color = Color(0.10, 0.11, 0.14) if world_on else Color(0.05, 0.05, 0.08)
+	if world_on:
+		# mondo aperto: stesse luci finte del motore originale (pozze calde sotto lampioni e falo')
+		hero_light.visible = false
+		var tl0 := Time.get_ticks_usec()
+		_world_lamps()
+		lamp_us += Time.get_ticks_usec() - tl0
+		_mp("hero_glow", 0.34)
+		env.ambient_light_energy = 0.07
+		sun.light_energy = 0.14
+		env.ambient_light_color = Color(0.42, 0.44, 0.6)
+	elif fwd:
+		hero_light.visible = true
 		_real_lights(dt)
 		var zl := PackedVector4Array()
 		zl.resize(16)
@@ -1552,14 +2477,20 @@ func _process(dt: float) -> void:
 	_mp("curve", curve)
 	_mp("fade_a", fade_a)
 	_mp("fade_b", fade_a + 18.0)
-	_mp("floor_min", 0.34 if not fwd else 0.0)
+	_mp("floor_min", (0.04 if world_on else 0.34) if (not fwd or world_on) else 0.0)
 	mat_chr.set_shader_parameter("gamma_in", 2.0)
 	mat_chr.set_shader_parameter("boost", 1.8)
 	mat_chr.set_shader_parameter("sat_k", 1.35)
-	if not fwd:
+	if not fwd and not world_on:
 		_mp("hero_glow", 0.55)
-	mat.set_shader_parameter("patt", 0.0)
+	mat.set_shader_parameter("patt", 1.0 if world_on else 0.0)
+	mat.set_shader_parameter("boost", 0.27 if world_on else 1.0)
+	mat.set_shader_parameter("sat_k", 1.25 if world_on else 1.0)
 	mat_chr.set_shader_parameter("patt", 0.0)
+	mat_prop.set_shader_parameter("patt", 0.0)
+	mat_prop.set_shader_parameter("boost", 0.42 if world_on else 0.9)
+	mat_prop.set_shader_parameter("sat_k", 1.1)
+	mat_prop.set_shader_parameter("floor_min", (0.04 if world_on else 0.34) if (not fwd or world_on) else 0.0)
 	if want_shot:
 		_shot(dt)
 
@@ -1571,10 +2502,10 @@ func _skin_lamps() -> void:
 		if not is_instance_valid(l):
 			continue
 		var gp: Vector2 = (l as Node2D).global_position / 16.0
-		cand.append([gp.distance_squared_to(pos), Vector4(gp.x, 1.8, gp.y, minf(2.4, float(f[1]) * 1.6)), Vector3(0.98, 0.72, 0.42)])
+		cand.append([gp.distance_squared_to(pos), Vector4(gp.x, 1.8, gp.y, minf(2.4, float(f[1]) * 1.6)), Vector3(0.92, 0.74, 0.60)])
 	for dl in decor_lights:
 		var dv: Vector3 = dl
-		cand.append([Vector2(dv.x, dv.z).distance_squared_to(pos), Vector4(dv.x, dv.y, dv.z, 1.6), Vector3(0.98, 0.72, 0.42)])
+		cand.append([Vector2(dv.x, dv.z).distance_squared_to(pos), Vector4(dv.x, dv.y, dv.z, 1.6), Vector3(0.92, 0.74, 0.60)])
 	for rl in room_lamps:
 		var rp: Vector2 = rl[0]
 		var lc: Color = rl[1]
@@ -1612,6 +2543,7 @@ func _shot(dt: float) -> void:
 				gm.player.position = (Vector2(rr.position) + Vector2(rr.size) * 0.5) * 16.0
 		if str(a).begins_with("--skincam="):
 			cam_h = float(str(a).substr(10))
+			fixed_cam = true
 	if shot_t > 3.0 + shot_n * 2.0 and shot_n < 3:
 		get_viewport().get_texture().get_image().save_png("user://skin_%d.png" % shot_n)
 		shot_n += 1
