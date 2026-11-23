@@ -502,7 +502,7 @@ func _finalize(j: Dictionary) -> void:
 	if chunks.has(k):
 		(chunks[k]["node"] as Node3D).queue_free()    # blocco rigenerato (editor): il vecchio resta visibile fino a questo momento
 	vp.add_child(node)
-	chunks[k] = {"node": node, "cols": cols, "lamps": lamps, "reg": o.reg}
+	chunks[k] = {"node": node, "cols": cols, "lamps": lamps, "reg": o.reg, "breakables": o.breakables}
 
 
 # ------------------------------------------------------------------ terreno
@@ -956,9 +956,9 @@ func _roadside(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Ra
 		for i in r.randi_range(2, 4):
 			var q := cp + tan_ * (i * 0.9 - 1.2) + toward * r.randf_range(-0.3, 0.3)
 			if r.randf() < 0.55:
-				_barrel(o, q, r, cols)
+				_obj("barrel", o, q, 0.0, r, cols, [])
 			else:
-				_crate(o, q, r, cols)
+				_obj("crate", o, q, 0.0, r, cols, [])
 	else:
 		_sign(o, cp, yaw, r, cols)
 
@@ -1102,13 +1102,13 @@ func _yard(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Random
 	if roll < 0.2 and core > 0.15:
 		_obj("well", o, cp, 0.0, r, cols, [])
 	elif roll < 0.42:
-		_hay(o, cp, r, cols)
+		_obj("hay", o, cp, 0.0, r, cols, [])
 		for i in r.randi_range(0, 2):
-			_hay(o, cp + Vector2(r.randf_range(-2.5, 2.5), r.randf_range(-2.5, 2.5)), r, cols)
+			_obj("hay", o, cp + Vector2(r.randf_range(-2.5, 2.5), r.randf_range(-2.5, 2.5)), 0.0, r, cols, [])
 	elif roll < 0.62:
 		_woodpile(o, cp, yaw, r, cols)
 		for i in r.randi_range(1, 3):
-			_barrel(o, cp + Vector2(r.randf_range(-2.5, 2.5), r.randf_range(-2.5, 2.5)), r, cols)
+			_obj("barrel", o, cp + Vector2(r.randf_range(-2.5, 2.5), r.randf_range(-2.5, 2.5)), 0.0, r, cols, [])
 	elif roll < 0.78:
 		var a := cp - tan_ * 2.6 - toward * 2.6
 		var b := cp + tan_ * 2.6 - toward * 2.6
@@ -1119,7 +1119,7 @@ func _yard(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Random
 			_fence_run(o, b, c, r, cols, false)
 			_fence_run(o, c, d, r, cols, true)
 			_fence_run(o, d, a, r, cols, false)
-		_hay(o, cp, r, cols)
+		_obj("hay", o, cp, 0.0, r, cols, [])
 		_bone(o, Vector3(cp.x + 1.0, 0.05, cp.y - 0.8))
 	elif roll < 0.9 and core < 0.5:
 		_scarecrow(o, cp, r, cols)
@@ -1127,9 +1127,9 @@ func _yard(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Random
 		for i in r.randi_range(2, 5):
 			var q := cp + Vector2(r.randf_range(-3, 3), r.randf_range(-3, 3))
 			if r.randf() < 0.5:
-				_crate(o, q, r, cols)
+				_obj("crate", o, q, 0.0, r, cols, [])
 			else:
-				_barrel(o, q, r, cols)
+				_obj("barrel", o, q, 0.0, r, cols, [])
 
 
 ## cimitero: caotico e vissuto. Lapidi grandi e storte, croci enormi, obelischi, sarcofagi, tombe aperte, tumuli, ossa;
@@ -1480,9 +1480,9 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		var q := Vector2(p.x, p.y) + Vector2(cos(yaw) * (w * 0.5 + 1.4), -sin(yaw) * (w * 0.5 + 1.4)) + Vector2(sin(yaw), cos(yaw)) * r.randf_range(-d * 0.45, d * 0.45) + Vector2(r.randf_range(-0.8, 0.8), r.randf_range(-0.8, 0.8))
 		var kk := r.randf()
 		if kk < 0.4:
-			_barrel(o, q, r, cols)
+			_obj("barrel", o, q, 0.0, r, cols, [])
 		elif kk < 0.7:
-			_crate(o, q, r, cols)
+			_obj("crate", o, q, 0.0, r, cols, [])
 		else:
 			_woodpile(o, q, yaw, r, cols)
 	cols.append(["b", p, Vector2(w * 0.5 + 0.4, d * 0.5 + 0.4), yaw])
@@ -1535,6 +1535,21 @@ func _fence_run(o: W3DBuilder, a: Vector2, b: Vector2, r: RandomNumberGenerator,
 		var rn2 := _road_near(a + (b - a) * float(si) / 4.0)
 		if float(rn2["d"]) - float(rn2["w"]) * 0.5 < 0.9:
 			return   # una staccionata non attraversa mai la strada
+	var center := (a + b) * 0.5
+	var hide_key := Vector2i(roundi(center.x * 100.0), roundi(center.y * 100.0))
+	if ed_hide_keys.has(hide_key):
+		var tmp := W3DBuilder.new()
+		tmp.rn = o.rn
+		tmp.sat = o.sat
+		tmp.con = o.con
+		tmp.gain = o.gain
+		_fence_build(tmp, a, b, r, [], gate, ln)
+		return
+	o.breakables.append({"kind": "fence", "a": a, "b": b, "pos": center})
+	_fence_build(o, a, b, r, cols, gate, ln)
+
+
+func _fence_build(o: W3DBuilder, a: Vector2, b: Vector2, r: RandomNumberGenerator, cols: Array, gate: bool, ln: float) -> void:
 	var dir := (b - a) / ln
 	var yaw := atan2(-dir.y, dir.x)
 	var n := maxi(1, int(ln / 1.6))
@@ -2555,6 +2570,9 @@ func _ed_apply(j: Dictionary) -> void:
 		for i in range(o.reg.size() - 1, -1, -1):
 			if (o.reg[i][1] as Vector2).distance_to(ec) < er:
 				o.reg.remove_at(i)
+		for i in range(o.breakables.size() - 1, -1, -1):
+			if (o.breakables[i]["pos"] as Vector2).distance_to(ec) < er:
+				o.breakables.remove_at(i)
 		for i in range(o.smokes.size() - 1, -1, -1):
 			var sv: Vector3 = o.smokes[i]
 			if Vector2(sv.x, sv.z).distance_to(ec) < er:
@@ -2572,7 +2590,13 @@ func _ed_apply(j: Dictionary) -> void:
 		else:
 			r.seed = int(a["s"])
 			o.rn.seed = r.randi()
-		_ed_make(str(a["k"]), o, Vector2(ax, az), float(a["yaw"]), r, cols, lamps, float(a.get("sc", 1.0)))
+		var added_kind := str(a["k"])
+		var added_pos := Vector2(ax, az)
+		if ed_hide_keys.has(Vector2i(roundi(ax * 100.0), roundi(az * 100.0))):
+			continue
+		if added_kind in ["barrel", "crate", "hay"]:
+			o.breakables.append({"kind": added_kind, "pos": added_pos})
+		_ed_make(added_kind, o, added_pos, float(a["yaw"]), r, cols, lamps, float(a.get("sc", 1.0)))
 	fence_rule = true
 
 
@@ -2725,6 +2749,8 @@ func _obj(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGener
 		house_doors = hd
 		return
 	o.reg.append([k, p, yaw, st, ost])
+	if k in ["barrel", "crate", "hay"]:
+		o.breakables.append({"kind": k, "pos": p})
 	_ed_make(k, o, p, yaw, r, cols, lamps)
 
 

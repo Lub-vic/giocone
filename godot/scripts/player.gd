@@ -516,9 +516,11 @@ func _process(dt: float) -> void:
 	var free := atk_t <= 0.0 and dash_t <= 0.0 and heavy_t <= 0.0
 	if dir.length() > 0.1 and free and not bool(main.settings["aim_manual"]):
 		face = dir.normalized()
-	# telecamera: V / R3 passa da normale a Orda a Tattica e di nuovo normale
+	# V / croce su cambia modalita' Orda/Tattica; U alterna lo zoom del mondo nella pelle 3D
 	if act("zoom"):
 		cycle_zoom()
+	if act("camera_zoom") and main.state == "play" and main.area == "world" and main.skin is W3DSkin:
+		(main.skin as W3DSkin).toggle_world_zoom()
 	if zmode > 0 and main.area.begins_with("int|"):
 		set_zmode(0)
 	if zmode > 0:
@@ -605,12 +607,14 @@ func _process(dt: float) -> void:
 			atk_cd = float(f["hcd"]) * Rpg.cd_mult(w)
 			if f["ranged"]:
 				fire(w, f, true)
+				main.world_strike(position, face, 27.0, 0.9, float(f["hm"]), str(w["f"]))
 			else:
 				cur_reach = float(f["reach"]) + 7.0 + Rpg.reach_add(w)
 				cur_arc = float(f["arc"]) + 0.2
 				strike(cur_reach, cur_arc, f["hm"], 190.0, true)
 	var vel := Vector2.ZERO
-	if dash_t > 0.0:
+	var rolling := dash_t > 0.0
+	if rolling:
 		dash_t -= dt
 		vel = dash_dir * 185.0
 	else:
@@ -628,6 +632,12 @@ func _process(dt: float) -> void:
 		main.move_body(self, vel * dt, radius)
 	else:
 		main.move_vehicle(self, vel * dt, radius, str(veh["id"]))
+	if rolling:
+		for p in main.props.duplicate():
+			var to_prop: Vector2 = p.position - position
+			if p.breakable and to_prop.length() < 22.0 and abs(angle_difference(dash_dir.angle(), to_prop.angle())) < 1.35:
+				main.break_prop(p)
+		main.world_strike(position, dash_dir, 16.0, 1.15, 1.0, "roll", true)
 	var moving := dir.length() > 0.1
 	spr.flip_h = face.x < 0.0
 	spr.offset.y = -8.0 - (abs(sin(t * 12.0)) * 1.0 if moving else 0.0)
@@ -671,9 +681,7 @@ func attack() -> void:
 		atk_cd = float(f["lcd"]) * cdm
 		big = false
 		fire(w, f, false)
-		if near == null:
-			# armi a distanza: colpo ravvicinato (bastone/arco usati come clava), poco efficace contro il legno e quasi inutile contro la pietra
-			main.world_strike(position, face, 27.0, 0.9, float(f["lm"]), str(w["f"]))
+		main.world_strike(position, face, 27.0, 0.9, float(f["lm"]), str(w["f"]))
 		return
 	combo = combo + 1 if combo_t > 0.0 else 1
 	combo_t = 0.7
@@ -769,8 +777,7 @@ func strike(reach: float, arc: float, mult: float, force: float, heavy: bool) ->
 		var v2: Vector2 = p.position - position
 		if p.breakable and v2.length() < reach + 6.0 and abs(angle_difference(a0, v2.angle())) < arc:
 			main.break_prop(p)
-	if not hit:
-		main.world_strike(position, face, reach, arc, mult, str(w.get("f", "sword")))
+	main.world_strike(position, face, reach, arc, mult, str(w.get("f", "sword")))
 	if hit:
 		main.hitstop(0.06 if heavy else 0.03)
 		main.shake(4.0 if heavy else 1.5)

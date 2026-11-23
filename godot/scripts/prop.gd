@@ -19,13 +19,14 @@ var dm := ""
 var dd := ""
 var hp := 0.0
 var hp_max := 0.0
+var dlight := false
 var dcells: Array = []
 
 
 func setup(k: String, c: Vector2i) -> void:
 	kind = k
 	cell = c
-	breakable = k == "barrel" or k == "coffin"
+	breakable = k == "barrel" or k == "crate" or k == "coffin"
 	position = Vector2(c) * Game.TS + Vector2(8, 13)
 	spr = Sprite2D.new()
 	spr.texture = Game.tex("necro" if k == "elder" else ("grave_mound_0" if k == "dig" else k))

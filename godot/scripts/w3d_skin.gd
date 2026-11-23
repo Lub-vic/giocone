@@ -2,13 +2,15 @@ class_name W3DSkin
 extends W3D
 ## "Pelle 3D" del gioco vero: la logica, i nemici, le collisioni, i colpi, la vita, le missioni restano quelli del gioco 2D.
 ## Questo nodo legge lo stato del gioco ogni fotogramma e lo disegna con il motore 3D (muri e pavimenti dal reticolo del dungeon,
-## oggetti e personaggi dai loro sprite, piu' i modelli a schegge per eroe e nemici noti). Al momento copre dungeon e interni;
-## nel mondo aperto torna alla grafica 2D.
+## oggetti e personaggi dai loro sprite, piu' i modelli a schegge per eroe e nemici noti).
 ## F9 attiva/disattiva.  1 unita' 3D = 16 pixel del gioco 2D.
 
 const FLOOR_COL := [Color(0.20, 0.19, 0.20), Color(0.17, 0.19, 0.14), Color(0.14, 0.17, 0.14), Color(0.14, 0.17, 0.15), Color(0.23, 0.22, 0.24), Color(0.40, 0.45, 0.52), Color(0.20, 0.10, 0.09)]
 const WALL_COL := [Color(0.20, 0.19, 0.22), Color(0.17, 0.19, 0.15), Color(0.14, 0.17, 0.14), Color(0.14, 0.18, 0.16), Color(0.22, 0.21, 0.25), Color(0.38, 0.42, 0.50), Color(0.22, 0.11, 0.10)]
 const KNOWN := ["goblin", "goblin_archer", "skeleton", "skel_archer", "ghoul", "kobold", "orc", "wolf"]
+const CAM_H_ROOM := 22.0
+const CAM_H_WORLD := 24.0
+const CAM_H_WORLD_FAR := 30.0
 
 var gm                           # Main
 var static_root: Node3D
@@ -50,7 +52,7 @@ func _ready() -> void:
 	w.content_scale_size = Vector2i(480, 270)
 	res_i = 0
 	fade_a = 48.0
-	cam_h = 22.0
+	cam_h = CAM_H_ROOM
 	_build_view()
 	vp.size = Vector2i(960, 540)
 	post_mat.set_shader_parameter("px", Vector2(960, 540))
@@ -1755,6 +1757,12 @@ func _base_prop(kind: String, tw: float, th: float, sd: int) -> ArrayMesh:
 const WSC := 16
 var wchunks: Dictionary = {}
 var world_on := false
+var world_zoom_far := false
+
+
+func toggle_world_zoom() -> void:
+	world_zoom_far = not world_zoom_far
+	gm.say("VISUALE AMPIA" if world_zoom_far else "VISUALE VICINA")
 
 
 func _wtile_col(t: int) -> Color:
@@ -1906,8 +1914,89 @@ func _world_update() -> void:
 			nd.set_meta("off", true)
 
 
+func _world_prop_key(p: Vector2) -> String:
+	return "w3d:%d,%d" % [roundi(p.x * 100.0), roundi(p.y * 100.0)]
+
+
+func _rebuild_world_chunk(k: Vector2i) -> void:
+	if not chunks.has(k):
+		return
+	for i in range(jobs.size() - 1, -1, -1):
+		if jobs[i]["k"] == k:
+			jobs.remove_at(i)
+	job_keys.erase(k)
+	_enqueue(k)
+
+
+func hit_world_prop(hit_pos: Vector2, face: Vector2, reach: float, arc: float, mult: float, fam: String, rolling: bool) -> bool:
+	if not world_on:
+		return false
+	var player_pos := hit_pos / Game.TS - world_off
+	var max_dist := reach / Game.TS + 7.0 / Game.TS
+	var best := INF
+	var target_pos := Vector2.ZERO
+	var target_key_pos := Vector2.ZERO
+	var target_chunk := Vector2i.ZERO
+	var target_kind := ""
+	var a0 := face.angle()
+	var broken: Dictionary = gm.persist.get("broken", {})
+	for ck in chunks:
+		for item in chunks[ck].get("breakables", []):
+			var kind := str(item["kind"])
+			var key_pos: Vector2 = item["pos"]
+			if broken.has(_world_prop_key(key_pos)):
+				continue
+			var p := key_pos
+			if kind == "fence":
+				var a: Vector2 = item["a"]
+				var b: Vector2 = item["b"]
+				var ab := b - a
+				var t := clampf((player_pos - a).dot(ab) / maxf(ab.length_squared(), 0.001), 0.0, 1.0)
+				p = a + ab * t
+			elif kind not in ["barrel", "crate", "hay"]:
+				continue
+			var v := p - player_pos
+			var d := v.length()
+			if d > max_dist or d >= best or absf(angle_difference(a0, v.angle())) > arc + 0.2:
+				continue
+			best = d
+			target_pos = p
+			target_key_pos = key_pos
+			target_chunk = ck
+			target_kind = kind
+	if target_kind.is_empty():
+		return false
+	var key := _world_prop_key(target_key_pos)
+	var hp_map: Dictionary = gm.persist.get("w3d_hp", {})
+	var left := float(hp_map.get(key, 16.0))
+	if rolling:
+		left = 0.0
+	else:
+		left -= maxf(8.0, 10.0 * mult * Destruct.eff(fam, "molle") * (1.0 + 0.04 * gm.player.a("for")))
+	var cp := (target_pos + world_off) * Game.TS + Vector2(8, 8)
+	gm.burst(cp, Destruct.COL["molle"], 6, 38.0, 0.35)
+	gm.snd("hit")
+	gm.shake(1.2)
+	if left <= 0.0:
+		gm.persist["broken"][key] = true
+		hp_map.erase(key)
+		gm.persist["w3d_hp"] = hp_map
+		ed_hide_keys[Vector2i(roundi(target_key_pos.x * 100.0), roundi(target_key_pos.y * 100.0))] = true
+		_rebuild_world_chunk(target_chunk)
+		gm.burst(cp, Destruct.COL["molle"], 18, 70.0, 0.55)
+		gm.snd("kill")
+		gm.shake(2.5)
+		gm.add_mat("erba" if target_kind == "hay" else "legna", 1)
+	else:
+		hp_map[key] = left
+		gm.persist["w3d_hp"] = hp_map
+		gm.popup(cp + Vector2(0, -14), "%d%%" % int(ceil(100.0 * left / 16.0)), Color(1.0, 0.9, 0.7))
+	return true
+
+
 func _world_init() -> void:
 	ed_load()
+	ed_hide_sync()
 	for k in chunks:
 		(chunks[k]["node"] as Node3D).queue_free()
 	chunks.clear()
@@ -1923,6 +2012,13 @@ func _world_init() -> void:
 	_gen_roads()
 	# il falo' del villaggio di gioco coincide con il primo falo' del motore: stesse strade organiche, stessa partenza
 	world_off = Vector2(gm.SEEDS[0]) + Vector2(3.5, 0.5) - (bonfires[1] as Vector2)
+	for key in gm.persist.get("broken", {}):
+		var broken_key := str(key)
+		if not broken_key.begins_with("w3d:"):
+			continue
+		var coords := broken_key.substr(4).split(",")
+		if coords.size() == 2:
+			ed_hide_keys[Vector2i(int(coords[0]), int(coords[1]))] = true
 	if OS.get_cmdline_user_args().has("--listkinds"):
 		var cnt := {}
 		for g in gm.ents.get_children():
@@ -2516,7 +2612,10 @@ func _process_inner(dt: float) -> void:
 	RenderingServer.global_shader_parameter_set("w3d_player", Vector3(pos.x, 0, pos.y))
 	fade_a = lerpf(fade_a, ed.fade if (ed != null and ed.on) else (27.0 if world_on else 48.0), 0.15)
 	if not fixed_cam:
-		cam_h = lerpf(cam_h, 30.0 if world_on else 22.0, 0.08)
+		var target_cam_h := CAM_H_ROOM
+		if world_on:
+			target_cam_h = CAM_H_WORLD_FAR if world_zoom_far else CAM_H_WORLD
+		cam_h = lerpf(cam_h, target_cam_h, 0.08)
 	if fwd:
 		env.ssao_enabled = not world_on
 		env.volumetric_fog_enabled = not world_on

@@ -217,7 +217,7 @@ var t := 0.0
 var world_seed := 1
 var area := ""
 var dun: Dictionary = {}
-var persist := {"fires": {}, "opened": {}, "broken": {}, "bosses": {}}
+var persist := {"fires": {}, "opened": {}, "broken": {}, "bosses": {}, "w3d_hp": {}}
 var guardians := 0
 var last_fire := {}
 var returns := {}                  # area -> cella del portale d'ingresso (nel mondo)
@@ -491,7 +491,7 @@ func save_meta() -> void:
 func start_run(cls_id: String) -> void:
 	world_seed = new_seed()
 	pop_salt = randi()
-	persist = {"fires": {}, "opened": {}, "broken": {}, "bosses": {}}
+	persist = {"fires": {}, "opened": {}, "broken": {}, "bosses": {}, "w3d_hp": {}}
 	cut_idx_n = -1
 	guardians = 0
 	pages_found = 0
@@ -791,7 +791,7 @@ func start_game(ld: Dictionary, cls_id := "negromante") -> void:
 		pages_found = int(ld.get("pages", 0))
 		elder_i = int(ld.get("elder", 0))
 		var ps: Dictionary = ld["persist"]
-		for k in ["fires", "opened", "broken", "bosses", "npc", "quests", "bestiary"]:
+		for k in ["fires", "opened", "broken", "bosses", "npc", "quests", "bestiary", "w3d_hp"]:
 			if not ps.has(k):
 				ps[k] = {}
 		persist = ps
@@ -913,7 +913,7 @@ func start_game(ld: Dictionary, cls_id := "negromante") -> void:
 func new_cycle() -> void:
 	drop_world_cache()
 	cycle += 1
-	persist = {"fires": {}, "opened": {}, "broken": {}, "bosses": {}}
+	persist = {"fires": {}, "opened": {}, "broken": {}, "bosses": {}, "w3d_hp": {}}
 	cut_idx_n = -1
 	guardians = 0
 	pages_found = 0
@@ -1461,6 +1461,7 @@ func register_dest(p: Prop, name: String, cells: Array, dk: String) -> void:
 	p.dd = str(info["d"])
 	p.hp = float(info["hp"])
 	p.hp_max = p.hp
+	p.dlight = bool(info.get("light", false))
 	p.dcells = cells
 	for cc in cells:
 		dest_cells[cc] = p
@@ -1475,8 +1476,10 @@ func terrain_breakable(c: Vector2i) -> bool:
 
 
 ## un colpo dell'arma contro l'oggetto o il muro piu' vicino davanti al giocatore
-func world_strike(pos: Vector2, face: Vector2, reach: float, arc: float, mult: float, fam: String) -> void:
+func world_strike(pos: Vector2, face: Vector2, reach: float, arc: float, mult: float, fam: String, rolling := false) -> void:
 	if area != "world":
+		return
+	if skin is W3DSkin and (skin as W3DSkin).hit_world_prop(pos, face, reach, arc, mult, fam, rolling):
 		return
 	var a0 := face.angle()
 	var pc := Vector2i(floori(pos.x / Game.TS), floori(pos.y / Game.TS))
@@ -1490,6 +1493,9 @@ func world_strike(pos: Vector2, face: Vector2, reach: float, arc: float, mult: f
 				continue
 			if dest_cells.has(c) and not is_instance_valid(dest_cells[c]):
 				dest_cells.erase(c)   # l'oggetto e' stato rimosso da altro (es. area ripulita)
+			if rolling:
+				if not dest_cells.has(c) or not (dest_cells[c] as Prop).dlight:
+					continue
 			if not dest_cells.has(c) and not terrain_breakable(c):
 				continue
 			var v := Vector2(c) * Game.TS + Vector2(8, 8) - pos
@@ -1519,13 +1525,19 @@ func world_strike(pos: Vector2, face: Vector2, reach: float, arc: float, mult: f
 		left = float(terr_dmg.get(bc, tot))
 		drop_kind = str(ti["d"])
 	var e := Destruct.eff(fam, mat)
-	left -= 10.0 * mult * e * (1.0 + 0.04 * player.a("for"))
+	if rolling:
+		left = 0.0
+	else:
+		var damage := 10.0 * mult * e * (1.0 + 0.04 * player.a("for"))
+		if p != null and p.dlight:
+			damage = maxf(damage, 8.0)
+		left -= damage
 	var cp := Vector2(bc) * Game.TS + Vector2(8, 8)
 	burst(cp, Destruct.COL[mat], 6, 38.0, 0.35)
 	snd("hit")
 	shake(1.2)
 	var now := Time.get_ticks_msec() / 1000.0
-	if e < 0.3 and now > dest_warn_t:
+	if not rolling and (p == null or not p.dlight) and e < 0.3 and now > dest_warn_t:
 		dest_warn_t = now + 3.5
 		say("TROPPO DURO: SERVE %s" % Destruct.TOOL[mat])
 	if left <= 0.0:
@@ -9669,6 +9681,106 @@ func _process(_dt: float) -> void:
 					np += 1
 			print("POPTEST seme=", world_seed, " sale=", pop_salt, " scenari(blocchi=", nb, ", oggetti=", np, ") nemici=", spawns.size(), " hash_nemici=", h1)
 			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--w3dbreaktest"):
+		tgs += 1
+		if tgs == 3:
+			if not (skin is W3DSkin) or not (skin as W3DSkin).world_on:
+				print("DEST3D FAIL: visuale 3D del mondo non attiva")
+				get_tree().quit()
+				return
+			var skin3d := skin as W3DSkin
+			var test_pos := Vector2.ZERO
+			var test_chunk := Vector2i.ZERO
+			var test_kind := ""
+			var reg_count := 0
+			var fence_count := 0
+			var found := false
+			for ck in skin3d.chunks:
+				for entry in skin3d.chunks[ck].get("reg", []):
+					reg_count += 1
+					if str(entry[0]) in ["barrel", "crate", "hay"]:
+						test_pos = entry[1]
+						test_chunk = ck
+						test_kind = str(entry[0])
+						found = true
+						break
+				if found:
+					break
+				for item in skin3d.chunks[ck].get("breakables", []):
+					fence_count += 1
+					if str(item["kind"]) == "fence":
+						test_pos = item["pos"]
+						test_chunk = ck
+						test_kind = "fence"
+						found = true
+						break
+				if found:
+					break
+			if not found:
+				for ck in skin3d.chunks:
+					test_chunk = ck
+					test_pos = Vector2(test_chunk) * W3D.CHS + Vector2(12, 12)
+					found = true
+					break
+				if found:
+					var test_hide_key := Vector2i(roundi(test_pos.x * 100.0), roundi(test_pos.y * 100.0))
+					skin3d.ed_hide_keys.erase(test_hide_key)
+					skin3d.ed_adds.append({"k": "barrel", "x": test_pos.x, "z": test_pos.y, "yaw": 0.0, "s": 12345, "sc": 1.0})
+					skin3d._rebuild_world_chunk(test_chunk)
+					skin3d._run_jobs(1e9)
+					found = false
+					for item in skin3d.chunks[test_chunk].get("breakables", []):
+						if str(item["kind"]) == "barrel" and skin3d._world_prop_key(item["pos"]) == skin3d._world_prop_key(test_pos):
+							test_kind = "barrel"
+							found = true
+							break
+			if not found:
+				print("DEST3D FAIL: nessun oggetto leggero nei blocchi caricati; registrati=", reg_count, " staccionate=", fence_count)
+				get_tree().quit()
+				return
+			var key3d := skin3d._world_prop_key(test_pos)
+			persist["broken"].erase(key3d)
+			persist["w3d_hp"].erase(key3d)
+			var test_dir := (test_pos - (player.position / Game.TS - skin3d.world_off)).normalized()
+			if test_dir.is_zero_approx():
+				test_dir = Vector2.RIGHT
+			var test_origin := (test_pos - test_dir + skin3d.world_off) * Game.TS
+			skin3d.hit_world_prop(test_origin, test_dir, 29.0, 1.0, 1.0, "bow", false)
+			var survived_first: bool = not persist["broken"].has(key3d)
+			skin3d.hit_world_prop(test_origin, test_dir, 29.0, 1.0, 1.0, "bow", false)
+			skin3d._run_jobs(1e9)
+			var still_visible := false
+			if test_kind == "fence":
+				for item in skin3d.chunks[test_chunk].get("breakables", []):
+					if skin3d._world_prop_key(item["pos"]) == key3d:
+						still_visible = true
+						break
+			else:
+				for item in skin3d.chunks[test_chunk].get("breakables", []):
+					if str(item["kind"]) == test_kind and skin3d._world_prop_key(item["pos"]) == key3d:
+						still_visible = true
+						break
+			var roll_pos := test_pos + Vector2(3.0, 0.0)
+			var roll_key := skin3d._world_prop_key(roll_pos)
+			persist["broken"].erase(roll_key)
+			persist["w3d_hp"].erase(roll_key)
+			skin3d.ed_hide_keys.erase(Vector2i(roundi(roll_pos.x * 100.0), roundi(roll_pos.y * 100.0)))
+			skin3d.ed_adds.append({"k": "crate", "x": roll_pos.x, "z": roll_pos.y, "yaw": 0.0, "s": 54321, "sc": 1.0})
+			skin3d._rebuild_world_chunk(test_chunk)
+			skin3d._run_jobs(1e9)
+			var roll_dir := (roll_pos - (player.position / Game.TS - skin3d.world_off)).normalized()
+			if roll_dir.is_zero_approx():
+				roll_dir = Vector2.RIGHT
+			var roll_origin := (roll_pos - roll_dir + skin3d.world_off) * Game.TS
+			skin3d.hit_world_prop(roll_origin, roll_dir, 29.0, 1.0, 1.0, "sword", true)
+			skin3d._run_jobs(1e9)
+			var roll_visible := false
+			for item in skin3d.chunks[test_chunk].get("breakables", []):
+				if skin3d._world_prop_key(item["pos"]) == roll_key:
+					roll_visible = true
+					break
+			print("DEST3D primo colpo sopravvive=", survived_first, " secondo distrugge=", persist["broken"].has(key3d), " mesh rimossa=", not still_visible, " rotolata distrugge=", persist["broken"].has(roll_key), " mesh rimossa=", not roll_visible)
+			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--desttest"):
 		tgs += 1
 		if tgs == 3:
@@ -9679,12 +9791,19 @@ func _process(_dt: float) -> void:
 				if not is_instance_valid(dest_cells[cc]):
 					continue
 				var pp: Prop = dest_cells[cc]
-				if seen.has(pp.dd):
+				var label := pp.dd
+				if pp.dlight:
+					label = "leggero " + pp.kind
+				if seen.has(label):
 					continue
-				seen[pp.dd] = true
-				var line := "DEST %s (%s, hp %d):" % [pp.dd, pp.dm, int(pp.hp_max)]
-				for fam in ["sword", "greatsword", "hammer", "dagger"]:
-					var hits := int(ceil(pp.hp_max / (10.0 * 1.0 * Destruct.eff(fam, pp.dm))))
+				seen[label] = true
+				var line := "DEST %s (%s, hp %d):" % [label, pp.dm, int(pp.hp_max)]
+				for fam in Rpg.FAM:
+					var mult := float(Rpg.FAM[fam]["lm"])
+					var dmg := 10.0 * mult * Destruct.eff(fam, pp.dm)
+					if pp.dlight:
+						dmg = maxf(dmg, 8.0)
+					var hits := int(ceil(pp.hp_max / dmg))
 					line += " %s=%d" % [fam, hits]
 				print(line)
 			# prova reale: abbatti un albero e un muro di roccia

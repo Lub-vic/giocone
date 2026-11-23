@@ -30,17 +30,19 @@ static func classify(name: String) -> Dictionary:
 	if name.begins_with("stump") or name.begins_with("log_"):
 		return {"m": "legno", "hp": 45.0, "d": "legna"}
 	if name.begins_with("barrel") or name.begins_with("crate") or name.begins_with("coffin"):
-		return {"m": "legno", "hp": 24.0, "d": "legna"}
+		return {"m": "molle", "hp": 16.0, "d": "legna", "light": true}
 	if name.begins_with("hay") or name.begins_with("sack") or name.begins_with("tent_top"):
-		return {"m": "molle", "hp": 20.0, "d": "erba"}
+		return {"m": "molle", "hp": 16.0, "d": "erba", "light": true}
+	if name.begins_with("skullpile") or name.begins_with("bone_"):
+		return {"m": "molle", "hp": 16.0, "d": "osso", "light": true}
 	if name.begins_with("fence_") and name.ends_with("wood"):
-		return {"m": "legno", "hp": 40.0, "d": "legna"}
+		return {"m": "molle", "hp": 16.0, "d": "legna", "light": true}
 	if name.begins_with("fence_"):
 		return {"m": "metallo", "hp": 130.0, "d": "ferro"}
-	if name.begins_with("cart_top") or name.begins_with("wagon") or name.begins_with("table_top") or name.begins_with("chair_top") or name.begins_with("stall"):
+	if name.begins_with("table_top") or name.begins_with("chair_top"):
+		return {"m": "molle", "hp": 16.0, "d": "legna", "light": true}
+	if name.begins_with("cart_top") or name.begins_with("wagon") or name.begins_with("stall"):
 		return {"m": "legno", "hp": 70.0, "d": "legna"}
-	if name.begins_with("skullpile") or name.begins_with("bone_"):
-		return {"m": "molle", "hp": 30.0, "d": "osso"}
 	if name.begins_with("grave_") or name.begins_with("cross_") or name.begins_with("gravestone"):
 		return {"m": "pietra", "hp": 90.0, "d": "pietra"}
 	if name.begins_with("tomb"):

@@ -1299,6 +1299,7 @@ func _controls() -> void:
 		["PAUSA", "ESC", "START"],
 		["MAPPA / BESTIARIO", "M / B", "START > MAPPA"],
 		["SCHERMO INTERO / FPS", "F11 / F3", "-"],
+		["ZOOM ESTERNO 3D", "U", "-"],
 		["ZOOM: ORDA/TATTICA", "V", "CROCE SU"],
 		["AGGANCIA NEMICO", "Y", "R3"],
 		["TATTICA: INVIA", "CLICK / SPAZIO", "RB"],
