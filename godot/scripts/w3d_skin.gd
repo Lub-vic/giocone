@@ -9,7 +9,7 @@ const FLOOR_COL := [Color(0.20, 0.19, 0.20), Color(0.17, 0.19, 0.14), Color(0.14
 const WALL_COL := [Color(0.20, 0.19, 0.22), Color(0.17, 0.19, 0.15), Color(0.14, 0.17, 0.14), Color(0.14, 0.18, 0.16), Color(0.22, 0.21, 0.25), Color(0.38, 0.42, 0.50), Color(0.22, 0.11, 0.10)]
 const KNOWN := ["goblin", "goblin_archer", "skeleton", "skel_archer", "ghoul", "kobold", "orc", "wolf"]
 const CAM_H_ROOM := 22.0
-const CAM_H_WORLD := 24.0
+const CAM_H_WORLD := CAM_H_ROOM
 const CAM_H_WORLD_FAR := 30.0
 
 var gm                           # Main

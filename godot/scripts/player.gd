@@ -516,7 +516,7 @@ func _process(dt: float) -> void:
 	var free := atk_t <= 0.0 and dash_t <= 0.0 and heavy_t <= 0.0
 	if dir.length() > 0.1 and free and not bool(main.settings["aim_manual"]):
 		face = dir.normalized()
-	# V / croce su cambia modalita' Orda/Tattica; U alterna lo zoom del mondo nella pelle 3D
+	# V / croce destra cambia Orda/Tattica; U / croce giu' cambia zoom. Il movimento usa lo stick sinistro.
 	if act("zoom"):
 		cycle_zoom()
 	if act("camera_zoom") and main.state == "play" and main.area == "world" and main.skin is W3DSkin:

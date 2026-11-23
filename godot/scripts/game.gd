@@ -173,10 +173,6 @@ static func setup_input() -> void:
 	_jaxis("move_right", JOY_AXIS_LEFT_X, 1.0)
 	_jaxis("move_up", JOY_AXIS_LEFT_Y, -1.0)
 	_jaxis("move_down", JOY_AXIS_LEFT_Y, 1.0)
-	_jbtn("move_left", JOY_BUTTON_DPAD_LEFT)
-	_jbtn("move_right", JOY_BUTTON_DPAD_RIGHT)
-	# croce su: non muove piu' (c'e' lo stick) ma cambia modalita' Orda/Tattica
-	_jbtn("move_down", JOY_BUTTON_DPAD_DOWN)
 	_jaxis("aim_left", JOY_AXIS_RIGHT_X, -1.0)
 	_jaxis("aim_right", JOY_AXIS_RIGHT_X, 1.0)
 	_jaxis("aim_up", JOY_AXIS_RIGHT_Y, -1.0)
@@ -189,7 +185,8 @@ static func setup_input() -> void:
 	_jbtn("swap", JOY_BUTTON_Y)
 	_jbtn("spell1", JOY_BUTTON_LEFT_SHOULDER)
 	_jaxis("spell2", JOY_AXIS_TRIGGER_LEFT, 1.0)
-	_jbtn("zoom", JOY_BUTTON_DPAD_UP)
+	_jbtn("zoom", JOY_BUTTON_DPAD_RIGHT)
+	_jbtn("camera_zoom", JOY_BUTTON_DPAD_DOWN)
 	_jbtn("lock", JOY_BUTTON_RIGHT_STICK)   # R3: aggancia il nemico (mira manuale), premuto di nuovo passa al successivo
 	_jbtn("parry", JOY_BUTTON_LEFT_STICK)
 	_jbtn("summon", JOY_BUTTON_BACK)   # SELECT / Share: bolla spazio-temporale
