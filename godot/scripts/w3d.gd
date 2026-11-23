@@ -1415,7 +1415,6 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(cxl, chy + 0.14, czl)), Vector3(0.5, 0.05, 0.5), Color(0.02, 0.02, 0.02), 0.0, 8)
 	if dr.randf() < 0.7:
 		var cpw: Vector3 = t0 * Vector3(cxl, chy + 0.2, czl)
-		o.box(Transform3D(Basis.IDENTITY, cpw), Vector3(0.34, 0.04, 0.34), Color(1.0, 0.55, 0.22, 0.15), 0.0, 8)
 		lamps.append(Vector4(cpw.x, cpw.y + 0.3, cpw.z, 0.5))
 		o.smokes.append(Vector3(cpw.x, cpw.y + 0.25, cpw.z))
 	var dz := r.randf_range(-d * 0.5 + 1.3, d * 0.5 - 1.3)
