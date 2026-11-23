@@ -164,7 +164,7 @@ func _build_view() -> void:
 	vp.size = RES[res_i]
 	vp.own_world_3d = true
 	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	vp.msaa_3d = Viewport.MSAA_DISABLED
+	vp.msaa_3d = Viewport.MSAA_2X
 	add_child(vp)
 	env = Environment.new()
 	env.background_mode = Environment.BG_COLOR

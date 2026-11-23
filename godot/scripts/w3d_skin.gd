@@ -59,6 +59,7 @@ func _ready() -> void:
 	sr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var sm := ShaderMaterial.new()
 	sm.shader = load("res://shaders/w3d_sharpen.gdshader")
+	sm.set_shader_parameter("amount", 1.35)
 	sr.material = sm
 	sharp_layer.add_child(sr)
 	sharp_layer.visible = false

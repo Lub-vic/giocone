@@ -18,7 +18,21 @@
 			"top_dead_3",
 			145,
 			581
-		]
+		],
+		["p", "boulder_for_0", 112, 576],
+		["p", "boulder_for_3", 116, 582],
+		["p", "mossy_rock", 108, 588],
+		["p", "stump_top_1", 121, 610],
+		["p", "log_top_0", 126, 614],
+		["p", "bush_green_2", 103, 581],
+		["p", "bush_green_5", 107, 596],
+		["p", "fern", 99, 590],
+		["p", "fern", 119, 604],
+		["p", "boulder_for_6", 130, 623],
+		["p", "stump_top_3", 95, 608],
+		["p", "bush_green_7", 94, 617],
+		["p", "mossy_rock", 132, 630],
+		["p", "log_top_3", 137, 634]
 	],
 	"remove": [
 		[
