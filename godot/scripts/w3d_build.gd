@@ -7,6 +7,8 @@ extends RefCounted
 var v := PackedVector3Array()
 var c := PackedColorArray()
 var rn := RandomNumberGenerator.new()
+var reg: Array = []              # oggetti generati [tipo, posizione, rotazione, stato rng, stato rng colori]: l'editor li rende modificabili
+var smokes: Array = []           # camini che fumano (posizione): diventano particelle animate
 var sz := 1.0                   # fattore di scala per rock() e shard() (arredi ingranditi)
 var gain := 1.0                 # luminosita' aggiuntiva (oggetti di scena)
 var sat := 1.0                  # saturazione e contrasto applicati ai colori (oggetti dello scenario piu' leggibili)

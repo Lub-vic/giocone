@@ -17,6 +17,7 @@ var yaw := 0.0
 var seed_i := 1
 var erase_r := 3.0
 var sel := -1
+var sel_gen: Array = []             # oggetto generato dal gioco selezionato: [tipo, posizione, rotazione, stato rng, stato rng colori]
 var undo: Array = []
 var dirty := false
 var prev_state := "play"
@@ -186,6 +187,7 @@ func set_tool(i: int) -> void:
 		(tool_btns[k] as Button).set_pressed_no_signal(k == i)
 	if i != 1:
 		sel = -1
+		sel_gen = []
 
 
 func _over_panel() -> bool:
@@ -257,20 +259,32 @@ func _update_markers() -> void:
 			ghost.visible = true
 		elif tool == 1 and dragging and sel >= 0:
 			var a: Dictionary = sk.ed_adds[sel]
-			_ghost_for(str(a["k"]), float(a["yaw"]), int(a["s"]), float(a.get("sc", 1.0)))
+			_ghost_for(str(a["k"]), float(a["yaw"]), int(a.get("s", 0)), float(a.get("sc", 1.0)), str(a.get("st", "")), str(a.get("os", "")))
 			ghost.position = Vector3(mpos.x, 0.0, mpos.y)
 			ghost.visible = true
-	ring_sel.visible = sel >= 0 and sel < sk.ed_adds.size() and not dragging
+		elif tool == 1 and dragging and sel < 0 and not sel_gen.is_empty():
+			_ghost_for(str(sel_gen[0]), float(sel_gen[2]), 0, 1.0, str(sel_gen[3]), str(sel_gen[4]))
+			ghost.position = Vector3(mpos.x, 0.0, mpos.y)
+			ghost.visible = true
+	var gen_ok := sel < 0 and not sel_gen.is_empty()
+	ring_sel.visible = (gen_ok or (sel >= 0 and sel < sk.ed_adds.size())) and not dragging
 	if ring_sel.visible:
-		var a2: Dictionary = sk.ed_adds[sel]
-		var gp: Vector2 = Vector2(float(a2["x"]), float(a2["z"])) + sk.world_off
+		var gp: Vector2
+		var rs := 2.0
+		if gen_ok:
+			gp = (sel_gen[1] as Vector2) + sk.world_off
+			rs = _gen_radius(str(sel_gen[0]))
+		else:
+			var a2: Dictionary = sk.ed_adds[sel]
+			gp = Vector2(float(a2["x"]), float(a2["z"])) + sk.world_off
+		(ring_sel.material_override as StandardMaterial3D).albedo_color = Color(1.0, 0.6, 0.2) if gen_ok else Color(0.3, 0.9, 1.0)
 		ring_sel.position = Vector3(gp.x, 0.25, gp.y)
-		ring_sel.scale = Vector3(2.0, 0.4, 2.0)
+		ring_sel.scale = Vector3(rs, 0.4, rs)
 
 
 ## anteprima: stessa costruzione e stesso seme dell'oggetto vero, cosi' quello che vedi e' quello che piazzi
-func _ghost_for(k: String, y: float, s: int, sc: float) -> void:
-	var key := "%s|%d|%d|%d" % [k, roundi(y * 100.0), s, roundi(sc * 100.0)]
+func _ghost_for(k: String, y: float, s: int, sc: float, st := "", ost := "") -> void:
+	var key := "%s|%d|%d|%d|%s" % [k, roundi(y * 100.0), s, roundi(sc * 100.0), st]
 	if key == ghost_key:
 		return
 	ghost_key = key
@@ -278,10 +292,16 @@ func _ghost_for(k: String, y: float, s: int, sc: float) -> void:
 	b.sat = 1.55
 	b.con = 1.45
 	var r := RandomNumberGenerator.new()
-	r.seed = s
-	b.rn.seed = r.randi()
+	if st != "":
+		r.state = int(st)
+		b.rn.state = int(ost)
+	else:
+		r.seed = s
+		b.rn.seed = r.randi()
 	var hd: Dictionary = sk.house_doors.duplicate()      # la costruzione di una casa registrerebbe una porta in (0,0)
+	sk.fence_rule = false
 	sk._ed_make(k, b, Vector2.ZERO, y, r, [], [], sc)
+	sk.fence_rule = true
 	sk.house_doors = hd
 	ghost.mesh = b.mesh()
 
@@ -291,7 +311,7 @@ func _update_info() -> void:
 	if mvalid:
 		var pr: Vector2 = mpos - sk.world_off
 		cur = "  (%.0f, %.0f)" % [pr.x, pr.y]
-	var tl: String = ["PIAZZA: clic sinistro mette l'oggetto, R lo ruota, V cambia variante, + e - cambiano la scala (%.1fx)" % scl, "SELEZIONA: clic su un oggetto che hai piazzato, trascina per spostare, R ruota, + e - scala, Canc elimina", "GOMMA: clic e trascina cancella tutto nel cerchio ([ ] cambiano il raggio: %.1f)" % erase_r][tool]
+	var tl: String = ["PIAZZA: clic sinistro mette l'oggetto, R lo ruota, V cambia variante, + e - cambiano la scala (%.1fx)" % scl, "SELEZIONA: clic su un oggetto (anche del gioco: case, alberi, pozzi...), trascina per spostare, R ruota, + e - scala, Canc elimina", "GOMMA: clic e trascina cancella tutto nel cerchio ([ ] cambiano il raggio: %.1f)" % erase_r][tool]
 	var s: String = tl + "\n\nOggetti aggiunti: %d   Zone cancellate: %d%s\nWASD muovi (Maiusc veloce), rotella zoom\nCtrl+Z annulla, Ctrl+S salva, F12 o Esc esce%s" % [sk.ed_adds.size(), sk.ed_erase.size(), cur, "\n*** modifiche non salvate ***" if dirty else ""]
 	if msg_t > 0.0:
 		s += "\n" + msg
@@ -324,22 +344,22 @@ func _unhandled_input(ev: InputEvent) -> void:
 			KEY_3:
 				set_tool(2)
 			KEY_R:
-				if tool == 1 and sel >= 0 and sel < sk.ed_adds.size():
-					_push_undo()
-					var a: Dictionary = sk.ed_adds[sel]
-					a["yaw"] = float(a["yaw"]) + (-PI / 8.0 if k.shift_pressed else PI / 8.0)
-					_rebuild_at(Vector2(float(a["x"]), float(a["z"])), 12.0)
-					dirty = true
+				if tool == 1 and (sel >= 0 or not sel_gen.is_empty()):
+					if _begin_edit():
+						var a: Dictionary = sk.ed_adds[sel]
+						a["yaw"] = float(a["yaw"]) + (-PI / 8.0 if k.shift_pressed else PI / 8.0)
+						_rebuild_at(Vector2(float(a["x"]), float(a["z"])), 14.0)
+						dirty = true
 				else:
 					yaw += -PI / 8.0 if k.shift_pressed else PI / 8.0
 			KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT:
 				var f := 1.1 if (k.keycode == KEY_EQUAL or k.keycode == KEY_PLUS or k.keycode == KEY_KP_ADD) else 1.0 / 1.1
-				if tool == 1 and sel >= 0 and sel < sk.ed_adds.size():
-					_push_undo()
-					var a3: Dictionary = sk.ed_adds[sel]
-					a3["sc"] = clampf(float(a3.get("sc", 1.0)) * f, 0.2, 6.0)
-					_rebuild_at(Vector2(float(a3["x"]), float(a3["z"])), 14.0)
-					dirty = true
+				if tool == 1 and (sel >= 0 or not sel_gen.is_empty()):
+					if _begin_edit():
+						var a3: Dictionary = sk.ed_adds[sel]
+						a3["sc"] = clampf(float(a3.get("sc", 1.0)) * f, 0.2, 6.0)
+						_rebuild_at(Vector2(float(a3["x"]), float(a3["z"])), 14.0)
+						dirty = true
 				else:
 					scl = clampf(scl * f, 0.2, 6.0)
 			KEY_V:
@@ -383,7 +403,8 @@ func _click() -> void:
 			dirty = true
 		1:
 			sel = _nearest_add(pr, 3.5)
-			dragging = sel >= 0
+			sel_gen = [] if sel >= 0 else _nearest_gen(pr)
+			dragging = sel >= 0 or not sel_gen.is_empty()
 			drag_moved = false
 			drag_start = mpos
 		2:
@@ -392,8 +413,7 @@ func _click() -> void:
 
 
 func _release() -> void:
-	if tool == 1 and dragging and sel >= 0 and sel < sk.ed_adds.size() and mvalid and mpos.distance_to(drag_start) > 0.4:
-		_push_undo()
+	if tool == 1 and dragging and mvalid and mpos.distance_to(drag_start) > 0.4 and _begin_edit():
 		var a: Dictionary = sk.ed_adds[sel]
 		var old := Vector2(float(a["x"]), float(a["z"]))
 		var pr: Vector2 = mpos - sk.world_off
@@ -418,6 +438,15 @@ func _nearest_add(pr: Vector2, maxd: float) -> int:
 
 
 func _delete_sel() -> void:
+	if sel < 0 and not sel_gen.is_empty():       # oggetto del gioco: si nasconde
+		_push_undo()
+		var gp: Vector2 = sel_gen[1]
+		sk.ed_hide.append([roundi(gp.x * 100.0), roundi(gp.y * 100.0)])
+		sk.ed_hide_sync()
+		sel_gen = []
+		_rebuild_at(gp, 14.0)
+		dirty = true
+		return
 	if sel < 0 or sel >= sk.ed_adds.size():
 		return
 	_push_undo()
@@ -446,7 +475,7 @@ func _do_erase(first: bool) -> void:
 
 
 func _push_undo() -> void:
-	undo.append([sk.ed_adds.duplicate(true), sk.ed_erase.duplicate(true)])
+	undo.append([sk.ed_adds.duplicate(true), sk.ed_erase.duplicate(true), sk.ed_hide.duplicate(true)])
 	if undo.size() > 60:
 		undo.pop_front()
 
@@ -457,7 +486,10 @@ func do_undo() -> void:
 	var s: Array = undo.pop_back()
 	sk.ed_adds = s[0]
 	sk.ed_erase = s[1]
+	sk.ed_hide = s[2]
+	sk.ed_hide_sync()
 	sel = -1
+	sel_gen = []
 	for k in sk.chunks.keys():
 		_rebuild_chunk(k)
 	dirty = true
@@ -497,3 +529,47 @@ func _save() -> void:
 		msg = "Salvato in " + path
 	msg_t = 4.0
 
+
+
+## prepara la modifica dell'oggetto selezionato: se e' del gioco lo trasforma in uno piazzato (stessa forma) e nasconde l'originale
+func _begin_edit() -> bool:
+	if sel < 0 and not sel_gen.is_empty():
+		_push_undo()
+		var g: Array = sel_gen
+		var gp: Vector2 = g[1]
+		sk.ed_hide.append([roundi(gp.x * 100.0), roundi(gp.y * 100.0)])
+		sk.ed_hide_sync()
+		sk.ed_adds.append({"k": g[0], "x": gp.x, "z": gp.y, "yaw": g[2], "st": str(g[3]), "os": str(g[4]), "s": 0, "sc": 1.0})
+		sel = sk.ed_adds.size() - 1
+		sel_gen = []
+		return true
+	if sel >= 0 and sel < sk.ed_adds.size():
+		_push_undo()
+		return true
+	return false
+
+
+func _gen_radius(k: String) -> float:
+	match k:
+		"house", "chapel", "mausoleum":
+			return 4.0
+		"ruin", "gallows", "pyre", "well":
+			return 2.5
+	return 1.5
+
+
+func _nearest_gen(pr: Vector2) -> Array:
+	var best: Array = []
+	var bd := 1e9
+	var c0 := Vector2i(floori(pr.x / W3D.CHS), floori(pr.y / W3D.CHS))
+	for dz in range(-1, 2):
+		for dx in range(-1, 2):
+			var k := c0 + Vector2i(dx, dz)
+			if not sk.chunks.has(k):
+				continue
+			for ent in sk.chunks[k].get("reg", []):
+				var d: float = (ent[1] as Vector2).distance_to(pr)
+				if d < _gen_radius(str(ent[0])) and d < bd:
+					bd = d
+					best = ent
+	return best

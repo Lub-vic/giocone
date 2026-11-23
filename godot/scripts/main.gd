@@ -190,6 +190,7 @@ var themes: Array[int] = []
 var player: Player
 var enemies: Array = []
 var props: Array = []
+var pickups: Array = []              # anime e monete a terra (la grafica 3D del mondo aperto le legge da qui)
 var boss: Enemy = null
 var floor_layer: TileMapLayer
 var wall_layer: TileMapLayer
@@ -6105,6 +6106,7 @@ func drop(pos: Vector2, k: String, v: int) -> void:
 	p.setup(self, k, v)
 	p.position = pos
 	ents.add_child(p)
+	pickups.append(p)
 
 
 func make_stain() -> void:

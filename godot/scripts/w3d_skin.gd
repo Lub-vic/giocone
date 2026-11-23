@@ -1408,8 +1408,15 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 	if spr == null or spr.texture == null:
 		return
 	var n2 := n as Node2D
+	if n is Pickup:
+		if world_on and (n2.position / 16.0).distance_squared_to(pos) > 54.0 * 54.0:
+			if dyn.has(id):
+				_drop_dyn(id)
+			return
+		_sync_pickup(n as Pickup, id)
+		return
 	var func_prop: bool = n is Prop and not bool((n as Prop).scene)
-	if world_on and not (is_player or func_prop or n is Enemy or n is Villager or n is Ally or n is Critter):
+	if world_on and not (is_player or func_prop or n is Enemy or n is Villager or n is Ally or n is Critter or n is Pickup):
 		if dyn.has(id):
 			_drop_dyn(id)
 		return
@@ -2407,7 +2414,9 @@ func _process_inner(dt: float) -> void:
 	if world_on:
 		_sync_node2d(gm.player, true)
 		var ppx: Vector2 = gm.player.position
-		for lst in [gm.enemies, gm.villagers, gm.allies, gm.critters, gm.props]:
+		if Engine.get_process_frames() % 60 == 0:
+			gm.pickups = gm.pickups.filter(func(x): return is_instance_valid(x))
+		for lst in [gm.enemies, gm.villagers, gm.allies, gm.critters, gm.props, gm.pickups]:
 			for n in lst:
 				if not is_instance_valid(n):
 					continue
@@ -2565,3 +2574,64 @@ func _unhandled_input(ev: InputEvent) -> void:
 		for k in dyn.keys():
 			_drop_dyn(k)
 		gm.say(["CUBETTI DALL'ALTO", "CUBETTI PIATTI (SPRITE ESATTI)", "PERSONAGGI STILIZZATI"][char_mode])
+
+
+## anime e monete a terra: prismi luminosi che ruotano e ondeggiano (colore dal tipo, emissivi: non dipendono dalle luci)
+var pick_mesh: Dictionary = {}
+
+
+func _pickup_mesh(kind: String) -> ArrayMesh:
+	if pick_mesh.has(kind):
+		return pick_mesh[kind]
+	var col := Color(0.9, 0.9, 0.9)
+	if kind == "soul":
+		col = Color(0.35, 1.0, 0.7)
+	elif kind == "coin":
+		col = Color(1.0, 0.82, 0.3)
+	else:
+		var tx = Game.tex(kind)
+		if tx != null:
+			var img: Image = (tx as Texture2D).get_image()
+			if img != null:
+				if img.is_compressed():
+					img.decompress()
+				var acc := Color(0, 0, 0, 0)
+				var cnt := 0
+				for yy in range(0, img.get_height(), 2):
+					for xx in range(0, img.get_width(), 2):
+						var px := img.get_pixel(xx, yy)
+						if px.a > 0.5:
+							acc += px
+							cnt += 1
+				if cnt > 0:
+					col = Color(acc.r / cnt, acc.g / cnt, acc.b / cnt)
+	var b := W3DBuilder.new()
+	var top := Vector3(0, 0.5, 0)
+	var bot := Vector3(0, -0.34, 0)
+	for i in 4:
+		var a0 := TAU * i / 4.0 + 0.4
+		var a1 := a0 + TAU / 4.0
+		var p0 := Vector3(cos(a0) * 0.26, 0.0, sin(a0) * 0.26)
+		var p1 := Vector3(cos(a1) * 0.26, 0.0, sin(a1) * 0.26)
+		var kt := 1.25 if i % 2 == 0 else 0.95
+		b.tri(top, p0, p1, Color(minf(col.r * kt, 1.0), minf(col.g * kt, 1.0), minf(col.b * kt, 1.0), 0.05))
+		b.tri(bot, p1, p0, Color(col.r * 0.65, col.g * 0.65, col.b * 0.65, 0.05))
+	var m := b.mesh()
+	pick_mesh[kind] = m
+	return m
+
+
+func _sync_pickup(n: Pickup, id: int) -> void:
+	if not dyn.has(id):
+		var pm := MeshInstance3D.new()
+		pm.mesh = _pickup_mesh(n.kind)
+		pm.material_override = mat_chr
+		pm.scale = Vector3.ONE * 1.5
+		pm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		vp.add_child(pm)
+		dyn[id] = {"node": pm, "model": false, "seen": 0.0, "last": Vector2.ZERO, "ph": 0.0, "flow": 0.0, "kind": "fxm", "src": weakref(n), "lp": n.position, "imp": false}
+	var pn: Node3D = dyn[id]["node"]
+	pn.position = Vector3(n.position.x / 16.0, 0.65 + sin(lamp_t * 5.0 + float(id % 7)) * 0.12, n.position.y / 16.0)
+	pn.rotation.y = lamp_t * 2.5 + float(id % 7)
+	dyn[id]["seen"] = lamp_t
+	dyn[id]["lp"] = n.position

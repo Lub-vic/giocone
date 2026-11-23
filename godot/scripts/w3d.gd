@@ -474,13 +474,13 @@ func _finalize(j: Dictionary) -> void:
 			var lp := mid + tn * (segs_w[i] * 0.5 + 1.0) * (1.0 if hh < 0.4 else -1.0)
 			if edge_fn.is_valid() and bool(edge_fn.call(lp)):
 				continue
-			_lamp_post(o, lp, lamps, cols)
+			_obj("lamp", o, lp, 0.0, o.rn, cols, lamps)
 	for bp in ([] if no_base_fires else bonfires):
 		var bv: Vector2 = bp
 		if edge_fn.is_valid() and bool(edge_fn.call(bv)):
 			continue
 		if bv.x >= x0 and bv.x < x0 + CHS and bv.y >= z0 and bv.y < z0 + CHS:
-			_pyre(o, bv, o.rn, cols, lamps)
+			_obj("pyre", o, bv, 0.0, o.rn, cols, lamps)
 			for q in 5:
 				var a := TAU * q / 5.0
 				o.rock(Vector3(bv.x + cos(a) * 1.0, 0.18, bv.y + sin(a) * 1.0), Vector3(0.5, 0.36, 0.5), Color(0.22, 0.22, 0.24), 0.14, 0.4, a)
@@ -497,10 +497,12 @@ func _finalize(j: Dictionary) -> void:
 		mi.material_override = mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if pt[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(mi)
+	for sp in o.smokes:
+		node.add_child(_make_smoke(sp))
 	if chunks.has(k):
 		(chunks[k]["node"] as Node3D).queue_free()    # blocco rigenerato (editor): il vecchio resta visibile fino a questo momento
 	vp.add_child(node)
-	chunks[k] = {"node": node, "cols": cols, "lamps": lamps}
+	chunks[k] = {"node": node, "cols": cols, "lamps": lamps, "reg": o.reg}
 
 
 # ------------------------------------------------------------------ terreno
@@ -802,7 +804,7 @@ func _big_things(j: Dictionary) -> void:
 			var rdv4 := _road_dist_sub(p4, sub)
 			if rdv4.x - rdv4.y * 0.5 < 2.4 or not _free(p4, 1.0, cols):
 				continue
-			_dead_tree(o, p4, rr, cols)
+			_obj("tree", o, p4, 0.0, rr, cols, [])
 			for q in rr.randi_range(0, 2):
 				var a2 := rr.randf() * TAU
 				var q2 := p4 + Vector2.from_angle(a2) * rr.randf_range(1.3, 2.6)
@@ -897,7 +899,7 @@ func _lot(j: Dictionary, ix: int, iz: int) -> void:
 		return
 	if edge_fn.is_valid() and kind != "road":
 		var wdr := _water_dir(cp)
-		if wdr.z > 0.0 and r.randf() < 0.55:
+		if wdr.z > 0.0 and r.randf() < 0.55 and _water_wide(cp, wdr):
 			_pier(o, cp, wdr, r, cols, lamps)
 	if no_base_houses and kind == "house":
 		kind = "yard"
@@ -914,7 +916,7 @@ func _lot(j: Dictionary, ix: int, iz: int) -> void:
 					kind = "yard"
 		if kind == "house":
 			var yaw := atan2(-toward.y, toward.x) + r.randf_range(-0.2, 0.2)
-			_house(o, cp, yaw, r, cols, lamps)
+			_obj("house", o, cp, yaw, r, cols, lamps)
 			return
 	match kind:
 		"edge":
@@ -926,11 +928,11 @@ func _lot(j: Dictionary, ix: int, iz: int) -> void:
 		"wild":
 			var roll := r.randf()
 			if roll > 0.985:
-				_gallows(o, cp, r, cols)
+				_obj("gallows", o, cp, 0.0, r, cols, lamps)
 			elif roll > 0.955:
-				_pyre(o, cp, r, cols, lamps)
+				_obj("pyre", o, cp, 0.0, r, cols, lamps)
 			elif roll > 0.9:
-				_ruin(o, cp, r, cols)
+				_obj("ruin", o, cp, 0.0, r, cols, lamps)
 
 
 func _offset_from_road(p: Vector2, dist: float) -> Vector2:
@@ -1051,8 +1053,9 @@ func _wheat_field(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerato
 	for c2 in cs:
 		var wv: Vector3 = t * Vector3(c2.x, 0, c2.y)
 		wc2.append(Vector2(wv.x, wv.z))
-	for si in 4:
-		_fence_run(o, wc2[si], wc2[(si + 1) % 4], r, cols, si == 1)
+	if _fence_ok(p):
+		for si in 4:
+			_fence_run(o, wc2[si], wc2[(si + 1) % 4], r, cols, si == 1)
 	if r.randf() < 0.7:
 		_scarecrow(o, p + Vector2(r.randf_range(-1.0, 1.0), r.randf_range(-0.8, 0.8)), r, cols)
 
@@ -1074,10 +1077,11 @@ func _veg_patch(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator,
 	var b := cp_corner(t, 2.7, -2.4)
 	var c := cp_corner(t, 2.7, 2.0)
 	var d := cp_corner(t, -2.7, 2.0)
-	_fence_run(o, a, b, r, cols, false)
-	_fence_run(o, b, c, r, cols, false)
-	_fence_run(o, c, d, r, cols, true)
-	_fence_run(o, d, a, r, cols, false)
+	if _fence_ok(p):
+		_fence_run(o, a, b, r, cols, false)
+		_fence_run(o, b, c, r, cols, false)
+		_fence_run(o, c, d, r, cols, true)
+		_fence_run(o, d, a, r, cols, false)
 
 
 func cp_corner(t: Transform3D, x: float, z: float) -> Vector2:
@@ -1096,7 +1100,7 @@ func _yard(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Random
 		_veg_patch(o, cp, yaw, r, cols)
 		return
 	if roll < 0.2 and core > 0.15:
-		_well(o, cp, r, cols)
+		_obj("well", o, cp, 0.0, r, cols, [])
 	elif roll < 0.42:
 		_hay(o, cp, r, cols)
 		for i in r.randi_range(0, 2):
@@ -1110,10 +1114,11 @@ func _yard(o: W3DBuilder, cp: Vector2, tan_: Vector2, toward: Vector2, r: Random
 		var b := cp + tan_ * 2.6 - toward * 2.6
 		var c := cp + tan_ * 2.6 + toward * 2.6
 		var d := cp - tan_ * 2.6 + toward * 2.6
-		_fence_run(o, a, b, r, cols, false)
-		_fence_run(o, b, c, r, cols, false)
-		_fence_run(o, c, d, r, cols, true)
-		_fence_run(o, d, a, r, cols, false)
+		if _fence_ok(cp):
+			_fence_run(o, a, b, r, cols, false)
+			_fence_run(o, b, c, r, cols, false)
+			_fence_run(o, c, d, r, cols, true)
+			_fence_run(o, d, a, r, cols, false)
 		_hay(o, cp, r, cols)
 		_bone(o, Vector3(cp.x + 1.0, 0.05, cp.y - 0.8))
 	elif roll < 0.9 and core < 0.5:
@@ -1142,12 +1147,12 @@ func _grave_lot(o: W3DBuilder, ix: int, iz: int, r: RandomNumberGenerator, cols:
 	var built := false
 	if zx == 1 and zz == 1:
 		if hz > 0.38:
-			_chapel(o, center + Vector2(r.randf_range(-0.6, 0.6), 0), r.randf_range(-0.12, 0.12), r, cols, lamps)
+			_obj("chapel", o, center + Vector2(r.randf_range(-0.6, 0.6), 0), r.randf_range(-0.12, 0.12), r, cols, lamps)
 		else:
-			_mausoleum(o, center, r.randf_range(-0.1, 0.1), r, cols, lamps)
+			_obj("mausoleum", o, center, r.randf_range(-0.1, 0.1), r, cols, lamps)
 		built = true
 	elif ((zx == 0 and zz == 2) or (zx == 2 and zz == 0)) and hz2 > 0.55 and ((zx == 0) == (hz2 > 0.78)):
-		_mausoleum(o, center + Vector2(r.randf_range(-0.8, 0.8), r.randf_range(-0.8, 0.8)), r.randf_range(-0.7, 0.7), r, cols, lamps)
+		_obj("mausoleum", o, center + Vector2(r.randf_range(-0.8, 0.8), r.randf_range(-0.8, 0.8)), r.randf_range(-0.7, 0.7), r, cols, lamps)
 		built = true
 	# lapidi: gruppi disordinati, raggruppate attorno a 1-2 centri (famiglie), qualche isolata
 	var clusters: Array = []
@@ -1185,7 +1190,7 @@ func _grave_lot(o: W3DBuilder, ix: int, iz: int, r: RandomNumberGenerator, cols:
 			var pb := a.lerp(b2, float(pi + 1) / parts - r.randf_range(0.0, 0.07))
 			_fence_run(o, pa, pb, r, cols, false)
 	if (zx == 0 or zx == 2) and (zz == 0 or zz == 2) and r.randf() < 0.8:
-		_dead_tree(o, Vector2(ox + (1.4 if zx == 0 else LC - 1.4), oz + (1.4 if zz == 0 else LC - 1.4)), r, cols)
+		_obj("tree", o, Vector2(ox + (1.4 if zx == 0 else LC - 1.4), oz + (1.4 if zz == 0 else LC - 1.4)), 0.0, r, cols, lamps)
 	for i in r.randi_range(0, 2):
 		_bush(o, Vector2(ox + r.randf_range(1, LC - 1), oz + r.randf_range(1, LC - 1)), r, cols)
 	for i in r.randi_range(1, 4):
@@ -1390,22 +1395,21 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 			var q0: Vector3 = e0.lerp(r0, rowv) + lift
 			var q1: Vector3 = e1.lerp(r1, rowv) + lift
 			o.quad(q0, q1, q1 + slope_dir * 0.08, q0 + slope_dir * 0.08, roof_col * 0.55)
-		for pq in dr.randi_range(1, 3):
+		for pq in dr.randi_range(1, 2):
 			var pu := dr.randf_range(0.15, 0.85)
 			var pv := dr.randf_range(0.2, 0.8)
 			var pc: Vector3 = e0.lerp(e1, pu).lerp(r0.lerp(r1, pu), pv) + lift * 1.5
-			var ph := dr.randf_range(0.3, 0.6)
-			var pk := dr.randf()
-			var pcol: Color = Color(0.12, 0.21, 0.10) if pk < 0.45 else (roof_col * 1.7 if pk < 0.8 else Color(0.04, 0.035, 0.04))
-			var pax: Vector3 = ridge_dir * ph
-			var pay: Vector3 = slope_dir * ph * 0.8
-			o.quad(pc - pax - pay, pc + pax - pay, pc + pax + pay, pc - pax + pay, o.shade(pcol, 0.12))
+			var ph := dr.randf_range(0.2, 0.4)
+			var pcol: Color = roof_col * (0.62 if dr.randf() < 0.5 else 1.35)       # tegole piu' scure o piu' chiare, poco contrasto
+			var pax: Vector3 = ridge_dir * ph * 1.4
+			var pay: Vector3 = slope_dir * ph * 0.6
+			o.quad(pc - pax - pay, pc + pax - pay, pc + pax + pay, pc - pax + pay, o.shade(pcol, 0.08))
 	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(0, wh + rh + 0.06, 0)), Vector3(0.34, 0.26, d + 2.0 * ov), roof_col * 0.7, 0.12, 8)
 	var cxl := r.randf_range(-w * 0.22, w * 0.22)
 	var czl := r.randf_range(-d * 0.3, d * 0.3)
 	var roof_y := wh + rh * (1.0 - absf(cxl) / (w * 0.5 + ov))
 	o.cyl(t0 * Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(cxl, wh * 0.4, czl)), 0.5, 0.42, roof_y + 1.0 - wh * 0.4, 5, Color(0.22, 0.2, 0.2), 0.16)
-	# camino: cappello, brace accesa e fumo che sale
+	# camino: cappello, brace accesa e fumo (particelle animate, vedi _make_smoke)
 	var chy := roof_y + 1.0
 	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(cxl, chy + 0.06, czl)), Vector3(0.95, 0.14, 0.95), Color(0.12, 0.11, 0.11), 0.1, 8)
 	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(cxl, chy + 0.14, czl)), Vector3(0.5, 0.05, 0.5), Color(0.02, 0.02, 0.02), 0.0, 8)
@@ -1413,9 +1417,7 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		var cpw: Vector3 = t0 * Vector3(cxl, chy + 0.2, czl)
 		o.box(Transform3D(Basis.IDENTITY, cpw), Vector3(0.34, 0.04, 0.34), Color(1.0, 0.55, 0.22, 0.15), 0.0, 8)
 		lamps.append(Vector4(cpw.x, cpw.y + 0.3, cpw.z, 0.5))
-		for sk2 in 4:
-			var spf := float(sk2)
-			o.rock(Vector3(cpw.x + 0.3 * spf + 0.1, chy + 0.9 + spf * 0.75, cpw.z - 0.2 * spf), Vector3(0.5 + spf * 0.22, 0.4 + spf * 0.12, 0.5 + spf * 0.22), Color(0.3, 0.3, 0.33) * (1.0 - spf * 0.12), 0.2, 0.35, spf)
+		o.smokes.append(Vector3(cpw.x, cpw.y + 0.25, cpw.z))
 	var dz := r.randf_range(-d * 0.5 + 1.3, d * 0.5 - 1.3)
 	var ab := t0.basis
 	var dwp: Vector3 = t0 * Vector3(w * 0.5 + 0.8, 0, dz)
@@ -1453,14 +1455,18 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 			lamps.append(Vector4(dwq.x, dwq.y, dwq.z, 0.45))
 	for si in 5:
 		var spl := Vector3(w * 0.5 + 1.3 + si * 0.8, 0.07, dz + sin(float(si) * 1.9) * 0.18)
-		o.box(Transform3D(ab, t0 * spl), Vector3(0.55, 0.12, 0.5 + dr.randf() * 0.15), Color(0.27, 0.26, 0.26), 0.14, 8)
+		var swp: Vector3 = t0 * spl
+		var srd := _road_near(Vector2(swp.x, swp.z))
+		if float(srd["d"]) < float(srd["w"]) * 0.5 + 1.2:     # il vialetto finisce prima della strada, mai sopra
+			break
+		o.box(Transform3D(ab, swp), Vector3(0.55, 0.12, 0.5 + dr.randf() * 0.15), Color(0.27, 0.26, 0.26), 0.14, 8)
 	if dr.randf() < 0.35:
 		var sx0 := w * 0.5
 		var sz0 := clampf(dz - 1.15 if dz > 0.0 else dz + 1.15, -d * 0.5 + 0.3, d * 0.5 - 0.3)
 		o.box(Transform3D(ab, t0 * Vector3(sx0 + 0.55, 2.5, sz0)), Vector3(1.1, 0.07, 0.07), WOOD, 0.1, 8)
 		o.box(Transform3D(ab, t0 * Vector3(sx0 + 1.0, 2.1, sz0)), Vector3(0.07, 0.55, 0.7), Color(0.30, 0.2, 0.12), 0.1, 8)
 		o.box(Transform3D(ab, t0 * Vector3(sx0 + 1.0, 2.1, sz0)), Vector3(0.09, 0.3, 0.4), [Color(0.6, 0.15, 0.1), Color(0.65, 0.5, 0.15), Color(0.15, 0.35, 0.5)][dr.randi() % 3], 0.05, 8)
-	if r.randf() < 0.5:
+	if r.randf() < 0.5 and _fence_ok(p):
 		var m := r.randf_range(1.4, 2.4)
 		var hx := w * 0.5 + m
 		var hz := d * 0.5 + m
@@ -2405,6 +2411,8 @@ const ED_CAT := [["house", "Casa", true], ["chapel", "Cappella", true], ["mausol
 		["field", "Campo di grano", true], ["veg", "Vegetazione", true]]
 var ed_adds: Array = []      # {k, x, z, yaw, s}
 var ed_erase: Array = []     # [x, z, raggio]
+var ed_hide: Array = []      # oggetti del gioco nascosti: [x*100, z*100] arrotondati
+var ed_hide_keys: Dictionary = {}
 var ed_loaded := false
 
 
@@ -2414,6 +2422,7 @@ func ed_load() -> void:
 	ed_loaded = true
 	ed_adds = []
 	ed_erase = []
+	ed_hide = []
 	var paths: Array = ["res://data/w3d_edits.json"]
 	if not OS.has_feature("editor"):
 		paths.append("user://w3d_edits.json")
@@ -2423,6 +2432,8 @@ func ed_load() -> void:
 			if d is Dictionary:
 				ed_adds = d.get("add", [])
 				ed_erase = d.get("erase", [])
+				ed_hide = d.get("hide", [])
+				ed_hide_sync()
 
 
 ## dal gioco lanciato dall'editor Godot scrive in godot/data (finisce nel progetto), dall'exe in user://
@@ -2433,7 +2444,7 @@ func ed_save() -> String:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return ""
-	f.store_string(JSON.stringify({"add": ed_adds, "erase": ed_erase}, "	"))
+	f.store_string(JSON.stringify({"add": ed_adds, "erase": ed_erase, "hide": ed_hide}, "	"))
 	f.close()
 	return path
 
@@ -2542,15 +2553,28 @@ func _ed_apply(j: Dictionary) -> void:
 			var dv: Vector3 = house_doors[key]
 			if Vector2(dv.x, dv.y).distance_to(ec) < er:
 				house_doors.erase(key)
+		for i in range(o.reg.size() - 1, -1, -1):
+			if (o.reg[i][1] as Vector2).distance_to(ec) < er:
+				o.reg.remove_at(i)
+		for i in range(o.smokes.size() - 1, -1, -1):
+			var sv: Vector3 = o.smokes[i]
+			if Vector2(sv.x, sv.z).distance_to(ec) < er:
+				o.smokes.remove_at(i)
+	fence_rule = false       # gli oggetti piazzati a mano non seguono il vincolo dei recinti
 	for a in ed_adds:
 		var ax := float(a["x"])
 		var az := float(a["z"])
 		if ax < x0 or ax >= x0 + CHS or az < z0 or az >= z0 + CHS:
 			continue
 		var r := RandomNumberGenerator.new()
-		r.seed = int(a["s"])
-		o.rn.seed = r.randi()
+		if a.has("st"):         # oggetto generato dal gioco e poi adottato: stessa forma di prima
+			r.state = int(str(a["st"]))
+			o.rn.state = int(str(a["os"]))
+		else:
+			r.seed = int(a["s"])
+			o.rn.seed = r.randi()
 		_ed_make(str(a["k"]), o, Vector2(ax, az), float(a["yaw"]), r, cols, lamps, float(a.get("sc", 1.0)))
+	fence_rule = true
 
 
 # ------------------------------------------------------------------ modelli 3D importati (.glb / .gltf in res://assets/models)
@@ -2678,3 +2702,122 @@ func _ed_make_model(name: String, o: W3DBuilder, p: Vector2, yaw: float, sc: flo
 		var half := Vector2(maxf((hi.x - lo.x) * 0.5, 0.2), maxf((hi.y - lo.y) * 0.5, 0.2))
 		var cw: Vector3 = rot * Vector3((lo.x + hi.x) * 0.5, 0.0, (lo.y + hi.y) * 0.5)
 		cols.append(["b", Vector2(p.x + cw.x, p.y + cw.z), half, yaw])
+
+
+func ed_hide_sync() -> void:
+	ed_hide_keys.clear()
+	for h in ed_hide:
+		ed_hide_keys[Vector2i(int(h[0]), int(h[1]))] = true
+
+
+## ogni oggetto principale generato passa da qui: viene registrato (cosi' l'editor lo puo' selezionare) oppure, se l'utente
+## l'ha nascosto o sostituito, generato in un contenitore di scarto: i generatori casuali avanzano come prima e il resto non cambia
+func _obj(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
+	var st := r.state
+	var ost := o.rn.state
+	if not ed_hide_keys.is_empty() and ed_hide_keys.has(Vector2i(roundi(p.x * 100.0), roundi(p.y * 100.0))):
+		var tmp := W3DBuilder.new()
+		tmp.rn = o.rn
+		tmp.sat = o.sat
+		tmp.con = o.con
+		tmp.gain = o.gain
+		var hd := house_doors.duplicate()
+		_ed_make(k, tmp, p, yaw, r, [], [])
+		house_doors = hd
+		return
+	o.reg.append([k, p, yaw, st, ost])
+	_ed_make(k, o, p, yaw, r, cols, lamps)
+
+
+# ------------------------------------------------------------------ fumo dei camini
+var smoke_mat: ShaderMaterial
+var smoke_mesh: PlaneMesh
+var smoke_curve: Curve
+var smoke_ramp: Gradient
+
+
+func _make_smoke(p: Vector3) -> CPUParticles3D:
+	if smoke_mat == null:
+		smoke_mat = ShaderMaterial.new()
+		smoke_mat.shader = load("res://shaders/w3d_smoke.gdshader")
+		extra_mats.append(smoke_mat)
+		smoke_mesh = PlaneMesh.new()
+		smoke_mesh.size = Vector2(1.0, 1.0)
+		smoke_mesh.material = smoke_mat
+		smoke_curve = Curve.new()
+		smoke_curve.add_point(Vector2(0.0, 0.4))
+		smoke_curve.add_point(Vector2(1.0, 1.7))
+		smoke_ramp = Gradient.new()
+		smoke_ramp.offsets = PackedFloat32Array([0.0, 0.18, 0.7, 1.0])
+		smoke_ramp.colors = PackedColorArray([Color(1, 1, 1, 0.0), Color(1, 1, 1, 0.5), Color(1, 1, 1, 0.22), Color(1, 1, 1, 0.0)])
+	var ps := CPUParticles3D.new()
+	ps.mesh = smoke_mesh
+	ps.amount = 9
+	ps.lifetime = 4.5
+	ps.preprocess = 4.5
+	ps.local_coords = true
+	ps.randomness = 0.6
+	ps.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	ps.emission_sphere_radius = 0.18
+	ps.direction = Vector3(0.3, 1.0, 0.1)
+	ps.spread = 14.0
+	ps.initial_velocity_min = 0.8
+	ps.initial_velocity_max = 1.3
+	ps.gravity = Vector3(0.22, 0.05, 0.03)           # vento: il fumo si piega
+	ps.damping_min = 0.15
+	ps.damping_max = 0.3
+	ps.scale_amount_min = 0.9
+	ps.scale_amount_max = 1.5
+	ps.scale_amount_curve = smoke_curve
+	ps.color_ramp = smoke_ramp
+	ps.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ps.position = p
+	ps.emitting = true
+	return ps
+
+
+# ------------------------------------------------------------------ vincoli
+var fence_rule := true
+
+
+## c'e' acqua vera davanti alla riva: il molo (fino a 6,5 + barca) e i lati devono stare su uno specchio abbastanza grande, non in una pozza
+func _water_wide(cp: Vector2, wd: Vector3) -> bool:
+	var dv := Vector2(wd.x, wd.y)
+	var sd := Vector2(-dv.y, dv.x)
+	var hits := 0
+	var tot := 0
+	for k in 7:
+		var dist := wd.z + 1.0 + k * 1.4
+		for lat in [-4.0, 0.0, 4.0]:
+			tot += 1
+			if bool(edge_fn.call(cp + dv * dist + sd * lat)):
+				hits += 1
+	return hits >= tot - 1
+
+
+func _lot_fence_flag(ix: int, iz: int) -> bool:
+	return posmod(hash(Vector3i(ix, iz, seed_v + 99)), 100) < 65
+
+
+## i recinti di lotti vicini non si compenetrano: fra due lotti vicini che vorrebbero un recinto vince quello con l'hash piu' basso
+## (la scelta dipende solo dai piani dei lotti, quindi e' identica in qualsiasi ordine di generazione dei blocchi)
+func _fence_ok(cp: Vector2) -> bool:
+	if not fence_rule:
+		return true
+	var ix := floori(cp.x / LC)
+	var iz := floori(cp.y / LC)
+	if not _lot_fence_flag(ix, iz):
+		return false
+	var h := hash(Vector2i(ix, iz))
+	for dz in range(-2, 3):
+		for dx in range(-2, 3):
+			if dx == 0 and dz == 0:
+				continue
+			var np := _plan(ix + dx, iz + dz)
+			if np["kind"] != "house" and np["kind"] != "yard":
+				continue
+			if cp.distance_to(np["cp"]) > 11.5:
+				continue
+			if _lot_fence_flag(ix + dx, iz + dz) and hash(Vector2i(ix + dx, iz + dz)) < h:
+				return false
+	return true
