@@ -42,6 +42,9 @@ func _ready() -> void:
 	ed = W3DEdit.new()
 	ed.sk = self
 	add_child(ed)
+	fut = W3DFuture.new()
+	fut.sk = self
+	add_child(fut)
 	var w := get_window()
 	w.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS   # il 3D si vede alla risoluzione reale, non a 480x270
 	w.content_scale_size = Vector2i(480, 270)
@@ -1558,10 +1561,39 @@ func _sync_fx() -> void:
 			rn3.position = Vector3(h.position.x / 16.0, 0.0, h.position.y / 16.0)
 			rn3.scale = Vector3.ONE * (h.radius / 16.0) * (0.35 + 0.65 * prog if h.t < h.delay else 1.0)
 			dyn[id]["seen"] = lamp_t
+		elif n is Hazard.Shock:
+			var sh := n as Hazard.Shock
+			if not dyn.has(id):
+				var rmi := MeshInstance3D.new()
+				rmi.mesh = _ring_mesh(sh.c)
+				rmi.material_override = mat_chr
+				rmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				vp.add_child(rmi)
+				dyn[id] = {"node": rmi, "model": false, "seen": 0.0, "last": Vector2.ZERO, "ph": 0.0, "flow": 0.0, "kind": "fxm", "src": weakref(n), "lp": sh.position, "imp": false}
+			var rn4: Node3D = dyn[id]["node"]
+			var kk := clampf(sh.tt / 0.36, 0.0, 1.0)
+			var rr := float(sh.r) / 16.0 * (0.25 + 0.75 * (1.0 - pow(1.0 - kk, 2.0)))
+			rn4.position = Vector3(sh.position.x / 16.0, 0.2, sh.position.y / 16.0)
+			rn4.scale = Vector3(rr, 1.0, rr)
+			dyn[id]["seen"] = lamp_t
+		elif n is Line2D:
+			var ln := n as Line2D
+			if not dyn.has(id):
+				var lmi := MeshInstance3D.new()
+				lmi.mesh = _ribbon_mesh(ln)
+				lmi.material_override = mat_chr
+				lmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				vp.add_child(lmi)
+				dyn[id] = {"node": lmi, "model": false, "seen": 0.0, "last": Vector2.ZERO, "ph": 0.0, "flow": 0.0, "kind": "fxm", "src": weakref(n), "lp": ln.position, "imp": false}
+			var rn5: Node3D = dyn[id]["node"]
+			rn5.position = Vector3(ln.position.x / 16.0, 0.85, ln.position.y / 16.0)
+			rn5.scale = Vector3(ln.scale.x, 1.0, ln.scale.y)
+			rn5.visible = ln.modulate.a > 0.5 or randf() < 0.55       # dissolvenza a scatti, come una scarica
+			dyn[id]["seen"] = lamp_t
 		elif n is Projectile or n is PArrow or n is Pickup:
 			if not dyn.has(id):
 				var pm := MeshInstance3D.new()
-				pm.mesh = shard_m
+				pm.mesh = _proj_mesh(n)
 				pm.material_override = mat_chr
 				var sc := 1.0
 				if n is Pickup:
@@ -1766,10 +1798,16 @@ func _world_clear() -> void:
 var world_off := Vector2.ZERO
 var fixed_cam := false
 var ed: W3DEdit                  # editor del mondo (F12)
+var fut: W3DFuture               # intrusioni del futuro (cambiano con Chrono.tech)
+var near_props: Array = []       # prop funzionali vicini al giocatore (ricalcolati ogni pochi fotogrammi)
+var near_props_t := 0
 var perf_on := OS.get_cmdline_user_args().has("--perf")
 var perf_n := 0
 var lamp_n := 0.0
 var perf_proc := 0.0
+var steady_clock := 0.0
+var steady_n := 0
+var steady_sum := 0.0
 var perf_phys := 0.0
 var no2d_done := false
 var sharp_layer: CanvasLayer
@@ -2076,8 +2114,8 @@ func _world_lamps() -> void:
 			rl.position = Vector3(rv.x, 7.5, rv.z)      # sopra lanterne e fiamme: la luce non nasce dentro la geometria che la copre
 			rl.shadow_normal_bias = 2.0
 			rl.shadow_bias = 0.3
-			rl.omni_shadow_mode = OmniLight3D.SHADOW_CUBE
-			rl.shadow_enabled = ri < 3
+			rl.omni_shadow_mode = OmniLight3D.SHADOW_DUAL_PARABOLOID
+			rl.shadow_enabled = ri < 2
 			rl.light_color = Color(0.96, 0.76, 0.62)
 			rl.omni_range = 14.0
 			rl.light_energy = rv.w * world_light_k * rfl
@@ -2380,7 +2418,20 @@ func _process_inner(dt: float) -> void:
 	lamp_n += 1.0
 	if perf_on:
 		if int(lamp_t * 2.0) != int((lamp_t - dt) * 2.0):
-			print("T ", snappedf(lamp_t, 0.1), " chunks=", chunks.size(), " jobs=", jobs.size(), " pos=", pos, " fade=", snappedf(fade_a, 0.1))
+			print("T ", snappedf(lamp_t, 0.1), " fps=", Engine.get_frames_per_second(), " chunks=", chunks.size(), " jobs=", jobs.size(), " pos=", pos, " fade=", snappedf(fade_a, 0.1))
+		if jobs.is_empty() and chunks.size() >= 6:
+			steady_clock += dt
+		else:
+			steady_clock = 0.0
+		if steady_clock > 2.0:
+			steady_n += 1
+			steady_sum += dt
+			if steady_sum >= 6.0:
+				print("STEADY fps=", snappedf(steady_n / steady_sum, 0.1), " frame_ms=", snappedf(steady_sum / steady_n * 1000.0, 0.1), " chunks=", chunks.size(), " lamp_t=", snappedf(lamp_t, 0.1))
+				get_tree().quit()
+		if lamp_t > 90.0:
+			print("STEADY non raggiunto, chunks=", chunks.size(), " jobs=", jobs.size())
+			get_tree().quit()
 		if lamp_t > 6.0:
 			perf_n += 1
 			perf_t += dt
@@ -2389,7 +2440,7 @@ func _process_inner(dt: float) -> void:
 			perf_phys += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)
 			if dt > 0.07:
 				print("HITCH ", snappedf(lamp_t, 0.1), " ", snappedf(dt * 1000.0, 1.0), "ms jobs=", jobs.size(), " chunks=", chunks.size())
-		if lamp_t > 16.0:
+		if lamp_t > 200.0:
 			var tot := {}
 			for kk in step_us:
 				tot[kk] = [int(step_us[kk]) / 1000, step_n[kk]]
@@ -2416,7 +2467,14 @@ func _process_inner(dt: float) -> void:
 		var ppx: Vector2 = gm.player.position
 		if Engine.get_process_frames() % 60 == 0:
 			gm.pickups = gm.pickups.filter(func(x): return is_instance_valid(x))
-		for lst in [gm.enemies, gm.villagers, gm.allies, gm.critters, gm.props, gm.pickups]:
+		near_props_t -= 1
+		if near_props_t <= 0:
+			near_props_t = 12
+			near_props.clear()
+			for gp in gm.props:
+				if is_instance_valid(gp) and not bool(gp.scene) and (gp as Node2D).position.distance_squared_to(ppx) <= 640000.0:
+					near_props.append(gp)
+		for lst in [gm.enemies, gm.villagers, gm.allies, gm.critters, near_props, gm.pickups]:
 			for n in lst:
 				if not is_instance_valid(n):
 					continue
@@ -2479,7 +2537,7 @@ func _process_inner(dt: float) -> void:
 		_mp("hero_glow", 0.34)
 		env.ambient_light_energy = 0.07
 		sun.light_energy = 0.14
-		env.ambient_light_color = Color(0.42, 0.44, 0.6)
+		env.ambient_light_color = Color(0.42, 0.44, 0.6) * Chrono.world_tint()
 	elif fwd:
 		hero_light.visible = true
 		_real_lights(dt)
@@ -2635,3 +2693,141 @@ func _sync_pickup(n: Pickup, id: int) -> void:
 	pn.rotation.y = lamp_t * 2.5 + float(id % 7)
 	dyn[id]["seen"] = lamp_t
 	dyn[id]["lp"] = n.position
+
+
+# ------------------------------------------------------------------ effetti di magie e armi in 3D
+var fx_cache: Dictionary = {}
+
+
+func _emis(c: Color, k := 1.0) -> Color:
+	return Color(minf(c.r * k, 1.0), minf(c.g * k, 1.0), minf(c.b * k, 1.0), 0.05)
+
+
+## anello piatto (onde d'urto degli incantesimi): raggio 1, si scala col raggio dell'effetto
+func _ring_mesh(col: Color) -> ArrayMesh:
+	var key := "ring|" + col.to_html(false)
+	if fx_cache.has(key):
+		return fx_cache[key]
+	var b := W3DBuilder.new()
+	var n := 40
+	for i in n:
+		var a0 := TAU * i / n
+		var a1 := TAU * (i + 1) / n
+		var o0 := Vector3(cos(a0), 0, sin(a0))
+		var o1 := Vector3(cos(a1), 0, sin(a1))
+		b.quad(o0, o1, o1 * 0.93, o0 * 0.93, _emis(col, 1.2))
+		b.quad(o0 * 0.93, o1 * 0.93, o1 * 0.8, o0 * 0.8, _emis(col, 0.5))
+	var m := b.mesh()
+	fx_cache[key] = m
+	return m
+
+
+## nastro piatto lungo i punti di una linea 2D (fulmini, anelli): nucleo chiaro e alone piu' largo
+func _ribbon_mesh(ln: Line2D) -> ArrayMesh:
+	var b := W3DBuilder.new()
+	var pts := ln.points
+	var col := ln.default_color
+	for pass_i in 2:
+		var hw := 0.2 if pass_i == 0 else 0.07
+		var c := _emis(col, 0.6) if pass_i == 0 else _emis(Color(1, 1, 1).lerp(col, 0.25), 1.0)
+		var y := 0.0 if pass_i == 0 else 0.03
+		for i in pts.size() - 1:
+			var a := pts[i] / 16.0
+			var d := pts[i + 1] / 16.0
+			var dir := d - a
+			if dir.length() < 0.001:
+				continue
+			var nrm := Vector2(-dir.y, dir.x).normalized() * hw
+			b.quad(Vector3(a.x - nrm.x, y, a.y - nrm.y), Vector3(a.x + nrm.x, y, a.y + nrm.y), Vector3(d.x + nrm.x, y, d.y + nrm.y), Vector3(d.x - nrm.x, y, d.y - nrm.y), c)
+	return b.mesh()
+
+
+## ogni arma e ogni nemico ha il suo proiettile: asse lungo Z, la punta guarda verso -Z
+func _proj_mesh(n: Node) -> ArrayMesh:
+	var key := ""
+	var col := Color(1.0, 0.8, 0.4)
+	var fam := ""
+	var aff := ""
+	var magic := false
+	if n is PArrow:
+		var pa := n as PArrow
+		col = pa.col
+		magic = pa.magic
+		fam = str(pa.weapon.get("f", ""))
+		for a in pa.weapon.get("a", []):
+			if str(a) in ["fuoco", "gelo", "tuono", "veleno", "sangue"]:
+				aff = str(a)
+				break
+		key = "p|%s|%s|%s|%s" % [fam, aff, str(magic), col.to_html(false)]
+	elif n is Projectile:
+		var pj := n as Projectile
+		col = Projectile.LIGHT[pj.style]
+		fam = "e_" + pj.style
+		key = "e|" + pj.style
+	if fx_cache.has(key):
+		return fx_cache[key]
+	var b := W3DBuilder.new()
+	var steel := Color(0.78, 0.8, 0.86)
+	match fam:
+		"bow":      # freccia: asta di legno, punta d'acciaio, impennaggio
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.35)), Vector3(0.05, 0.05, 0.95), Color(0.42, 0.3, 0.18), 0.05, 8)
+			b.shard(Vector3(0, 0, -0.1), Vector3(0, 0, -0.42), 0.14, 0.0, steel, 0.5, 0.0, 0.0)
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.78)), Vector3(0.22, 0.02, 0.18), Color(0.9, 0.85, 0.75), 0.05, 8)
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.78)), Vector3(0.02, 0.22, 0.18), Color(0.9, 0.85, 0.75), 0.05, 8)
+		"pistol", "smg":     # proiettile con scia incandescente
+			b.shard(Vector3(0, 0, 0.55), Vector3(0, 0, -0.3), 0.07, 0.0, _emis(Color(1.0, 0.85, 0.4), 1.0), 0.5, 0.0, 0.0)
+			b.shard(Vector3(0, 0, 0.1), Vector3(0, 0, -0.25), 0.04, 0.0, _emis(Color(1, 1, 0.9), 1.0), 0.5, 0.0, 0.0)
+		"shotgun":      # pallini
+			b.blob(Vector3.ZERO, Vector3(0.09, 0.09, 0.09), _emis(Color(1.0, 0.7, 0.3), 1.0), 5, 3, 0.0, 0.0)
+		"laserpistol":    # raggio sottile
+			b.shard(Vector3(0, 0, 1.0), Vector3(0, 0, -0.7), 0.1, 0.1, _emis(col, 0.9), 0.5, 0.0, 0.0)
+			b.shard(Vector3(0, 0, 0.9), Vector3(0, 0, -0.6), 0.04, 0.04, _emis(Color(1, 1, 1), 1.0), 0.5, 0.0, 0.0)
+		"rocket":      # razzo con fiamma di scarico
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.0)), Vector3(0.2, 0.2, 0.7), Color(0.5, 0.52, 0.56), 0.05, 8)
+			b.shard(Vector3(0, 0, -0.3), Vector3(0, 0, -0.65), 0.2, 0.0, Color(0.85, 0.2, 0.15), 0.5, 0.0, 0.0)
+			b.shard(Vector3(0, 0, 0.35), Vector3(0, 0, 1.5), 0.26, 0.0, _emis(Color(1.0, 0.6, 0.2), 1.0), 0.5, 0.0, 0.0)
+			b.shard(Vector3(0, 0, 0.35), Vector3(0, 0, 1.0), 0.13, 0.0, _emis(Color(1.0, 0.95, 0.6), 1.0), 0.5, 0.0, 0.0)
+		"plasma":      # globo di plasma
+			b.blob(Vector3.ZERO, Vector3(0.36, 0.36, 0.36), _emis(col, 0.8), 7, 4, 0.0, 0.04)
+			b.blob(Vector3.ZERO, Vector3(0.2, 0.2, 0.2), _emis(Color(1, 1, 1).lerp(col, 0.3), 1.0), 6, 3, 0.0, 0.0)
+		"staff":
+			match aff:
+				"fuoco":      # lingua di fuoco
+					b.shard(Vector3(0, 0, 0.9), Vector3(0, 0, -0.45), 0.4, 0.05, _emis(Color(1.0, 0.45, 0.12), 1.0), 0.45, 0.0, 0.05)
+					b.shard(Vector3(0, 0, 0.7), Vector3(0, 0, -0.3), 0.24, 0.02, _emis(Color(1.0, 0.8, 0.3), 1.0), 0.45, 0.0, 0.05)
+					b.blob(Vector3(0, 0, -0.05), Vector3(0.14, 0.14, 0.2), _emis(Color(1.0, 0.95, 0.7), 1.0), 5, 3, 0.0, 0.0)
+				"gelo":      # cristallo di ghiaccio
+					b.shard(Vector3(0, 0, 0.5), Vector3(0, 0, -0.55), 0.26, 0.0, _emis(Color(0.7, 0.95, 1.0), 1.0), 0.6, 0.0, 0.0)
+					b.shard(Vector3(0.12, 0, 0.3), Vector3(0.2, 0, -0.1), 0.1, 0.0, _emis(Color(0.5, 0.85, 1.0), 1.0), 0.6, 0.0, 0.0)
+					b.shard(Vector3(-0.12, 0, 0.3), Vector3(-0.2, 0, -0.1), 0.1, 0.0, _emis(Color(0.5, 0.85, 1.0), 1.0), 0.6, 0.0, 0.0)
+				"tuono":      # sfera elettrica con scintille
+					b.blob(Vector3.ZERO, Vector3(0.22, 0.22, 0.22), _emis(Color(0.85, 0.92, 1.0), 1.0), 6, 3, 0.0, 0.0)
+					for q in 5:
+						var qa := TAU * q / 5.0
+						b.shard(Vector3(0, 0, 0), Vector3(cos(qa) * 0.45, 0, sin(qa) * 0.45), 0.06, 0.0, _emis(Color(0.7, 0.85, 1.0), 1.0), 0.5, 0.0, 0.0)
+				"veleno":      # goccia verde e velenosa
+					b.blob(Vector3.ZERO, Vector3(0.24, 0.24, 0.3), _emis(Color(0.45, 0.95, 0.3), 0.9), 6, 4, 0.0, 0.05)
+					b.shard(Vector3(0, 0, 0.2), Vector3(0, 0, 0.8), 0.18, 0.0, _emis(Color(0.35, 0.7, 0.2), 0.8), 0.5, 0.0, 0.0)
+				"sangue":      # sfera rossa
+					b.blob(Vector3.ZERO, Vector3(0.26, 0.26, 0.26), _emis(Color(0.85, 0.1, 0.15), 1.0), 6, 4, 0.0, 0.04)
+					b.shard(Vector3(0, 0, 0.2), Vector3(0, 0, 0.8), 0.16, 0.0, _emis(Color(0.55, 0.05, 0.1), 1.0), 0.5, 0.0, 0.0)
+				_:      # sfera d'ombra viola con coda
+					b.blob(Vector3.ZERO, Vector3(0.26, 0.26, 0.26), _emis(col, 1.0), 6, 4, 0.0, 0.04)
+					b.shard(Vector3(0, 0, 0.15), Vector3(0, 0, 0.95), 0.2, 0.0, _emis(col, 0.55), 0.5, 0.0, 0.0)
+		"e_arrow":
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.3)), Vector3(0.05, 0.05, 0.8), Color(0.45, 0.32, 0.2), 0.05, 8)
+			b.shard(Vector3(0, 0, -0.1), Vector3(0, 0, -0.38), 0.13, 0.0, steel, 0.5, 0.0, 0.0)
+		"e_knife":
+			b.shard(Vector3(0, 0, 0.3), Vector3(0, 0, -0.4), 0.16, 0.0, steel, 0.4, 0.0, 0.0)
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.4)), Vector3(0.07, 0.07, 0.25), Color(0.4, 0.28, 0.16), 0.05, 8)
+		"e_fire":
+			b.shard(Vector3(0, 0, 0.7), Vector3(0, 0, -0.3), 0.3, 0.0, _emis(Color(1.0, 0.4, 0.12), 1.0), 0.45, 0.0, 0.05)
+			b.blob(Vector3.ZERO, Vector3(0.14, 0.14, 0.14), _emis(Color(1.0, 0.85, 0.4), 1.0), 5, 3, 0.0, 0.0)
+		"e_ice":
+			b.shard(Vector3(0, 0, 0.4), Vector3(0, 0, -0.5), 0.2, 0.0, _emis(Color(0.7, 0.95, 1.0), 1.0), 0.6, 0.0, 0.0)
+		_:      # magia generica: sfera luminosa con coda nel colore dell'effetto
+			b.blob(Vector3.ZERO, Vector3(0.22, 0.22, 0.22), _emis(col, 1.0), 6, 3, 0.0, 0.03)
+			b.shard(Vector3(0, 0, 0.1), Vector3(0, 0, 0.8), 0.16, 0.0, _emis(col, 0.55), 0.5, 0.0, 0.0)
+	var m := b.mesh()
+	fx_cache[key] = m
+	return m

@@ -338,8 +338,7 @@ func _ready() -> void:
 	if OS.get_cmdline_user_args().has("--w3d"):
 		get_tree().change_scene_to_file.call_deferred("res://scenes/w3d.tscn")
 		return
-	if not OS.get_cmdline_user_args().has("--2d"):   # si parte in 3D (F9 per la grafica 2D)
-		toggle_skin.call_deferred()
+	toggle_skin.call_deferred()      # il gioco e' solo 3D
 	if OS.get_cmdline_user_args().has("--noai"):   # confronto: terreno procedurale classico
 		settings["aiground"] = false
 	if OS.get_cmdline_user_args().has("--photo"):   # prove della grafica FOTO
@@ -4675,6 +4674,10 @@ func area_free(c: Vector2i, f: Vector2i) -> bool:
 	return true
 
 
+## segnaposto restituito da try_place nel mondo aperto (i chiamanti controllano solo che non sia null)
+var dummy_prop: Prop = null
+
+
 func try_place(name: String, c: Vector2i, fx := false) -> Prop:
 	if name.begins_with("roof_") and name.count("_") == 2:
 		name += "_%d" % int(Game.hh(c.x, c.y) * 3.0)
@@ -4689,6 +4692,14 @@ func try_place(name: String, c: Vector2i, fx := false) -> Prop:
 		return null   # distrutto dal giocatore
 	if name.begins_with("tent"):
 		tent_cells.append(c)
+	if area == "world":
+		# il mondo aperto e' solo 3D: l'oggetto decorativo non ha piu' un nodo 2D (migliaia di nodi inutili), resta solo l'ingombro nella logica
+		for dy in f.y:
+			for dx in f.x:
+				block[Vector2i(c.x + dx, c.y + dy)] = true
+		if dummy_prop == null:
+			dummy_prop = Prop.new()
+		return dummy_prop
 	var p := Prop.new()
 	p.setup_top(name, c, f)
 	if area == "world" and inb(c):
@@ -4765,6 +4776,9 @@ func place_tree(name: String, center_c: Vector2i) -> void:
 		return
 	if area == "world" and persist["broken"].has(key(center_c)):
 		return   # abbattuto dal giocatore
+	if area == "world":
+		block[center_c] = true       # solo 3D: nessun nodo 2D per gli alberi, resta l'ingombro
+		return
 	var p := Prop.new()
 	p.setup_top(name, c, f, true)
 	block[center_c] = true
@@ -5417,9 +5431,10 @@ func update_minimap(real: float) -> void:
 	mm_t = 0.2
 	var pc := Vector2i(floori(player.position.x / Game.TS), floori(player.position.y / Game.TS))
 	var dirty := false
-	for dy in range(-10, 11):
-		for dx in range(-10, 11):
-			if dx * dx + dy * dy > 100:
+	var rad := 24 if (skin != null and is_instance_valid(skin)) else 10     # in 3D si vede molto piu' lontano: la mappa si rivela di conseguenza
+	for dy in range(-rad, rad + 1):
+		for dx in range(-rad, rad + 1):
+			if dx * dx + dy * dy > rad * rad:
 				continue
 			var c := pc + Vector2i(dx, dy)
 			if inb(c) and seen[idx(c)] == 0:
@@ -6266,6 +6281,7 @@ var burst_pool := {8: [], 20: [], 48: []}
 func burst(pos: Vector2, c: Color, n: int, speed: float, life: float) -> void:
 	if skin != null and is_instance_valid(skin):
 		skin.burst3d(pos, c, n, speed, life)
+		return
 	var cls := 8 if n <= 8 else (20 if n <= 20 else 48)
 	var pool: Array = burst_pool[cls]
 	var p: CPUParticles2D = null
@@ -7084,11 +7100,7 @@ func toggle_skin() -> void:
 
 func _input(ev: InputEvent) -> void:
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F9:
-		if ev.shift_pressed:
-			get_tree().change_scene_to_file("res://scenes/w3d.tscn")   # demo separata del motore 3D (villaggio low-poly)
-		else:
-			toggle_skin()   # il gioco vero disegnato con il motore 3D
-		return
+		return     # la grafica 2D non esiste piu': il gioco e' solo 3D
 	if ev is InputEventKey and ev.pressed and not ev.echo:
 		var fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
 		if ev.keycode == KEY_F11 or (ev.keycode == KEY_ENTER and ev.alt_pressed):
@@ -7316,8 +7328,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			change_area(str(debug_list[debug_sel][0]))
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10:
-		launch_editor()
-		return
+		return     # il vecchio editor 2D non c'e' piu': l'editor del mondo e' dentro il gioco (F12)
 	if ev is InputEventJoypadButton and ev.button_index == JOY_BUTTON_BACK and state == "play":
 		if ev.pressed:
 			inv_back_t = 0.0
