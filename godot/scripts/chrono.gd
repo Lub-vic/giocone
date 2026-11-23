@@ -10,6 +10,9 @@ const PITY_MAX := 3         # dopo tanti oggetti inutili di fila, il prossimo e'
 
 static var owned := {}      # oggetti inutili in possesso: id -> quantita'
 static var tech := 0.0      # livello tecnologico unico del mondo (sale con il futuro evocato)
+## quanto il mondo e' "maturo" per le intrusioni del futuro: dipende solo dal livello tecnologico (0 all'inizio, 1 a tech 40)
+static func maturity() -> float:
+	return clampf(tech / 40.0, 0.0, 1.0)
 
 # --- oggetti utili: effetto immediato. era: p passato, f futuro. lv = livello minimo, w = peso
 const USE := {

@@ -14,6 +14,7 @@ var last_tech := -1.0
 var last_step := -1
 var pulse := 0.0
 var spawn_near := false
+var cur_mat := 0.0
 var rare_t := 90.0
 var t := 0.0
 
@@ -30,23 +31,26 @@ func _process(dt: float) -> void:
 		return
 	if last_tech < 0.0:
 		last_tech = tech
-	if tech > last_tech + 0.01:            # appena evocato qualcosa dal futuro: onda nel tempo
-		pulse = 1.0
-		spawn_near = true
+	# le intrusioni dipendono solo da tech: all'inizio quasi niente (poche evocazioni), poi sempre piu' evidenti
+	var mat: float = Chrono.maturity()
+	if tech > last_tech + 0.01:            # appena evocato qualcosa dal futuro: onda nel tempo, piu' forte col procedere del gioco
+		pulse = 0.35 + 0.65 * mat
+		spawn_near = mat >= 0.2
 		var pp: Vector2 = sk.gm.player.position
-		sk.burst3d(pp, Color(0.5, 1.0, 1.0), 28, 150.0, 0.7)
-		sk.gm.add_ring(pp, 60.0, Color(0.5, 1.0, 1.0))
-		sk.gm.add_ring(pp, 36.0, Color(1.0, 0.45, 0.95))
+		sk.burst3d(pp, Color(0.5, 1.0, 1.0), int(10.0 + 18.0 * mat), 90.0 + 90.0 * mat, 0.7)
+		sk.gm.add_ring(pp, 30.0 + 30.0 * mat, Color(0.5, 1.0, 1.0))
+		if mat >= 0.3:
+			sk.gm.add_ring(pp, 20.0 + 16.0 * mat, Color(1.0, 0.45, 0.95))
 	last_tech = tech
 	pulse = maxf(0.0, pulse - dt * 0.55)
-	if tech >= 10.0:      # piu' avanti, ogni tanto, un breve sussulto del tempo
+	if tech > 0.0 and mat >= 0.25:      # piu' avanti, il tempo cede sempre piu' spesso e con piu' forza
 		rare_t -= dt
 		if rare_t <= 0.0:
-			rare_t = randf_range(70.0, 140.0)
-			pulse = maxf(pulse, 0.45)
+			rare_t = randf_range(0.6, 1.0) * lerpf(220.0, 45.0, mat)
+			pulse = maxf(pulse, 0.2 + 0.6 * mat)
 	var gl := clampf(pulse * 0.95, 0.0, 1.0)     # il glitch c'e' solo all'apertura della bolla, poi svanisce
 	sk.post_mat.set_shader_parameter("glitch", gl)
-	var step := int(floor(tech))
+	var step := int(floor(tech)) * 100 + int(mat * 10.0)
 	if step != last_step:
 		last_step = step
 		_clear_all()
@@ -56,6 +60,7 @@ func _process(dt: float) -> void:
 		spawn_near = false
 		_spawn_near(tech)
 	var ppos: Vector2 = sk.pos
+	cur_mat = mat
 	var b0 := Vector2i(floori(ppos.x / BLK), floori(ppos.y / BLK))
 	for dz in range(-2, 3):
 		for dx in range(-2, 3):
@@ -90,7 +95,9 @@ func _free_block(k: Vector2i) -> void:
 
 
 func _density(tech: float) -> float:
-	return clampf(0.5 + tech * 0.05, 0.0, 2.6)
+	if cur_mat < 0.1:
+		return 0.0       # all'inizio il mondo e' ancora intatto
+	return clampf(cur_mat * 2.6 * clampf(tech / 12.0, 0.25, 1.0), 0.0, 2.6)
 
 
 func _spawn_near(tech: float) -> void:
