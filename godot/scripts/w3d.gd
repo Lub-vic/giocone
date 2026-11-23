@@ -164,7 +164,7 @@ func _build_view() -> void:
 	vp.size = RES[res_i]
 	vp.own_world_3d = true
 	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	vp.msaa_3d = Viewport.MSAA_2X
+	vp.msaa_3d = Viewport.MSAA_DISABLED   # niente antialiasing: bordi netti
 	add_child(vp)
 	env = Environment.new()
 	env.background_mode = Environment.BG_COLOR
@@ -484,6 +484,7 @@ func _finalize(j: Dictionary) -> void:
 			for q in 5:
 				var a := TAU * q / 5.0
 				o.rock(Vector3(bv.x + cos(a) * 1.0, 0.18, bv.y + sin(a) * 1.0), Vector3(0.5, 0.36, 0.5), Color(0.22, 0.22, 0.24), 0.14, 0.4, a)
+	_ed_apply(j)
 	var node := Node3D.new()
 	node.name = "C%d_%d" % [k.x, k.y]
 	var parts := [["g", false], ["v", false], ["o", true]]
@@ -496,6 +497,8 @@ func _finalize(j: Dictionary) -> void:
 		mi.material_override = mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if pt[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(mi)
+	if chunks.has(k):
+		(chunks[k]["node"] as Node3D).queue_free()    # blocco rigenerato (editor): il vecchio resta visibile fino a questo momento
 	vp.add_child(node)
 	chunks[k] = {"node": node, "cols": cols, "lamps": lamps}
 
@@ -1339,6 +1342,8 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 	var d := r.randf_range(4.2, 6.0)
 	var wh := r.randf_range(2.1, 2.9)
 	var rh := w * r.randf_range(0.45, 0.7)
+	var dr := RandomNumberGenerator.new()      # dettagli: generatore a parte, cosi' la forma delle case non cambia
+	dr.seed = hash(Vector2i(roundi(p.x * 8.0), roundi(p.y * 8.0)))
 	var style := r.randi() % 3
 	var base_col: Color = [Color(0.25, 0.235, 0.235), Color(0.21, 0.15, 0.11), Color(0.30, 0.27, 0.24)][style]
 	var roof_col: Color = [Color(0.22, 0.14, 0.12), Color(0.15, 0.155, 0.17), Color(0.19, 0.16, 0.13), Color(0.15, 0.18, 0.145)][r.randi() % 4]
@@ -1377,11 +1382,40 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		var nrm2: Vector3 = (t0.basis * Vector3(sgn * rh, w * 0.5 + ov, 0)).normalized()
 		o.lattice(e0, e1, r0, r1, 1, 1, roof_col, 0.05, 0.0, nrm2, 0.0, 0.0)
 		o.quad(e0 - nrm2 * 0.18, e1 - nrm2 * 0.18, r1 - nrm2 * 0.18, r0 - nrm2 * 0.18, Color(0.04, 0.035, 0.04))
+		# file di tegole scure e chiazze (muschio, tegole nuove, buchi): il tetto non e' piu' una superficie uniforme
+		var ridge_dir: Vector3 = (e1 - e0).normalized()
+		var slope_dir: Vector3 = (r0 - e0).normalized()
+		var lift: Vector3 = nrm2 * 0.05
+		for rowv in [0.34, 0.67]:
+			var q0: Vector3 = e0.lerp(r0, rowv) + lift
+			var q1: Vector3 = e1.lerp(r1, rowv) + lift
+			o.quad(q0, q1, q1 + slope_dir * 0.08, q0 + slope_dir * 0.08, roof_col * 0.55)
+		for pq in dr.randi_range(1, 3):
+			var pu := dr.randf_range(0.15, 0.85)
+			var pv := dr.randf_range(0.2, 0.8)
+			var pc: Vector3 = e0.lerp(e1, pu).lerp(r0.lerp(r1, pu), pv) + lift * 1.5
+			var ph := dr.randf_range(0.3, 0.6)
+			var pk := dr.randf()
+			var pcol: Color = Color(0.12, 0.21, 0.10) if pk < 0.45 else (roof_col * 1.7 if pk < 0.8 else Color(0.04, 0.035, 0.04))
+			var pax: Vector3 = ridge_dir * ph
+			var pay: Vector3 = slope_dir * ph * 0.8
+			o.quad(pc - pax - pay, pc + pax - pay, pc + pax + pay, pc - pax + pay, o.shade(pcol, 0.12))
 	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(0, wh + rh + 0.06, 0)), Vector3(0.34, 0.26, d + 2.0 * ov), roof_col * 0.7, 0.12, 8)
 	var cxl := r.randf_range(-w * 0.22, w * 0.22)
 	var czl := r.randf_range(-d * 0.3, d * 0.3)
 	var roof_y := wh + rh * (1.0 - absf(cxl) / (w * 0.5 + ov))
 	o.cyl(t0 * Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(cxl, wh * 0.4, czl)), 0.5, 0.42, roof_y + 1.0 - wh * 0.4, 5, Color(0.22, 0.2, 0.2), 0.16)
+	# camino: cappello, brace accesa e fumo che sale
+	var chy := roof_y + 1.0
+	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(cxl, chy + 0.06, czl)), Vector3(0.95, 0.14, 0.95), Color(0.12, 0.11, 0.11), 0.1, 8)
+	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(cxl, chy + 0.14, czl)), Vector3(0.5, 0.05, 0.5), Color(0.02, 0.02, 0.02), 0.0, 8)
+	if dr.randf() < 0.7:
+		var cpw: Vector3 = t0 * Vector3(cxl, chy + 0.2, czl)
+		o.box(Transform3D(Basis.IDENTITY, cpw), Vector3(0.34, 0.04, 0.34), Color(1.0, 0.55, 0.22, 0.15), 0.0, 8)
+		lamps.append(Vector4(cpw.x, cpw.y + 0.3, cpw.z, 0.5))
+		for sk2 in 4:
+			var spf := float(sk2)
+			o.rock(Vector3(cpw.x + 0.3 * spf + 0.1, chy + 0.9 + spf * 0.75, cpw.z - 0.2 * spf), Vector3(0.5 + spf * 0.22, 0.4 + spf * 0.12, 0.5 + spf * 0.22), Color(0.3, 0.3, 0.33) * (1.0 - spf * 0.12), 0.2, 0.35, spf)
 	var dz := r.randf_range(-d * 0.5 + 1.3, d * 0.5 - 1.3)
 	var ab := t0.basis
 	var dwp: Vector3 = t0 * Vector3(w * 0.5 + 0.8, 0, dz)
@@ -1402,6 +1436,30 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		if on:
 			var wp := t0 * Vector3(w * 0.5 + 0.9, 1.4, wz)
 			lamps.append(Vector4(wp.x, wp.y, wp.z, 0.55))
+	# abbaino con finestra, vialetto di lastre dalla porta e insegna appesa
+	if dr.randf() < 0.65:
+		var ds := -1.0 if dr.randf() < 0.5 else 1.0
+		var dvv := 0.4
+		var dzc := dr.randf_range(-d * 0.25, d * 0.25)
+		var dxl: float = ds * (w * 0.5 + ov) * (1.0 - dvv)
+		var dyl: float = wh - 0.1 + (rh + 0.16) * dvv
+		o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(dxl, dyl + 0.5, dzc)), Vector3(0.95, 1.0, 1.0), base_col * 1.1, 0.1, 8)
+		for sg2 in [-1.0, 1.0]:
+			o.box(t0 * Transform3D(Basis(Vector3.RIGHT, sg2 * 0.6), Vector3(dxl, dyl + 1.2, dzc + sg2 * 0.3)), Vector3(1.2, 0.1, 0.8), roof_col * 1.3, 0.1, 8)
+		var dlit := dr.randf() < 0.6
+		o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(dxl + ds * 0.5, dyl + 0.5, dzc)), Vector3(0.1, 0.5, 0.5), Color(0.95, 0.82, 0.58, 0.2) if dlit else Color(0.03, 0.03, 0.05), 0.0, 8)
+		if dlit:
+			var dwq: Vector3 = t0 * Vector3(dxl + ds * 0.9, dyl + 0.5, dzc)
+			lamps.append(Vector4(dwq.x, dwq.y, dwq.z, 0.45))
+	for si in 5:
+		var spl := Vector3(w * 0.5 + 1.3 + si * 0.8, 0.07, dz + sin(float(si) * 1.9) * 0.18)
+		o.box(Transform3D(ab, t0 * spl), Vector3(0.55, 0.12, 0.5 + dr.randf() * 0.15), Color(0.27, 0.26, 0.26), 0.14, 8)
+	if dr.randf() < 0.35:
+		var sx0 := w * 0.5
+		var sz0 := clampf(dz - 1.15 if dz > 0.0 else dz + 1.15, -d * 0.5 + 0.3, d * 0.5 - 0.3)
+		o.box(Transform3D(ab, t0 * Vector3(sx0 + 0.55, 2.5, sz0)), Vector3(1.1, 0.07, 0.07), WOOD, 0.1, 8)
+		o.box(Transform3D(ab, t0 * Vector3(sx0 + 1.0, 2.1, sz0)), Vector3(0.07, 0.55, 0.7), Color(0.30, 0.2, 0.12), 0.1, 8)
+		o.box(Transform3D(ab, t0 * Vector3(sx0 + 1.0, 2.1, sz0)), Vector3(0.09, 0.3, 0.4), [Color(0.6, 0.15, 0.1), Color(0.65, 0.5, 0.15), Color(0.15, 0.35, 0.5)][dr.randi() % 3], 0.05, 8)
 	if r.randf() < 0.5:
 		var m := r.randf_range(1.4, 2.4)
 		var hx := w * 0.5 + m
@@ -1505,6 +1563,9 @@ func _barrel(o: W3DBuilder, p: Vector2, r: RandomNumberGenerator, cols: Array) -
 	o.cyl(t, 0.42, 0.42, 0.95, 6, Color(0.27, 0.18, 0.11), 0.14)
 	o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.25, 0)), 0.44, 0.44, 0.08, 6, Color(0.13, 0.12, 0.13), 0.05, false)
 	o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.7, 0)), 0.44, 0.44, 0.08, 6, Color(0.13, 0.12, 0.13), 0.05, false)
+	o.cyl(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.93, 0)), 0.37, 0.37, 0.05, 6, Color(0.38, 0.26, 0.16), 0.1)
+	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 0.99, 0)), Vector3(0.66, 0.03, 0.07), Color(0.2, 0.13, 0.08), 0.08, 8)
+	o.box(t * Transform3D(Basis(Vector3.UP, 1.57), Vector3(0, 0.99, 0)), Vector3(0.66, 0.03, 0.07), Color(0.2, 0.13, 0.08), 0.08, 8)
 	cols.append(["c", p, 0.45])
 
 
@@ -1513,6 +1574,11 @@ func _crate(o: W3DBuilder, p: Vector2, r: RandomNumberGenerator, cols: Array) ->
 	var t := Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(p.x, s * 0.5, p.y))
 	o.box(t, Vector3(s, s, s), Color(0.28, 0.2, 0.13), 0.14, 8)
 	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, s * 0.5 + 0.02, 0)), Vector3(s * 1.04, 0.06, s * 0.2), Color(0.17, 0.12, 0.085), 0.1, 8)
+	for dg in [0.785, -0.785]:
+		o.box(t * Transform3D(Basis(Vector3.UP, dg), Vector3(0, s * 0.5 + 0.06, 0)), Vector3(s * 1.1, 0.05, s * 0.13), Color(0.16, 0.11, 0.08), 0.08, 8)
+	for cx in [-1.0, 1.0]:
+		for cz in [-1.0, 1.0]:
+			o.box(t * Transform3D(Basis.IDENTITY, Vector3(cx * s * 0.5, s * 0.5, cz * s * 0.5)), Vector3(0.11, 0.11, 0.11), Color(0.13, 0.13, 0.14), 0.05, 8)
 	cols.append(["c", p, s * 0.7])
 
 
@@ -1538,6 +1604,12 @@ func _cart(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols
 	for sz in [-0.75, 0.75]:
 		o.cyl(t * Transform3D(Basis(Vector3.RIGHT, PI * 0.5), Vector3(-0.2, 0.5, sz - 0.07)), 0.5, 0.5, 0.14, 6, Color(0.14, 0.1, 0.07), 0.1)
 	o.box(t * Transform3D(Basis(Vector3.FORWARD, 0.2), Vector3(1.9, 0.65, 0)), Vector3(1.6, 0.1, 0.12), Color(0.2, 0.14, 0.09), 0.1, 8)
+	var ch := hash(Vector2i(roundi(p.x * 8.0), roundi(p.y * 8.0)))
+	for cs in 3:
+		var csf := float(cs)
+		o.rock(t * Vector3(-0.6 + csf * 0.55, 1.15, sin(csf * 2.3) * 0.25), Vector3(0.55, 0.45, 0.5), Color(0.36, 0.31, 0.2) * (0.85 + 0.1 * csf), 0.14, 0.3, csf * 1.3)
+	if ch % 2 == 0:
+		o.box(t * Transform3D(Basis.IDENTITY, Vector3(0.55, 1.36, 0)), Vector3(1.0, 0.08, 1.1), Color(0.32, 0.14, 0.11), 0.1, 8)
 	cols.append(["b", p, Vector2(1.3, 0.8), yaw])
 
 
@@ -1574,6 +1646,10 @@ func _well(o: W3DBuilder, p: Vector2, r: RandomNumberGenerator, cols: Array) -> 
 	for sx in [-1.0, 1.0]:
 		o.box(Transform3D(Basis.IDENTITY, Vector3(p.x + sx * 1.0, 1.3, p.y)), Vector3(0.14, 2.6, 0.14), WOOD, 0.1, 8)
 	o.box(Transform3D(Basis.IDENTITY, Vector3(p.x, 2.55, p.y)), Vector3(2.3, 0.14, 0.14), WOOD, 0.1, 8)
+	for sg in [-1.0, 1.0]:
+		o.box(Transform3D(Basis(Vector3.RIGHT, sg * 0.55), Vector3(p.x, 2.95, p.y + sg * 0.5)), Vector3(2.8, 0.1, 1.2), Color(0.2, 0.13, 0.1), 0.12, 8)
+	o.box(Transform3D(Basis.IDENTITY, Vector3(p.x, 3.3, p.y)), Vector3(2.8, 0.1, 0.1), Color(0.14, 0.1, 0.08), 0.08, 8)
+	o.cyl(Transform3D(Basis.IDENTITY, Vector3(p.x + 1.5, 0.0, p.y + 1.0)), 0.22, 0.17, 0.32, 6, Color(0.3, 0.21, 0.13), 0.12)
 	cols.append(["c", p, 1.25])
 
 
@@ -1618,6 +1694,11 @@ func _lamp_post(o: W3DBuilder, p: Vector2, lamps: Array, cols: Array) -> void:
 	o.cyl(t, 0.11, 0.08, 2.7, 5, Color(0.12, 0.1, 0.08), 0.1)
 	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 2.85, 0)), Vector3(0.38, 0.4, 0.38), Color(0.95, 0.8, 0.55, 0.15), 0.0, 8)
 	o.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 3.1, 0)), Vector3(0.5, 0.1, 0.5), Color(0.1, 0.08, 0.08), 0.0, 8)
+	o.cyl(t, 0.24, 0.2, 0.4, 6, Color(0.24, 0.23, 0.24), 0.12)
+	o.cyl(t * Transform3D(Basis(Vector3.UP, 0.785), Vector3(0, 3.15, 0)), 0.42, 0.03, 0.42, 4, Color(0.1, 0.08, 0.08), 0.0)
+	for lx in [-1.0, 1.0]:
+		for lz in [-1.0, 1.0]:
+			o.box(t * Transform3D(Basis.IDENTITY, Vector3(lx * 0.2, 2.85, lz * 0.2)), Vector3(0.05, 0.44, 0.05), Color(0.08, 0.07, 0.07), 0.0, 8)
 	lamps.append(Vector4(p.x, 2.7, p.y, 1.5))
 	cols.append(["c", p, 0.3])
 
@@ -2311,3 +2392,289 @@ func _shot_step() -> void:
 		get_viewport().get_texture().get_image().save_png("user://w3d_%d.png" % shot_i)
 		shot_i += 1
 		shot_wait = 0
+
+
+# ------------------------------------------------------------------ editor del mondo (F12 nel gioco)
+## Le modifiche sono in coordinate del mondo 3D (non cambiano se si sposta world_off) e si applicano a ogni blocco quando nasce:
+## prima la gomma toglie i triangoli, le collisioni, le luci e le porte generate nelle zone cancellate, poi si aggiungono gli oggetti piazzati.
+const ED_CAT := [["house", "Casa", true], ["chapel", "Cappella", true], ["mausoleum", "Mausoleo", true], ["tree", "Albero morto", false],
+		["bush", "Cespuglio", false], ["rock", "Masso", true], ["log", "Tronco caduto", false], ["barrel", "Botte", false],
+		["crate", "Cassa", false], ["hay", "Fieno", false], ["woodpile", "Legna", true], ["cart", "Carro", true], ["bench", "Panca", true],
+		["sign", "Cartello", true], ["scarecrow", "Spaventapasseri", false], ["well", "Pozzo", false], ["gallows", "Forca", false],
+		["pyre", "Pira", false], ["ruin", "Rovina", false], ["lamp", "Lampione", false], ["grave", "Tomba", false],
+		["field", "Campo di grano", true], ["veg", "Vegetazione", true]]
+var ed_adds: Array = []      # {k, x, z, yaw, s}
+var ed_erase: Array = []     # [x, z, raggio]
+var ed_loaded := false
+
+
+func ed_load() -> void:
+	if ed_loaded:
+		return
+	ed_loaded = true
+	ed_adds = []
+	ed_erase = []
+	var paths: Array = ["res://data/w3d_edits.json"]
+	if not OS.has_feature("editor"):
+		paths.append("user://w3d_edits.json")
+	for path in paths:
+		if FileAccess.file_exists(path):
+			var d = JSON.parse_string(FileAccess.get_file_as_string(path))
+			if d is Dictionary:
+				ed_adds = d.get("add", [])
+				ed_erase = d.get("erase", [])
+
+
+## dal gioco lanciato dall'editor Godot scrive in godot/data (finisce nel progetto), dall'exe in user://
+func ed_save() -> String:
+	var path := "user://w3d_edits.json"
+	if OS.has_feature("editor"):
+		path = ProjectSettings.globalize_path("res://data/w3d_edits.json")
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return ""
+	f.store_string(JSON.stringify({"add": ed_adds, "erase": ed_erase}, "	"))
+	f.close()
+	return path
+
+
+func _ed_make(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array, sc := 1.0) -> void:
+	if k.begins_with("model:"):
+		_ed_make_model(k.substr(6), o, p, yaw, sc, cols)
+		return
+	match k:
+		"house":
+			_house(o, p, yaw, r, cols, lamps)
+		"chapel":
+			_chapel(o, p, yaw, r, cols, lamps)
+		"mausoleum":
+			_mausoleum(o, p, yaw, r, cols, lamps)
+		"tree":
+			_dead_tree(o, p, r, cols)
+		"bush":
+			_bush(o, p, r, cols)
+		"rock":
+			o.rock(Vector3(p.x, 0.32, p.y), Vector3(1.3, 0.75, 1.0), Color(0.22, 0.22, 0.24), 0.14, 0.4, yaw)
+			cols.append(["c", p, 0.6])
+		"log":
+			_fallen_log(o, p, r)
+		"barrel":
+			_barrel(o, p, r, cols)
+		"crate":
+			_crate(o, p, r, cols)
+		"hay":
+			_hay(o, p, r, cols)
+		"woodpile":
+			_woodpile(o, p, yaw, r, cols)
+		"cart":
+			_cart(o, p, yaw, r, cols)
+		"bench":
+			_bench(o, p, yaw, r, cols)
+		"sign":
+			_sign(o, p, yaw, r, cols)
+		"scarecrow":
+			_scarecrow(o, p, r, cols)
+		"well":
+			_well(o, p, r, cols)
+		"gallows":
+			_gallows(o, p, r, cols)
+		"pyre":
+			_pyre(o, p, r, cols, lamps)
+		"ruin":
+			_ruin(o, p, r, cols)
+		"lamp":
+			_lamp_post(o, p, lamps, cols)
+		"grave":
+			_grave_item(o, p, r, cols, lamps)
+		"field":
+			_wheat_field(o, p, yaw, r, cols)
+		"veg":
+			_veg_patch(o, p, yaw, r, cols)
+
+
+func _ed_cut(b: W3DBuilder, ex: float, ez: float, er: float) -> void:
+	var nv := PackedVector3Array()
+	var nc := PackedColorArray()
+	var e2 := er * er
+	for i in range(0, b.v.size() - 2, 3):
+		var a := b.v[i]
+		var bb := b.v[i + 1]
+		var d := b.v[i + 2]
+		var cx := (a.x + bb.x + d.x) / 3.0 - ex
+		var cz := (a.z + bb.z + d.z) / 3.0 - ez
+		if cx * cx + cz * cz < e2:
+			continue
+		nv.append(a)
+		nv.append(bb)
+		nv.append(d)
+		nc.append(b.c[i])
+		nc.append(b.c[i + 1])
+		nc.append(b.c[i + 2])
+	b.v = nv
+	b.c = nc
+
+
+func _ed_apply(j: Dictionary) -> void:
+	if ed_adds.is_empty() and ed_erase.is_empty():
+		return
+	var x0: float = j["x0"]
+	var z0: float = j["z0"]
+	var o: W3DBuilder = j["o"]
+	var cols: Array = j["cols"]
+	var lamps: Array = j["lamps"]
+	for e in ed_erase:
+		var ex := float(e[0])
+		var ez := float(e[1])
+		var er := float(e[2])
+		if ex + er < x0 or ex - er > x0 + CHS or ez + er < z0 or ez - er > z0 + CHS:
+			continue
+		_ed_cut(o, ex, ez, er)
+		_ed_cut(j["v"], ex, ez, er)
+		var ec := Vector2(ex, ez)
+		for i in range(cols.size() - 1, -1, -1):
+			if (cols[i][1] as Vector2).distance_to(ec) < er:
+				cols.remove_at(i)
+		for i in range(lamps.size() - 1, -1, -1):
+			var lv: Vector4 = lamps[i]
+			if Vector2(lv.x, lv.z).distance_to(ec) < er:
+				lamps.remove_at(i)
+		for key in house_doors.keys():
+			var dv: Vector3 = house_doors[key]
+			if Vector2(dv.x, dv.y).distance_to(ec) < er:
+				house_doors.erase(key)
+	for a in ed_adds:
+		var ax := float(a["x"])
+		var az := float(a["z"])
+		if ax < x0 or ax >= x0 + CHS or az < z0 or az >= z0 + CHS:
+			continue
+		var r := RandomNumberGenerator.new()
+		r.seed = int(a["s"])
+		o.rn.seed = r.randi()
+		_ed_make(str(a["k"]), o, Vector2(ax, az), float(a["yaw"]), r, cols, lamps, float(a.get("sc", 1.0)))
+
+
+# ------------------------------------------------------------------ modelli 3D importati (.glb / .gltf in res://assets/models)
+## Ogni triangolo prende un solo colore (colore del materiale x colore dei vertici x texture nel centro del triangolo),
+## cosi' il modello si comporta come gli altri oggetti del mondo: luci finte, ombre, nebbia e bolla di visibilita'.
+const ED_MODEL_DIR := "res://assets/models"
+var ed_model_cache: Dictionary = {}
+
+
+func ed_model_names() -> Array:
+	var out: Array = []
+	var seen := {}
+	for f in DirAccess.get_files_at(ED_MODEL_DIR):
+		var n := f.trim_suffix(".import").trim_suffix(".remap")
+		var ext := n.get_extension().to_lower()
+		if (ext == "glb" or ext == "gltf") and not seen.has(n):
+			seen[n] = true
+			out.append(n)
+	out.sort()
+	return out
+
+
+func ed_model(name: String) -> Dictionary:
+	if ed_model_cache.has(name):
+		return ed_model_cache[name]
+	var res := {}
+	var path := ED_MODEL_DIR + "/" + name
+	var ps = load(path) if ResourceLoader.exists(path) else null
+	if ps is PackedScene:
+		var root: Node = (ps as PackedScene).instantiate()
+		var vs := PackedVector3Array()
+		var cs := PackedColorArray()
+		_ed_collect(root, Transform3D.IDENTITY, vs, cs)
+		root.free()
+		if vs.size() >= 3:
+			var miny := 1e9
+			for q in vs:
+				miny = minf(miny, q.y)
+			for i in vs.size():
+				vs[i] = Vector3(vs[i].x, vs[i].y - miny, vs[i].z)    # il modello poggia sul terreno
+			res = {"v": vs, "c": cs}
+	else:
+		print("MODELLO non caricabile: ", path)
+	ed_model_cache[name] = res
+	return res
+
+
+func _ed_collect(n: Node, parent_t: Transform3D, vs: PackedVector3Array, cs: PackedColorArray) -> void:
+	var t := parent_t
+	if n is Node3D:
+		t = parent_t * (n as Node3D).transform
+	if n is MeshInstance3D and (n as MeshInstance3D).mesh != null:
+		var mi := n as MeshInstance3D
+		var m: Mesh = mi.mesh
+		for sidx in m.get_surface_count():
+			var arr := m.surface_get_arrays(sidx)
+			var pv = arr[Mesh.ARRAY_VERTEX]
+			if pv == null:
+				continue
+			var pp: PackedVector3Array = pv
+			var idx = arr[Mesh.ARRAY_INDEX]
+			var col = arr[Mesh.ARRAY_COLOR]
+			var uv = arr[Mesh.ARRAY_TEX_UV]
+			var base := Color.WHITE
+			var img: Image = null
+			var mat: Material = mi.get_active_material(sidx)
+			if mat is BaseMaterial3D:
+				var bm := mat as BaseMaterial3D
+				base = bm.albedo_color
+				if bm.albedo_texture != null:
+					img = bm.albedo_texture.get_image()
+					if img != null:
+						if img.is_compressed():
+							img.decompress()
+						img.convert(Image.FORMAT_RGBA8)
+			var has_idx: bool = idx != null and (idx as PackedInt32Array).size() > 0
+			var ntri: int = ((idx as PackedInt32Array).size() if has_idx else pp.size()) / 3
+			var has_col: bool = col != null and (col as PackedColorArray).size() == pp.size()
+			var has_uv: bool = img != null and uv != null and (uv as PackedVector2Array).size() == pp.size()
+			for ti in ntri:
+				var i0: int = idx[ti * 3] if has_idx else ti * 3
+				var i1: int = idx[ti * 3 + 1] if has_idx else ti * 3 + 1
+				var i2: int = idx[ti * 3 + 2] if has_idx else ti * 3 + 2
+				var c := base
+				if has_col:
+					var cc: PackedColorArray = col
+					c = Color((cc[i0].r + cc[i1].r + cc[i2].r) / 3.0, (cc[i0].g + cc[i1].g + cc[i2].g) / 3.0, (cc[i0].b + cc[i1].b + cc[i2].b) / 3.0) * base
+				if has_uv:
+					var uu: PackedVector2Array = uv
+					var uc := (uu[i0] + uu[i1] + uu[i2]) / 3.0
+					var px := clampi(int(fposmod(uc.x, 1.0) * img.get_width()), 0, img.get_width() - 1)
+					var py := clampi(int(fposmod(uc.y, 1.0) * img.get_height()), 0, img.get_height() - 1)
+					c = c * img.get_pixel(px, py)
+				c.a = 1.0
+				vs.append(t * pp[i0])
+				vs.append(t * pp[i1])
+				vs.append(t * pp[i2])
+				cs.append(c)
+				cs.append(c)
+				cs.append(c)
+	for ch in n.get_children():
+		_ed_collect(ch, t, vs, cs)
+
+
+## ingombro per la collisione: scatola orientata sulla parte bassa del modello (sotto 1 unita'), cosi' la chioma di un albero non blocca ma il tronco si'
+func _ed_make_model(name: String, o: W3DBuilder, p: Vector2, yaw: float, sc: float, cols: Array) -> void:
+	var m := ed_model(name)
+	if m.is_empty():
+		return
+	var vs: PackedVector3Array = m["v"]
+	var cs: PackedColorArray = m["c"]
+	var rot := Basis(Vector3.UP, yaw)
+	var bs := rot * Basis.from_scale(Vector3(sc, sc, sc))
+	var org := Vector3(p.x, 0.0, p.y)
+	var lo := Vector2(1e9, 1e9)
+	var hi := Vector2(-1e9, -1e9)
+	for i in vs.size():
+		var q := vs[i]
+		o.v.append(bs * q + org)
+		o.c.append(o.shade(cs[i], 0.0))
+		if q.y * sc < 1.0:
+			lo = Vector2(minf(lo.x, q.x * sc), minf(lo.y, q.z * sc))
+			hi = Vector2(maxf(hi.x, q.x * sc), maxf(hi.y, q.z * sc))
+	if hi.x > lo.x:
+		var half := Vector2(maxf((hi.x - lo.x) * 0.5, 0.2), maxf((hi.y - lo.y) * 0.5, 0.2))
+		var cw: Vector3 = rot * Vector3((lo.x + hi.x) * 0.5, 0.0, (lo.y + hi.y) * 0.5)
+		cols.append(["b", Vector2(p.x + cw.x, p.y + cw.z), half, yaw])

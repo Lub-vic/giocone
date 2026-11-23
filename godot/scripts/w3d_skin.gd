@@ -39,6 +39,9 @@ func _ready() -> void:
 		RenderingServer.global_shader_parameter_add("w3d_player", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3.ZERO)
 		W3D.gp_added = true
 	want_shot = OS.get_cmdline_user_args().has("--skinshot")
+	ed = W3DEdit.new()
+	ed.sk = self
+	add_child(ed)
 	var w := get_window()
 	w.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS   # il 3D si vede alla risoluzione reale, non a 480x270
 	w.content_scale_size = Vector2i(480, 270)
@@ -69,7 +72,7 @@ func _ready() -> void:
 	if fwd:
 		sun.visible = false
 		_make_pool()
-		env.glow_enabled = true
+		env.glow_enabled = false
 		env.glow_intensity = 0.8
 		env.glow_bloom = 0.08
 		env.glow_hdr_threshold = 0.9
@@ -1755,6 +1758,7 @@ func _world_clear() -> void:
 
 var world_off := Vector2.ZERO
 var fixed_cam := false
+var ed: W3DEdit                  # editor del mondo (F12)
 var perf_on := OS.get_cmdline_user_args().has("--perf")
 var perf_n := 0
 var lamp_n := 0.0
@@ -1858,6 +1862,7 @@ func _world_update() -> void:
 
 
 func _world_init() -> void:
+	ed_load()
 	for k in chunks:
 		(chunks[k]["node"] as Node3D).queue_free()
 	chunks.clear()
@@ -2387,7 +2392,7 @@ func _process_inner(dt: float) -> void:
 			print("PERF fps=", snappedf(perf_n / maxf(perf_t, 0.001), 0.1), " worst_ms=", snappedf(perf_max * 1000.0, 1.0), " chunks=", chunks.size(), " jobs=", jobs.size(), " gen_ms=", snappedf(gen_ms, 1.0), " fade_a=", snappedf(fade_a, 0.1), " state=", gm.state, " world=", world_on, " area=", gm.area)
 			get_tree().quit()
 	_show_2d(false)
-	pos = gm.player.position / 16.0
+	pos = ed.pos if (ed != null and ed.on) else gm.player.position / 16.0
 	if world_on:
 		var tw := Time.get_ticks_usec()
 		_world_update()
@@ -2442,13 +2447,13 @@ func _process_inner(dt: float) -> void:
 	_update_cam()
 	dust.position = Vector3(pos.x, 3.0, pos.y)
 	RenderingServer.global_shader_parameter_set("w3d_player", Vector3(pos.x, 0, pos.y))
-	fade_a = lerpf(fade_a, 27.0 if world_on else 48.0, 0.15)
+	fade_a = lerpf(fade_a, ed.fade if (ed != null and ed.on) else (27.0 if world_on else 48.0), 0.15)
 	if not fixed_cam:
 		cam_h = lerpf(cam_h, 30.0 if world_on else 22.0, 0.08)
 	if fwd:
 		env.ssao_enabled = not world_on
 		env.volumetric_fog_enabled = not world_on
-		env.glow_enabled = not world_on
+		env.glow_enabled = false   # niente alone sfumato
 		# nel mondo aperto: luce del motore originale (sole freddo con ombre + ambiente), niente tonemapping cinematografico
 		sun.visible = world_on
 		env.tonemap_mode = Environment.TONE_MAPPER_LINEAR if world_on else Environment.TONE_MAPPER_FILMIC

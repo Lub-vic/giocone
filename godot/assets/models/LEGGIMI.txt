@@ -1,0 +1,4 @@
+Modelli 3D per l'editor del mondo (F12 nel gioco).
+Metti qui file .glb (o .gltf) esportati da Blender: compaiono in fondo alla lista dell'editor, con "(3D)" nel nome.
+Consigli: pochi poligoni, un materiale con colore per ogni parte, base del modello a quota 0, 1 unita' = 1 metro (una porta e' alta circa 2).
+Con + e - nell'editor cambi la scala in fase di posizionamento.
