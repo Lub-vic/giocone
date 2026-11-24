@@ -37,6 +37,14 @@ func _process(dt: float) -> void:
 	if life <= 0.0 or main.solid_at(position):
 		_end()
 		return
+	if main.light_break(position, 4.0):
+		if aoe > 0.0:
+			_explode()
+			return
+		if pierce <= 0:
+			_end()
+			return
+		pierce -= 1
 	for e in main.enemies.duplicate():
 		if hit.has(e):
 			continue
@@ -65,6 +73,7 @@ func _hurt(e: Enemy) -> void:
 
 func _explode() -> void:
 	main.burst(position, col, 16, 60.0, 0.4)
+	main.light_break(position, aoe, 4)
 	for e in main.enemies.duplicate():
 		if not hit.has(e) and e.position.distance_to(position) < aoe + e.radius:
 			e.hurt(dmg * 0.7, (e.position - position).normalized(), 90.0, false)

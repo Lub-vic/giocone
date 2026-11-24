@@ -623,7 +623,7 @@ func _process(dt: float) -> void:
 			slow = 0.3
 		if drink_t > 0.0:
 			slow = 0.35
-		vel = dir * speed * slow * (1.0 + bv("b_mv")) * veh_spd()
+		vel = dir * speed * slow * (1.0 + bv("b_mv")) * veh_spd() * main.slope_speed(position, dir)
 	if slow_t > 0.0:
 		vel *= 0.55
 	vel += kb
@@ -851,6 +851,7 @@ func cast(slot: int) -> void:
 				if e.position.distance_to(position) < 58.0 + e.radius:
 					e.hurt(bd() * 2.2 * sp, (e.position - position).normalized(), 130.0, false)
 					e.apply_status("burn", 3.0, bd() * 0.25 * sp)
+			main.light_break(position, 58.0, 5)
 			main.burst(position, Color(1.0, 0.5, 0.15), 50, 95.0, 0.6)
 			shock(position, 60, Color(1.0, 0.55, 0.2))
 			shock(position, 40, Color(1.0, 0.85, 0.4))
@@ -877,6 +878,7 @@ func cast(slot: int) -> void:
 				if v.length() < 72.0 and abs(angle_difference(aim.angle(), v.angle())) < 0.7:
 					e.hurt(bd() * 1.2 * sp, v.normalized(), 40.0, false)
 					e.apply_status("slow", 3.5, 0.0)
+			main.light_break(position + aim * 36.0, 30.0, 3)
 			main.burst(position + aim * 36.0, Color(0.6, 0.9, 1.0), 30, 60.0, 0.5)
 			shock(position + aim * 36.0, 30, Color(0.6, 0.9, 1.0))
 			main.snd("swing")

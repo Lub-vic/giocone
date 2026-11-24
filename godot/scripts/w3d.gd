@@ -44,6 +44,7 @@ var sun: DirectionalLight3D
 var mat: ShaderMaterial
 var mat_chr: ShaderMaterial
 var mat_prop: ShaderMaterial
+var mat_ground: ShaderMaterial     # suolo disegnato per pixel (solo nel gioco: lo crea la pelle)
 var patterns := false
 var post_rect: TextureRect
 var post_mat: ShaderMaterial
@@ -98,10 +99,20 @@ var lineup := false
 var cam_h := CAM_H
 
 
+## parametri globali degli shader: giocatore, quote del terreno (texture + scala), curvatura
+static func add_globals() -> void:
+	if gp_added:
+		return
+	RenderingServer.global_shader_parameter_add("w3d_player", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3.ZERO)
+	var img := Image.create(1, 1, false, Image.FORMAT_RH)
+	RenderingServer.global_shader_parameter_add("w3d_elev", RenderingServer.GLOBAL_VAR_TYPE_SAMPLER2D, ImageTexture.create_from_image(img))
+	RenderingServer.global_shader_parameter_add("w3d_elev_info", RenderingServer.GLOBAL_VAR_TYPE_VEC4, Vector4(0, 0, 0, 0))
+	RenderingServer.global_shader_parameter_add("w3d_curve", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3(0.014, 27.0, 45.0))
+	gp_added = true
+
+
 func _ready() -> void:
-	if not gp_added:
-		RenderingServer.global_shader_parameter_add("w3d_player", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3.ZERO)
-		gp_added = true
+	add_globals()
 	get_window().content_scale_size = Vector2i(960, 540)   # piu' pixel logici: meno pixellato (l'interfaccia viene scalata x2)
 	for arg in OS.get_cmdline_user_args():
 		if str(arg).begins_with("--shots="):
@@ -457,6 +468,11 @@ func _job_step(j: Dictionary) -> bool:
 	return false
 
 
+## mappa globale delle distanze dai sentieri (la riempie la pelle: serve al suolo disegnato per pixel)
+func _gmap_fill(_j: Dictionary) -> void:
+	pass
+
+
 func _finalize(j: Dictionary) -> void:
 	var k: Vector2i = j["k"]
 	var x0: float = j["x0"]
@@ -485,6 +501,7 @@ func _finalize(j: Dictionary) -> void:
 				var a := TAU * q / 5.0
 				o.rock(Vector3(bv.x + cos(a) * 1.0, 0.18, bv.y + sin(a) * 1.0), Vector3(0.5, 0.36, 0.5), Color(0.22, 0.22, 0.24), 0.14, 0.4, a)
 	_ed_apply(j)
+	_gmap_fill(j)
 	var node := Node3D.new()
 	node.name = "C%d_%d" % [k.x, k.y]
 	var parts := [["g", false], ["v", false], ["o", true]]
@@ -494,7 +511,7 @@ func _finalize(j: Dictionary) -> void:
 			continue
 		var mi := MeshInstance3D.new()
 		mi.mesh = bld.mesh()
-		mi.material_override = mat
+		mi.material_override = mat_ground if (pt[0] == "g" and mat_ground != null) else mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if pt[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(mi)
 	for sp in o.smokes:
@@ -536,46 +553,39 @@ func _ground_col(p: Vector2, rd: float, rw: float) -> Color:
 		return Color(0.02, 0.05, 0.08).lerp(Color(0.06, 0.12, 0.17), wn * 0.6 + wv * 0.4)
 	var c0 := _ground_col0(p, rd, rw)
 	if bio_fn.is_valid() and rd > rw * 0.5 + 0.6:
-		# il bioma sfuma dolcemente (media su 9 punti), senza gradini grossi
-		var tk := Vector2i(floori(p.x / 0.8), floori(p.y / 0.8))
-		if bio_cache.has(tk):
-			var tc: Color = bio_cache[tk]
-			return c0.lerp(Color(tc.r, tc.g, tc.b), tc.a) if tc.a > 0.0 else c0
-		var sr := 0.0
-		var sg := 0.0
-		var sb := 0.0
-		var sa := 0.0
-		for oi in 9:
-			var of := Vector2(((oi % 3) - 1) * 1.7, ((oi / 3) - 1) * 1.7)
-			var bg: Color = BIO_GROUND[clampi(_bio_at(p + of), 0, 6)]
-			sr += bg.r * bg.a
-			sg += bg.g * bg.a
-			sb += bg.b * bg.a
-			sa += bg.a
-		if bio_cache.size() > 40000:
-			bio_cache.clear()
-		if sa > 0.01:
-			bio_cache[tk] = Color(sr / sa, sg / sa, sb / sa, sa / 9.0)
-			c0 = c0.lerp(Color(sr / sa, sg / sa, sb / sa), sa / 9.0)
-		else:
-			bio_cache[tk] = Color(0, 0, 0, 0.0)
+		# il bioma cambia con un confine netto ma irregolare (deformato dal rumore): niente sfumature
+		var wp := Vector2(n_soil.get_noise_2d(p.x * 0.7 + 300.0, p.y * 0.7), n_soil.get_noise_2d(p.x * 0.7, p.y * 0.7 - 300.0)) * 2.2
+		var bg: Color = BIO_GROUND[clampi(_bio_at(p + wp), 0, 6)]
+		if bg.a > 0.0:
+			c0 = c0.lerp(Color(bg.r, bg.g, bg.b), bg.a)
 	return c0
 
 
 func _ground_col0(p: Vector2, rd: float, rw: float) -> Color:
 	var a := n_soil.get_noise_2d(p.x, p.y)
 	var col := Color(0.115, 0.1, 0.092)
-	col = col.lerp(Color(0.06, 0.05, 0.05), clampf(-a * 1.8, 0.0, 1.0))
-	col = col.lerp(Color(0.16, 0.14, 0.12), clampf((a - 0.25) * 2.0, 0.0, 0.7))
+	# macchie di terreno a gradini: bordi netti (come pixel art) invece di sfumature
+	var dk := 0.6 if a < -0.42 else (0.3 if a < -0.18 else 0.0)
+	if dk > 0.0:
+		col = col.lerp(Color(0.06, 0.05, 0.05), dk)
+	var lt := 0.4 if a > 0.5 else (0.22 if a > 0.3 else 0.0)
+	if lt > 0.0:
+		col = col.lerp(Color(0.16, 0.14, 0.12), lt)
 	var vg := n_veg.get_noise_2d(p.x, p.y)
-	if vg > 0.1:
-		col = col.lerp(Color(0.08, 0.105, 0.07), clampf((vg - 0.1) * 2.2, 0.0, 0.85))
+	var vl := 0.75 if vg > 0.4 else (0.35 if vg > 0.12 else 0.0)
+	if vl > 0.0:
+		col = col.lerp(Color(0.08, 0.105, 0.07), vl)
 	var st := n_stain.get_noise_2d(p.x + 400.0, p.y - 300.0)
-	if st > 0.5:
-		col = col.lerp(Color(0.11, 0.05, 0.045), clampf((st - 0.5) * 2.0, 0.0, 0.35))
+	if st > 0.62:
+		col = col.lerp(Color(0.11, 0.05, 0.045), 0.3)
+	# sentiero: bordo netto leggermente irregolare, con un orlo scuro definito
 	var edge := rw * 0.5
-	if rd < edge + 0.9:
-		col = col.lerp(Color(0.17, 0.15, 0.135), smoothstep(edge + 0.22, edge - 0.08, rd))
+	var wob := n_soil.get_noise_2d(p.x * 5.0 + 90.0, p.y * 5.0) * 0.09
+	if rd < edge + wob:
+		var tone := n_soil.get_noise_2d(p.x * 8.0, p.y * 8.0)
+		col = Color(0.185, 0.16, 0.14) if tone > 0.15 else (Color(0.15, 0.13, 0.115) if tone < -0.25 else Color(0.17, 0.15, 0.135))
+	elif rd < edge + wob + 0.12:
+		col = col.lerp(Color(0.045, 0.04, 0.036), 0.65)
 	return col
 
 
@@ -587,6 +597,10 @@ func _edge_col(g: W3DBuilder, sub: Array, px: float, pz: float) -> Color:
 	var bump := clampf(1.0 - absf(ed - 0.1) / 0.28, 0.0, 1.0)
 	col = Color(col.r * (1.0 - 0.35 * bump), col.g * (1.0 - 0.35 * bump), col.b * (1.0 - 0.35 * bump), col.a)
 	return g.shade(col, 0.06)
+
+
+func _hbil(h00: float, h10: float, h11: float, h01: float, u: float, w: float) -> float:
+	return lerpf(lerpf(h00, h10, u), lerpf(h01, h11, u), w)
 
 
 func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
@@ -615,8 +629,8 @@ func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
 			elif (jj & 1) == 1:
 				pass
 			var rdv: Vector2 = rrow[ii]
-			var col: Color = crow[ii]
-			var near_road: bool = rdv.x - rdv.y * 0.5 < 1.6
+			# il colore base non conosce i sentieri: li disegna lo shader per pixel (bordo netto e curvo)
+			var col: Color = _ground_col(p, 99.0, 2.0)
 			var h00: float = hs[jj * (n + 1) + ii]
 			var h10: float = hs[jj * (n + 1) + ii + 1]
 			var h11: float = hs[(jj + 1) * (n + 1) + ii + 1]
@@ -625,24 +639,12 @@ func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
 			var b := Vector3(x0 + (ii + 1) * GS, h10, z0 + jj * GS)
 			var d := Vector3(x0 + (ii + 1) * GS, h11, z0 + (jj + 1) * GS)
 			var e := Vector3(x0 + ii * GS, h01, z0 + (jj + 1) * GS)
-			if near_road:
-				# vicino alla strada i colori sono per vertice: il bordo e' netto ma diagonale, senza scalini a quadroni
-				var ca := _edge_col(g, sub, a.x, a.z)
-				var cb := _edge_col(g, sub, b.x, b.z)
-				var cd := _edge_col(g, sub, d.x, d.z)
-				var ce := _edge_col(g, sub, e.x, e.z)
-				if (ii + jj) % 2 == 0:
-					g.tri3(a, b, d, ca, cb, cd)
-					g.tri3(a, d, e, ca, cd, ce)
-				else:
-					g.tri3(a, b, e, ca, cb, ce)
-					g.tri3(b, d, e, cb, cd, ce)
-			elif (ii + jj) % 2 == 0:
-				g.tri(a, b, d, g.shade(col, 0.07))
-				g.tri(a, d, e, g.shade(col, 0.07))
+			if (ii + jj) % 2 == 0:
+				g.tri(a, b, d, g.shade(col, 0.04))
+				g.tri(a, d, e, g.shade(col, 0.04))
 			else:
-				g.tri(a, b, e, g.shade(col, 0.07))
-				g.tri(b, d, e, g.shade(col, 0.07))
+				g.tri(a, b, e, g.shade(col, 0.04))
+				g.tri(b, d, e, g.shade(col, 0.04))
 			# ciottoli della strada principale: un sasso piatto per cella
 			if rdv.x < rdv.y * 0.5 + 0.1 and rdv.y > 2.3 and (p.length() < 130.0 or grid_road_fn.is_valid()) and g.rn.randf() < 0.92 and not (edge_fn.is_valid() and bool(edge_fn.call(p))):
 				var sp := Vector3(p.x + g.rn.randf_range(-0.1, 0.1), _height(p, 3.0) + 0.03, p.y + g.rn.randf_range(-0.15, 0.15))
@@ -2342,13 +2344,18 @@ func _mp(k: String, v: Variant) -> void:
 	mat.set_shader_parameter(k, v)
 	mat_chr.set_shader_parameter(k, v)
 	mat_prop.set_shader_parameter(k, v)
+	if mat_ground != null:
+		mat_ground.set_shader_parameter(k, v)
 	if k in ["curve", "fade_a", "fade_b"]:
 		for om in extra_mats:
 			(om as ShaderMaterial).set_shader_parameter(k, v)
 
 
+var elev_y := 0.0          # quota del terreno sotto il giocatore (la camera la segue)
+
+
 func _update_cam() -> void:
-	cam.position = Vector3(pos.x + randf_range(-shake, shake) * 0.25, cam_h, pos.y + randf_range(-shake, shake) * 0.25)
+	cam.position = Vector3(pos.x + randf_range(-shake, shake) * 0.25, cam_h + elev_y, pos.y + randf_range(-shake, shake) * 0.25)
 
 
 func _update_lamps() -> void:

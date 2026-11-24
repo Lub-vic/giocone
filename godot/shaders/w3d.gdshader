@@ -3,6 +3,16 @@ shader_type spatial;
 render_mode cull_disabled, world_vertex_coords, specular_disabled, diffuse_lambert;
 
 global uniform vec3 w3d_player;
+global uniform sampler2D w3d_elev : filter_linear;
+global uniform vec4 w3d_elev_info;   // xy = 1 / dimensioni della mappa (celle), z = scala delle quote (0 = spente: interni)
+
+float elev(vec2 p) {
+	if (w3d_elev_info.z <= 0.0) {
+		return 0.0;
+	}
+	vec2 uv = clamp(p * w3d_elev_info.xy, vec2(0.0), vec2(1.0));
+	return textureLod(w3d_elev, uv, 0.0).r * w3d_elev_info.z;
+}
 uniform float curve = 0.017;       // quanto il mondo si piega verso il basso allontanandosi
 uniform float fade_a = 54.0;       // inizio della bolla: gli oggetti iniziano a sprofondare
 uniform float fade_b = 72.0;       // fine della bolla: spariti
@@ -19,6 +29,7 @@ varying vec3 wpos;
 varying vec4 vcol;
 
 void vertex() {
+	VERTEX.y += elev(VERTEX.xz);      // quota del terreno: tutto il mondo (case, alberi, personaggi) sale e scende con le colline
 	wpos = VERTEX;
 	vcol = COLOR;
 	vec2 d = VERTEX.xz - w3d_player.xz;

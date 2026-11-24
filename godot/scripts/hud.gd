@@ -170,7 +170,7 @@ func _draw() -> void:
 	if main.state == "title":
 		_title()
 		return
-	if (main.state == "options" or main.state == "controls") and main.in_title_menu:
+	if (main.state == "options" or main.state == "controls" or main.state == "remap") and main.in_title_menu:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.0, 0.04, 1.0))
 		if main.state == "options":
 			_options()
@@ -228,7 +228,7 @@ func _draw() -> void:
 			_txt("...", Vector2(5 + 6.0 * minf(30.0, str(qs[0]).length()), oy + 9.0), Color(0.7, 0.92, 0.85, oa * 0.9))
 	if p.zmode > 0:
 		_txt("MODALITA ORDA" if p.zmode == 1 else "MODALITA TATTICA", Vector2(0, 20), Color(1.0, 0.6, 0.9) if p.zmode == 1 else Color(0.6, 0.9, 1.0), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "dialog", "craft", "map", "bestiary", "debug"]
+	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "remap", "dialog", "craft", "map", "bestiary", "debug"]
 	if not overlay:
 		_equip_panel(p)
 		_item_line(p)
@@ -1252,7 +1252,7 @@ func _pause() -> void:
 func _options() -> void:
 	if not main.in_title_menu:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.7))
-	var r := Rect2(size.x / 2 - 160, 22, 320, 226)
+	var r := Rect2(size.x / 2 - 160, 8, 320, 256)
 	_panel(r)
 	_txt("IMPOSTAZIONI", Vector2(r.position.x, r.position.y + 30), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 	for i in main.OPTIONS.size():
@@ -1280,7 +1280,7 @@ func _controls() -> void:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.78))
 	var r := Rect2(size.x / 2 - 230, 4, 460, 264)
 	_panel(r)
-	_txt("COMANDI", Vector2(r.position.x, r.position.y + 28), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	_txt("COMANDI PREDEFINITI", Vector2(r.position.x, r.position.y + 28), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
 	var x := r.position.x + 14
 	_txt("AZIONE", Vector2(x, r.position.y + 46), GOLD_L)
 	_txt("TASTIERA", Vector2(x + 152, r.position.y + 46), GOLD_L)
@@ -1313,3 +1313,48 @@ func _controls() -> void:
 		_txt(rows[i][1], Vector2(x + 152, y), Color(0.7, 0.85, 1.0))
 		_txt(rows[i][2], Vector2(x + 290, y), Color(0.7, 1.0, 0.8))
 	_txt(_k("ESC / INVIO per tornare", "A / B per tornare"), Vector2(r.position.x, r.end.y - 9), Color(0.6, 0.6, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+
+
+func _remap() -> void:
+	if not main.in_title_menu:
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.78))
+	var r := Rect2(size.x / 2 - 230, 4, 460, 264)
+	_panel(r)
+	_txt("RIMAPPA TASTI", Vector2(r.position.x, r.position.y + 28), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
+	var x := r.position.x + 14
+	_txt("AZIONE", Vector2(x, r.position.y + 46), GOLD_L)
+	_txt("TASTIERA", Vector2(x + 170, r.position.y + 46), GOLD_L)
+	_txt("CONTROLLER", Vector2(x + 320, r.position.y + 46), GOLD_L)
+	var n: int = Keybinds.ACTIONS.size()
+	for i in n + 1:
+		var y := 65.0 + i * 9.6
+		var sel: bool = i == main.remap_sel
+		if sel:
+			draw_rect(Rect2(r.position.x + 6, y - 9, r.size.x - 12, 9), Color(0.4, 0.28, 0.1, 0.55))
+		if i == n:
+			_txt("> RIPRISTINA I COMANDI PREDEFINITI" if sel else "  RIPRISTINA I COMANDI PREDEFINITI", Vector2(x, y), Color(1, 0.6, 0.5) if sel else Color(0.8, 0.5, 0.45))
+			continue
+		var act: String = Keybinds.ACTIONS[i][0]
+		_txt(("> " if sel else "  ") + str(Keybinds.ACTIONS[i][1]), Vector2(x, y), Color(1, 0.92, 0.5) if sel else Color(0.85, 0.83, 0.95))
+		var kc := Color(0.7, 0.85, 1.0)
+		var pc := Color(0.7, 1.0, 0.8)
+		var kt := Keybinds.key_text(act)
+		var pt := Keybinds.pad_text(act) if Keybinds.can_pad(act) else "STICK"
+		if sel:
+			if main.remap_col == 0:
+				kc = Color(1, 0.92, 0.5)
+			else:
+				pc = Color(1, 0.92, 0.5)
+			if main.remap_wait:
+				if main.remap_col == 0:
+					kt = "PREMI UN TASTO..."
+				else:
+					pt = "PREMI UN PULSANTE..."
+		_txt(kt, Vector2(x + 170, y), kc)
+		_txt(pt, Vector2(x + 320, y), pc)
+	var foot := _k("SU/GIU scegli  SX/DX colonna  INVIO cambia  ESC indietro", "SU/GIU  SX/DX colonna  A cambia  B indietro")
+	if main.remap_wait:
+		foot = "PREMI IL NUOVO COMANDO  (ESC ANNULLA)"
+	elif main.remap_msg != "":
+		foot = main.remap_msg
+	_txt(foot, Vector2(r.position.x, r.end.y - 9), Color(1, 0.85, 0.5) if (main.remap_wait or main.remap_msg != "") else Color(0.6, 0.6, 0.72), 9, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)

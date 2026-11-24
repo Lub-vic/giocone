@@ -84,7 +84,7 @@ static func _mk_clutter() -> Array:
 static func _mk_objects() -> Array:
 	var walls: Array = W()
 	var base: Array = [
-		[{"n": N("stump_top", 4), "d": 0.0046}, {"n": N("boulder_vil", 8), "d": 0.0046}, {"n": ["barrel_top", "crate_top", "hay_top"], "d": 0.0069},
+		[{"n": N("stump_top", 4), "d": 0.0046}, {"n": N("boulder_vil", 8), "d": 0.0046}, {"n": ["barrel_top", "crate_top", "hay_top"], "d": 0.0022},
 			{"n": walls, "d": 0.004, "cf": 0.05, "ct": 0.5}, {"n": ["cart_top"], "d": 0.0015}, {"n": ["tomb"], "d": 0.0012}, {"n": N("bush_sick", 10), "d": 0.004},
 			{"n": ["woodpile"], "d": 0.004, "cf": 0.05, "ct": 0.55}, {"n": ["signpost"], "d": 0.001}],
 		[{"n": N("grave_cross", 5) + N("grave_mound", 5), "d": 0.023, "cf": 0.05, "ct": 0.5}, {"n": N("grave_slab", 5), "d": 0.0092, "cf": 0.05, "ct": 0.5},
@@ -104,7 +104,7 @@ static func _mk_objects() -> Array:
 			{"n": ["menhir_top_ice"], "d": 0.0014}, {"n": N("log_top", 5), "d": 0.0046}, {"n": N("bush_frost", 10), "d": 0.0184},
 			{"n": walls, "d": 0.003, "cf": 0.05, "ct": 0.55}, {"n": ["statue_top"], "d": 0.0012},
 			{"n": ["ice_spikes"], "d": 0.007, "cf": 0.05, "ct": 0.55}],
-		[{"n": ["barrel_top", "crate_top", "cart_top"], "d": 0.0092}, {"n": N("boulder_vil", 8), "d": 0.0069},
+		[{"n": ["barrel_top", "crate_top", "cart_top"], "d": 0.003}, {"n": N("boulder_vil", 8), "d": 0.0069},
 			{"n": ["column_top"], "d": 0.0046}, {"n": walls, "d": 0.0069}, {"n": ["skullpile"], "d": 0.0034},
 			{"n": ["ore_cart"], "d": 0.003}, {"n": ["chain_post"], "d": 0.003, "cf": 0.05, "ct": 0.55}],
 	]

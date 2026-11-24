@@ -259,6 +259,10 @@ var map_zoom := 0              # mappa del mondo: 0 intera, 1 ingrandita attorno
 var map_pan := Vector2.ZERO
 var seen_load := PackedByteArray()   # esplorazione del mondo letta dal salvataggio
 var opt_from := "pause"
+var remap_sel := 0              # riga scelta nella schermata di rimappatura (l'ultima = ripristina)
+var remap_col := 0              # 0 tastiera, 1 controller
+var remap_wait := false         # in attesa del nuovo tasto
+var remap_msg := ""
 var ctrl_from := "options"
 var in_title_menu := false
 const BRIGHT := [0.8, 0.9, 1.0, 1.12, 1.25, 1.4]
@@ -274,6 +278,7 @@ const OPTIONS := [
 	{"k": "auto_fire", "n": "FUOCO AUTOMATICO", "t": "toggle"},
 	{"k": "photo", "n": "GRAFICA FOTO (PROVA)", "t": "toggle"},
 	{"k": "aiground", "n": "TERRENO AI (PROVA)", "t": "toggle"},
+	{"k": "remap", "n": "RIMAPPA TASTI", "t": "action"},
 	{"k": "ctrl", "n": "CONTROLLI", "t": "action"},
 	{"k": "back", "n": "INDIETRO", "t": "action"},
 ]
@@ -331,6 +336,7 @@ var wr_node: WorldRender = null
 
 func _ready() -> void:
 	Game.setup_input()
+	Keybinds.init()
 	if OS.get_cmdline_user_args().size() == 0:
 		load_settings()
 	if OS.has_feature("mobile") and not FileAccess.file_exists("user://settings.cfg"):
@@ -1282,9 +1288,9 @@ var cur_poi_type := ""
 
 func poi_chest(c: Vector2i, rare := false) -> void:
 	# meno scrigni nei luoghi: quelli comuni compaiono meta' delle volte, i preziosi non sono garantiti
-	if not rare and randf() < 0.5:
+	if not rare and randf() < 0.75:
 		return
-	if rare and randf() < 0.45:
+	if rare and randf() < 0.6:
 		rare = false
 	var cc := free_spot(c, Vector2i(1, 1))
 	if cc.x < 0:
@@ -1299,6 +1305,8 @@ func poi_chest(c: Vector2i, rare := false) -> void:
 
 
 func poi_scatter(names: Array, c: Vector2i, n: int, rx: int, ry: int) -> void:
+	if names.has("crate_top") or names.has("barrel_top"):
+		n = maxi(1, n / 2)   # meno casse e barili sparsi
 	for i in n:
 		try_place(names[randi() % names.size()], c + Vector2i(randi_range(-rx, rx), randi_range(-ry, ry)))
 
@@ -1530,7 +1538,7 @@ func world_strike(pos: Vector2, face: Vector2, reach: float, arc: float, mult: f
 	else:
 		var damage := 10.0 * mult * e * (1.0 + 0.04 * player.a("for"))
 		if p != null and p.dlight:
-			damage = maxf(damage, 8.0)
+			damage = maxf(damage, 16.0)   # gli oggetti leggeri cedono al primo colpo con qualsiasi arma
 		left -= damage
 	var cp := Vector2(bc) * Game.TS + Vector2(8, 8)
 	burst(cp, Destruct.COL[mat], 6, 38.0, 0.35)
@@ -1857,13 +1865,13 @@ func apply_world_edits(key: Vector2i) -> void:
 func road_detail_chunk(key: Vector2i) -> void:
 	var r0 := chunk_cells(key)
 	var det := {
-		0: ["cart_top", "hay_top", "barrel_top", "grave_cross_0", "lamp_top"],
+		0: ["cart_top", "hay_top", "grave_cross_0", "lamp_top", "stump_top"],
 		1: ["grave_cross_1", "grave_mound_0", "skullpile", "grave_slab_0"],
 		2: ["log_top_0", "stump_top", "skullpile", "log_top_3"],
 		3: ["log_top_1", "stump_top", "bone_ribs_1"],
 		4: ["column_top", "statue_top", "grave_cross_0"],
 		5: ["crystal_top_ice", "menhir_top_ice", "log_top_2"],
-		6: ["barrel_top", "crate_top", "cart_top", "lamp_top"],
+		6: ["barrel_top", "cart_top", "lamp_top", "lamp_top"],
 	}
 	for y in range(maxi(6, r0.position.y), mini(Game.MH - 6, r0.end.y)):
 		for x in range(maxi(6, r0.position.x), mini(Game.MW - 6, r0.end.x)):
@@ -2148,8 +2156,10 @@ func build_tiles_world() -> void:
 
 func populate_world() -> void:
 	var v0 := SEEDS[0]
-	# villaggio: falo', anziano, ingresso della cripta finale
-	persist["fires"][key(v0 + Vector2i(3, 0))] = true
+	Story.init_world(self)
+	# villaggio: falo', anziano, ingresso della cripta finale (il falo' e' spento finche' il villaggio e' invaso)
+	if Story.village_free(self):
+		persist["fires"][key(v0 + Vector2i(3, 0))] = true
 	add_prop("bonfire", v0 + Vector2i(3, 0))
 	if not run_mode and last_fire.is_empty():
 		last_fire = {"area": "world", "cell": v0 + Vector2i(3, 0)}
@@ -2192,6 +2202,7 @@ func populate_world() -> void:
 	place_shrines()
 	place_arenas()
 	quest_defs.clear()
+	Story.world_setup(self)
 	place_villagers()
 	for qid2 in quest_defs:
 		if quest_state(qid2) == "active" and (quest_defs[qid2]["type"] == "fetch" or quest_defs[qid2]["type"] == "poi_fetch"):
@@ -2322,7 +2333,7 @@ func far_from_sites(c: Vector2i, d_seed: float, d_entr: float) -> bool:
 
 
 func nook_chunk(key: Vector2i) -> void:
-	if randf() >= 0.62:
+	if randf() >= 0.3:
 		return
 	var r0 := chunk_cells(key)
 	for att in 10:
@@ -2340,7 +2351,7 @@ func nook_chunk(key: Vector2i) -> void:
 		nook_count += 1
 		decorate_nook(c, biome[idx(c)])
 		var rare := nook_count % 4 == 0
-		if not rare and pop_rng.randf() < 0.5:
+		if not rare and pop_rng.randf() < 0.7:
 			continue   # non ogni angolo nascosto ha un tesoro
 		var ch := add_prop("chest", c)
 		if ch != null:
@@ -2498,7 +2509,9 @@ func spawn_tick() -> void:
 ## quanti nemici popolano il mondo cresce col livello: all'inizio circa la meta', poi tutti (dal livello ~14).
 ## La scelta e' fissa per ogni posto (non cambia avvicinandosi e allontanandosi).
 func spawn_present(e: Dictionary) -> bool:
-	if run_mode:
+	if e.has("story") and Story.is_dead(self, e):
+		return false    # i mostri dell'evento gia' uccisi non tornano al riposo
+	if run_mode or e.get("force", false):
 		return true
 	var keep := clampf(0.5 + 0.04 * float(player.lv - 1), 0.5, 1.0)
 	var p: Vector2 = e["pos"]
@@ -2511,7 +2524,7 @@ func ferocity(boss: bool) -> float:
 	if run_mode or player == null:
 		return 1.0
 	var lvf := float(player.lv - 1)
-	return clampf(0.85 + 0.0125 * lvf, 0.85, 1.0) if boss else clampf(0.68 + 0.027 * lvf, 0.68, 1.0)
+	return clampf(0.85 + 0.0125 * lvf, 0.85, 1.0) if boss else clampf(0.78 + 0.022 * lvf, 0.78, 1.0)
 
 
 func spawn_all() -> void:
@@ -2744,6 +2757,9 @@ func objective() -> String:
 		return "CUSTODE IN ARRIVO %d:%02d" % [left / 60, left % 60]
 	if not persist["bosses"].has("boss_jailer"):
 		return "ESCI DALLE CELLE: SCONFIGGI IL CARCERIERE"
+	var story_obj := Story.objective(self)
+	if story_obj != "":
+		return story_obj
 	if journey_step() < JOURNEY_N:
 		return journey_text()
 	if guardians >= 3:
@@ -3088,6 +3104,8 @@ func journey_advance(msg: String, souls: int, relics: int, weapon: int) -> void:
 
 
 func journey_update() -> void:
+	if persist["bosses"].has("boss_jailer"):
+		Story.update(self, get_process_delta_time())
 	if journey_step() >= JOURNEY_N or area != "world" or not persist["bosses"].has("boss_jailer"):
 		return
 	if journey_step() == 2 and int(persist.get("journey_poi", -1)) < 0:
@@ -3095,7 +3113,7 @@ func journey_update() -> void:
 	match journey_step():
 		0:
 			var tg: Variant = journey_target()
-			if tg != null and (tg as Vector2).distance_to(player.position) < 30.0:
+			if tg != null and Story.village_free(self) and (tg as Vector2).distance_to(player.position) < 30.0:
 				persist["journey_poi"] = -1
 				journey_advance("L'ANZIANO: FUORI C'E' PIU' DI QUEL CHE VEDI. CERCA I DIARI: RACCONTANO COME FINI' TUTTO", 60, 0, 0)
 		1:
@@ -4992,7 +5010,7 @@ func build_village() -> void:
 				place_tree("top_dead_%d" % (randi() % 4) if randf() < 0.7 else "top_sick_%d" % (randi() % 4), c)
 			elif r < 0.03:
 				place_tree("bush_sick_%d" % (randi() % 4), c)
-			elif r < 0.04:
+			elif r < 0.033:
 				try_place(["barrel_top", "crate_top", "hay_top"][randi() % 3], c)
 
 
@@ -5041,7 +5059,7 @@ func build_district(c: Vector2i) -> void:
 	for y in range(-20, 21, 6):
 		for x0 in vx:
 			try_place("lamp_top", c + Vector2i(x0 - 1, y), true)
-	for i in 10:
+	for i in 4:
 		try_place(["barrel_top", "crate_top", "cart_top"][randi() % 3], c + Vector2i(randi_range(-29, 29), randi_range(-21, 21)))
 
 
@@ -5164,6 +5182,7 @@ const NPCS := {
 		"lines": ["FABBRO: Le forge non si spengono mai. Qualcosa sotto di loro le nutre.",
 			"FABBRO: Il Colosso di Brace fu forgiato per custodire il secondo sigillo.",
 			"FABBRO: Affilo la tua lama per 600 anime. Il ferro non mente."]},
+	"fuggiasco": {"n": "IL FUGGIASCO", "spr": "villager_a", "tint": Color(0.8, 0.65, 0.65)},
 }
 const PAGES := [
 	"DIARIO DEL CUSTODE: Il Signore non volle morire, e la cenere fu il suo debito.",
@@ -5213,6 +5232,9 @@ func souls_ok(n: int) -> bool:
 
 
 func talk(p: Prop) -> void:
+	if p.npc_id == "fuggiasco":
+		say(Story.ESCAPE_LINE)
+		return
 	var d: Dictionary = NPCS[p.npc_id]
 	var st: Dictionary = persist.get("npc", {})
 	persist["npc"] = st
@@ -5263,6 +5285,8 @@ func talk(p: Prop) -> void:
 func place_npcs_and_pages() -> void:
 	add_npc("becchino", SEEDS[1] + Vector2i(2, 10))
 	add_npc("eremita", SEEDS[2] + Vector2i(-1, 4))
+	if persist["bosses"].has("boss_jailer") and not Story.village_free(self):
+		add_npc("fuggiasco", ENTR["d0"] + Vector2i(3, 0))
 	add_npc("strega", SEEDS[3] + Vector2i(3, 2))
 	add_npc("sacerdote", SEEDS[4] + Vector2i(0, 11))
 	add_npc("eremita_ghiaccio", SEEDS[5] + Vector2i(-4, 7))
@@ -6018,7 +6042,7 @@ func populate_dungeon() -> void:
 			if c != Vector2i(-1, -1):
 				var pick: String = ["grave_slab_0", "tomb", "skullpile", "barrel_top", "crate_top", "coffin", "statue_top", "column_top"][randi() % 8]
 				try_place(pick, c)
-		if randf() < 0.18:
+		if randf() < 0.09:
 			var cc := rand_cell(inner)
 			if cc != Vector2i(-1, -1):
 				add_prop("chest", cc)
@@ -6326,6 +6350,34 @@ func burst(pos: Vector2, c: Color, n: int, speed: float, life: float) -> void:
 	p.emitting = true
 
 
+## proiettili e magie: rompono gli oggetti leggeri (barili, casse, fieno...) entro il raggio r, come un colpo di qualsiasi arma
+func light_break(pos: Vector2, r: float, max_n := 1) -> bool:
+	var any := false
+	for i in max_n:
+		var got := false
+		for p in props.duplicate():
+			if is_instance_valid(p) and p.breakable and p.position.distance_to(pos) < r + 8.0:
+				break_prop(p)
+				got = true
+				break
+		if not got and area == "world" and skin is W3DSkin:
+			got = (skin as W3DSkin).hit_world_prop(pos, Vector2.RIGHT, r, 4.0, 1.0, "sword", false)
+		if not got:
+			break
+		any = true
+	return any
+
+
+## le salite rallentano e le discese accelerano un poco (pendenza in quota per cella lungo la direzione di marcia)
+func slope_speed(pos: Vector2, dir: Vector2) -> float:
+	if area != "world" or dir.length() < 0.1 or not (skin is W3DSkin):
+		return 1.0
+	var sk := skin as W3DSkin
+	var d := dir.normalized() * 12.0
+	var g := sk.elev_at((pos.x + d.x) / 16.0, (pos.y + d.y) / 16.0) - sk.elev_at(pos.x / 16.0, pos.y / 16.0)
+	return clampf(1.0 - g / 12.0 * 16.0 * 0.4, 0.8, 1.12)
+
+
 func break_prop(p: Prop) -> void:
 	props.erase(p)
 	block.erase(p.cell)
@@ -6341,6 +6393,7 @@ func enemy_died(e: Enemy) -> void:
 	if not (e.is_boss and e.kind == "vampire"):
 		mat_drops(str(e.kind), e.champ)
 	if not e.sref.is_empty():
+		Story.on_kill(self, e.sref)
 		e.sref["alive"] = false
 		e.sref["node"] = null
 	quest_event("kill", e.kind, e.champ)
@@ -6482,6 +6535,10 @@ func sleep_skip() -> void:
 
 
 func rest(p: Prop) -> void:
+	if Story.blocks_fire(self, p):
+		say("IL FALO' E' SPENTO: I MOSTRI HANNO INVASO IL VILLAGGIO")
+		snd("hurt")
+		return
 	if p.kind == "bonfire":
 		light_bonfire(p)
 	last_fire = {"area": area, "cell": p.cell}
@@ -6911,6 +6968,9 @@ func interact(p) -> void:
 		"bed_top":
 			rest(p)
 		"elder":
+			if not Story.village_free(self):
+				say(Story.elder_line(self))
+				return
 			say(LORE[elder_i % LORE.size()])
 			elder_i += 1
 			if journey_step() == 0 and persist["bosses"].has("boss_jailer"):
@@ -7005,6 +7065,8 @@ func _do_change(dest: String) -> void:
 			if d["dest"] == prev:
 				lock_pos = d["pos"]
 		say(Game.BIO[biome[idx(c)]]["n"])
+		if prev == "d0":
+			Story.on_prison_exit(self)
 	elif dest.begins_with("int|"):
 		player.position = cell_pos(exit_cell) + Vector2(0, -20)
 		say(dun["n"])
@@ -7086,6 +7148,12 @@ func opt_activate() -> void:
 		"ctrl":
 			ctrl_from = "options"
 			state = "controls"
+		"remap":
+			remap_sel = 0
+			remap_col = 0
+			remap_wait = false
+			remap_msg = ""
+			state = "remap"
 		"back":
 			state = opt_from
 			if opt_from == "title":
@@ -7182,12 +7250,56 @@ func _activate_title_selection() -> void:
 				state = "options"
 
 
+## ---- rimappatura tasti
+func _remap_activate() -> void:
+	if remap_sel >= Keybinds.ACTIONS.size():
+		Keybinds.reset_all()
+		remap_msg = "COMANDI RIPRISTINATI"
+		snd("page")
+		return
+	if remap_col == 1 and not Keybinds.can_pad(str(Keybinds.ACTIONS[remap_sel][0])):
+		remap_msg = "QUESTO COMANDO USA LO STICK: NON SI CAMBIA"
+		return
+	remap_wait = true
+	remap_msg = ""
+	snd("page")
+
+
+func _remap_input(ev: InputEvent) -> void:
+	if remap_wait:
+		if ev is InputEventKey and ev.pressed and not ev.echo and ev.physical_keycode == KEY_ESCAPE:
+			remap_wait = false
+			get_viewport().set_input_as_handled()
+			return
+		if Keybinds.accepts(ev, remap_col == 1):
+			var act := str(Keybinds.ACTIONS[remap_sel][0])
+			var sw := Keybinds.assign(act, ev, remap_col == 1)
+			remap_wait = false
+			remap_msg = "SCAMBIATO CON: " + sw if sw != "" else "COMANDO ASSEGNATO"
+			snd("page")
+		elif ev is InputEventKey and ev.pressed and not ev.echo:
+			remap_msg = "TASTO RISERVATO, SCEGLINE UN ALTRO"
+		get_viewport().set_input_as_handled()
+		return
+	var n := Keybinds.ACTIONS.size() + 1
+	if ev.is_action_pressed("ui_down"):
+		remap_sel = (remap_sel + 1) % n
+	elif ev.is_action_pressed("ui_up"):
+		remap_sel = (remap_sel + n - 1) % n
+	elif ev.is_action_pressed("ui_left") or ev.is_action_pressed("ui_right"):
+		remap_col = 1 - remap_col
+	elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
+		_remap_activate()
+	elif ev.is_action_pressed("ui_cancel"):
+		state = "options"
+
+
 func _handle_menu_click(pos: Vector2) -> bool:
 	if state == "options":
 		if pos.x < 80.0 or pos.x > 400.0:
 			return false
-		var row := floori((pos.y - 63.0) / 14.0)
-		if row < 0 or row >= OPTIONS.size() or pos.y >= 75.0 + row * 14.0:
+		var row := floori((pos.y - 49.0) / 14.0)
+		if row < 0 or row >= OPTIONS.size() or pos.y >= 61.0 + row * 14.0:
 			return false
 		opt_sel = row
 		var option: Dictionary = OPTIONS[row]
@@ -7270,6 +7382,17 @@ func _handle_menu_click(pos: Vector2) -> bool:
 		return false
 	if state == "controls":
 		state = ctrl_from
+		return true
+	if state == "remap":
+		if remap_wait:
+			return true
+		var rrow := floori((pos.y - 56.0) / 9.6)
+		if rrow < 0 or rrow > Keybinds.ACTIONS.size():
+			return false
+		remap_sel = rrow
+		if rrow < Keybinds.ACTIONS.size():
+			remap_col = 1 if pos.x >= 340.0 and Keybinds.can_pad(str(Keybinds.ACTIONS[rrow][0])) else 0
+		_remap_activate()
 		return true
 	if state == "dialog":
 		if pos.y < 230.0 or pos.y > 254.0:
@@ -7458,6 +7581,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 	if state == "controls":
 		if ev.is_action_pressed("ui_cancel") or ev.is_action_pressed("ui_accept"):
 			state = ctrl_from
+		return
+	if state == "remap":
+		_remap_input(ev)
 		return
 	if state == "title":
 		if ev.is_action_pressed("ui_down"):
@@ -9987,6 +10113,32 @@ func _process(_dt: float) -> void:
 				journey_update()
 			print("JOURNEY fine: ", objective())
 			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--storytest"):
+		tgs += 1
+		if tgs == 5:
+			persist["bosses"]["boss_jailer"] = true
+			var fire: Prop = null
+			for pr in props:
+				if pr.kind == "bonfire" and Story.blocks_fire(self, pr):
+					fire = pr
+			print("STORY area=", area, " libero=", Story.village_free(self), " nemici evento=", Story.total, " falo bloccato trovato=", fire != null, " acceso=", fire != null and fire.lit)
+			Story.update(self, 0.6)
+			print("STORY obiettivo: ", objective(), " | msg=", msg)
+			rest(fire)
+			print("STORY riposo bloccato, msg=", msg)
+			var first := true
+			for e in spawns.duplicate():
+				if e.get("story", "") == "invasione":
+					Story.on_kill(self, e)
+					e["alive"] = false
+					if first:
+						first = false
+						spawn_all()     # riposo: i morti non devono tornare
+						Story.world_setup(self)
+						print("STORY dopo 1 morto e riposo: restano=", Story.left_n, " spawn evento=", spawns.filter(func(x): return x.get("story", "") == "invasione").size())
+			Story.update(self, 0.6)
+			print("STORY dopo strage: libero=", Story.village_free(self), " falo acceso=", fire.lit, " obiettivo: ", objective())
+			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--eventtest"):
 		tgs += 1
 		if tgs == 5:
@@ -10173,6 +10325,8 @@ func _process(_dt: float) -> void:
 			match near_obj.kind:
 				"bonfire":
 					prompt = "E  DORMI QUI" if near_obj.lit else "E  ALLESTISCI IL CAMPO"
+					if Story.blocks_fire(self, near_obj):
+						prompt = "FALO' SPENTO: IL VILLAGGIO E' INVASO"
 				"dig":
 					prompt = "E  SCAVA"
 				"bed_top":

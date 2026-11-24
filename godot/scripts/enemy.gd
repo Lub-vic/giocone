@@ -193,6 +193,8 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 	dmg *= (0.97 + 0.03 * minf(1.0, lvf / 10.0)) * (1.0 + 0.008 * lvf * lsc)
 	dmg *= 1.0 + 0.5 * (hp_mult - 1.0)   # le zone avanzate colpiscono anche piu' forte
 	souls_mult *= 1.0 + 0.02 * lvf
+	hp *= 1.12      # difficolta' un po' piu' alta (+12% vita, +10% danno)
+	dmg *= 1.10
 	spr = Sprite2D.new()
 	spr.texture = Game.tex(sprite_name)
 	if k == "ooze_small":

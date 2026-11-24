@@ -300,9 +300,25 @@ static func build(kind: String, w: float, h: float, avg: Color, seed_v: int) -> 
 			b.cyl(Transform3D(Basis(Vector3(0, 0, 1), PI * 0.5), Vector3(-w * 0.45, 0.2, 0)), 0.2, 0.18, w * 0.9, 7, Color(0.19, 0.12, 0.08), 0.12)
 		else:
 			b.cyl(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0)), w * 0.4, w * 0.3, 0.5, 8, Color(0.19, 0.12, 0.08), 0.12)
-	elif kind.begins_with("chest") or kind.begins_with("tomb"):
-		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.3, 0)), Vector3(w * 0.8, 0.55, h * 0.7), Color(0.24, 0.17, 0.11) if kind == "chest" else Color(0.26, 0.25, 0.27), 0.1, 0)
-		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.62, 0)), Vector3(w * 0.84, 0.14, h * 0.74), Color(0.30, 0.22, 0.12) if kind == "chest" else Color(0.3, 0.29, 0.31), 0.1, 0)
+	elif kind.begins_with("chest"):
+		# baule vero: corpo di legno, coperchio ARCUATO, fasce di ferro, serratura d'oro luminosa (non una scatola)
+		var wood := Color(0.30, 0.17, 0.08)
+		var iron := Color(0.15, 0.15, 0.18)
+		var bw := w * 0.86
+		var bd := h * 0.62
+		var r := bd * 0.5
+		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.2, 0)), Vector3(bw, 0.4, bd), wood, 0.1, 0)
+		b.cyl(Transform3D(Basis(Vector3(0, 0, 1), PI * 0.5), Vector3(bw * 0.5, 0.4, 0)), r, r, bw, 8, _dk(wood, 1.25), 0.1)
+		for x in [-0.34, 0.0, 0.34]:
+			b.box(Transform3D(Basis.IDENTITY, Vector3(x * bw, 0.2, 0)), Vector3(0.08, 0.42, bd + 0.04), iron, 0.05, 0)
+			b.cyl(Transform3D(Basis(Vector3(0, 0, 1), PI * 0.5), Vector3(x * bw + 0.04, 0.4, 0)), r + 0.025, r + 0.025, 0.08, 8, iron, 0.05)
+		for sx in [-1, 1]:
+			for sz in [-1, 1]:
+				b.box(Transform3D(Basis.IDENTITY, Vector3(sx * bw * 0.5, 0.06, sz * bd * 0.5)), Vector3(0.1, 0.12, 0.1), iron, 0.05, 0)
+		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.38, bd * 0.5 + 0.03)), Vector3(0.14, 0.18, 0.06), Color(1.0, 0.78, 0.25, 0.3), 0.0, 0)
+	elif kind.begins_with("tomb"):
+		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.3, 0)), Vector3(w * 0.8, 0.55, h * 0.7), Color(0.26, 0.25, 0.27), 0.1, 0)
+		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.62, 0)), Vector3(w * 0.84, 0.14, h * 0.74), Color(0.3, 0.29, 0.31), 0.1, 0)
 	elif kind.begins_with("signpost"):
 		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.6, 0)), Vector3(0.1, 1.2, 0.1), Color(0.2, 0.13, 0.08), 0.05, 0)
 		b.box(Transform3D(Basis.IDENTITY, Vector3(0.2, 1.0, 0)), Vector3(0.8, 0.28, 0.06), Color(0.26, 0.18, 0.1), 0.05, 0)

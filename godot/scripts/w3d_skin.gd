@@ -9,8 +9,8 @@ const FLOOR_COL := [Color(0.20, 0.19, 0.20), Color(0.17, 0.19, 0.14), Color(0.14
 const WALL_COL := [Color(0.20, 0.19, 0.22), Color(0.17, 0.19, 0.15), Color(0.14, 0.17, 0.14), Color(0.14, 0.18, 0.16), Color(0.22, 0.21, 0.25), Color(0.38, 0.42, 0.50), Color(0.22, 0.11, 0.10)]
 const KNOWN := ["goblin", "goblin_archer", "skeleton", "skel_archer", "ghoul", "kobold", "orc", "wolf"]
 const CAM_H_ROOM := 22.0
-const CAM_H_WORLD := CAM_H_ROOM
-const CAM_H_WORLD_FAR := 30.0
+const CAM_H_WORLD := 28.0
+const CAM_H_WORLD_FAR := 36.0
 
 var gm                           # Main
 var static_root: Node3D
@@ -24,6 +24,8 @@ var crescent: ArrayMesh
 var ring_m: ArrayMesh
 var shard_m: ArrayMesh
 var shot_t := 0.0
+var fx_step := 0
+var fx_last := -1
 var shot_n := 0
 var want_shot := false
 var char_mode := 0               # 0 cubetti dall'alto (default), 1 cubetti piatti, 2 modelli stilizzati (F8 cicla)
@@ -37,9 +39,7 @@ var dust: CPUParticles3D
 
 
 func _ready() -> void:
-	if not W3D.gp_added:
-		RenderingServer.global_shader_parameter_add("w3d_player", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3.ZERO)
-		W3D.gp_added = true
+	W3D.add_globals()
 	want_shot = OS.get_cmdline_user_args().has("--skinshot")
 	ed = W3DEdit.new()
 	ed.sk = self
@@ -838,7 +838,7 @@ func _real_lights(dt: float) -> void:
 		var fl := 1.0 + sin(lamp_t * 11.0 + cur.x * 3.1) * 0.07 + sin(lamp_t * 23.0 + cur.z) * 0.04
 		ol.light_energy = ce * fl
 		ol.visible = ce > 0.02
-	hero_light.position = Vector3(pos.x, 3.0, pos.y)
+	hero_light.position = Vector3(pos.x, 3.0 + elev_y, pos.y)
 	# nel mondo aperto: luce piu' fredda e desaturata, lampade piu' piccole (niente dominante arancione)
 	hero_light.light_color = Color(0.78, 0.84, 1.0) if world_on else Color(0.95, 0.85, 0.74)
 	hero_light.light_energy = 0.55 if world_on else 0.7
@@ -1078,7 +1078,7 @@ func burst3d(p2: Vector2, col: Color, n: int, speed: float, life: float) -> void
 	m.albedo_color = col.lightened(0.25)
 	bm.material = m
 	pr.mesh = bm
-	pr.position = Vector3(p2.x / 16.0, 0.9, p2.y / 16.0)
+	pr.position = Vector3(p2.x / 16.0, 0.9 + elev_at(p2.x / 16.0, p2.y / 16.0), p2.y / 16.0)
 	vp.add_child(pr)
 	pr.emitting = true
 	bursts_live += 1
@@ -1235,6 +1235,8 @@ func _booms_update(dt: float) -> void:
 # ------------------------------------------------------------------ oggetti dinamici
 func _drop_dyn(id) -> void:
 	if dyn.has(id):
+		if dyn[id].has("trail"):
+			(dyn[id]["trail"] as W3DFx.Trail).release()
 		var n: Node3D = dyn[id]["node"]
 		if is_instance_valid(n):
 			n.queue_free()
@@ -1553,15 +1555,15 @@ func _sync_fx() -> void:
 		if n is Hazard:
 			var h: Hazard = n
 			if not dyn.has(id):
-				var rm := MeshInstance3D.new()
-				rm.mesh = ring_m
-				rm.material_override = mat_chr
-				vp.add_child(rm)
-				dyn[id] = {"node": rm, "model": false, "seen": 0.0, "last": Vector2.ZERO, "ph": 0.0, "flow": 0.0, "kind": "hazard"}
-			var rn3: Node3D = dyn[id]["node"]
-			var prog := clampf(h.t / maxf(h.delay, 0.01), 0.0, 1.0)
-			rn3.position = Vector3(h.position.x / 16.0, 0.0, h.position.y / 16.0)
-			rn3.scale = Vector3.ONE * (h.radius / 16.0) * (0.35 + 0.65 * prog if h.t < h.delay else 1.0)
+				var hfx := W3DFx.HazardFx.new(h.col)
+				vp.add_child(hfx)
+				dyn[id] = {"node": hfx, "model": false, "seen": 0.0, "last": Vector2.ZERO, "ph": 0.0, "flow": 0.0, "kind": "hazard", "struck": false}
+			var rn3: W3DFx.HazardFx = dyn[id]["node"]
+			rn3.position = Vector3(h.position.x / 16.0, 0.04, h.position.y / 16.0)
+			rn3.update_fx(h.t, h.delay, h.life, h.tick, h.radius / 16.0, get_process_delta_time(), elev_at(h.position.x / 16.0, h.position.y / 16.0))
+			if h.t >= h.delay and h.tick <= 0.0 and not bool(dyn[id]["struck"]):
+				dyn[id]["struck"] = true
+				gm.shake(clampf(h.radius / 20.0, 1.0, 3.5))
 			dyn[id]["seen"] = lamp_t
 		elif n is Hazard.Shock:
 			var sh := n as Hazard.Shock
@@ -1595,7 +1597,12 @@ func _sync_fx() -> void:
 		elif n is Projectile or n is PArrow or n is Pickup:
 			if not dyn.has(id):
 				var pm := MeshInstance3D.new()
-				pm.mesh = _proj_mesh(n)
+				var lcol: Variant = _light_proj_col(n)
+				if lcol != null:
+					pm.mesh = _core_mesh()
+					pm.add_child(W3DFx.halo(lcol as Color, 1.6))
+				else:
+					pm.mesh = _proj_mesh(n)
 				pm.material_override = mat_chr
 				var sc := 1.0
 				if n is Pickup:
@@ -1603,6 +1610,8 @@ func _sync_fx() -> void:
 				pm.scale = Vector3.ONE * sc
 				vp.add_child(pm)
 				dyn[id] = {"node": pm, "model": false, "seen": 0.0, "last": Vector2.ZERO, "ph": 0.0, "flow": 0.0, "kind": "fxm", "src": weakref(n), "lp": (n as Node2D).position, "imp": not (n is Pickup)}
+				if lcol != null:
+					dyn[id]["trail"] = W3DFx.Trail.new(vp, lcol as Color)
 			var pn: Node3D = dyn[id]["node"]
 			var n2 := n as Node2D
 			pn.position = Vector3(n2.position.x / 16.0, 0.9, n2.position.y / 16.0)
@@ -1611,6 +1620,8 @@ func _sync_fx() -> void:
 			else:
 				pn.rotation.y += 0.2
 				pn.position.y = 0.6 + sin(lamp_t * 6.0 + float(id % 7)) * 0.1
+			if dyn[id].has("trail"):
+				(dyn[id]["trail"] as W3DFx.Trail).push(pn.position)
 			dyn[id]["seen"] = lamp_t
 			dyn[id]["lp"] = n2.position
 		elif n is Label:
@@ -1647,9 +1658,10 @@ func _sync_popup(lb: Label) -> void:
 		ov.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		pop_layer.add_child(ov)
 		pop_nodes[id] = {"l": ov, "src": weakref(lb)}
-	var wp := Vector3(lb.position.x / 16.0 + 0.5, 1.6 + lb.position.y * 0.0, lb.position.y / 16.0)
+	var wp := Vector3(lb.position.x / 16.0 + 0.5, 1.6 + elev_at(lb.position.x / 16.0, lb.position.y / 16.0), lb.position.y / 16.0)
 	var sp: Vector2 = cam.unproject_position(wp)
-	var k := Vector2(960.0, 540.0) / Vector2(vp.size)
+	# lo schermo dei livelli canvas e' 480x270 (scala del contenuto), non la risoluzione del 3D
+	var k := pop_layer.get_viewport().get_visible_rect().size / Vector2(vp.size)
 	ov.position = (sp * k - ov.size * 0.5).floor()
 	ov.modulate.a = lb.modulate.a
 	ov.visible = not cam.is_position_behind(wp)
@@ -1795,6 +1807,224 @@ func _wh(vx: float, vz: float) -> float:
 	return n_h.get_noise_2d(vx, vz) * 0.2 * smoothstep(1.4, 3.4, rd)
 
 
+## ------------------------------------------------------------------ quote del terreno
+## Il suolo ha vere altezze: ogni bioma ha una quota di base (il cimitero e' su una collina, la cattedrale su un altopiano...), sfumata
+## fra una regione e l'altra, con ondulazioni; piatta (a quota fissa) per villaggi e ingressi, scavata a valle lungo i fiumi.
+## La mappa delle quote va alla GPU: lo shader solleva ogni vertice (terreno, case, alberi, personaggi) in base alla sua posizione.
+const ELEV_BASE := [0.0, 1.2, 0.3, 0.0, 1.0, 1.4, 0.4]       # quota di base di ogni regione (sfumata)
+const ELEV_ROUGH := [0.25, 3.8, 2.6, 0.3, 2.4, 4.5, 2.0]     # altezza dei rilievi (colline) di ogni regione
+const EG := 8                      # passo della griglia grossa (celle)
+const ET := 4                      # passo dei texel della mappa delle quote (celle)
+var elev := PackedFloat32Array()
+var elev_tw := 0
+var elev_th := 0
+var elev_ok := false
+var elev_seed := -1
+var elev_tex: ImageTexture
+var g_w := 0
+var g_h := 0
+var g_base := PackedFloat32Array()
+var g_rough := PackedFloat32Array()
+var g_river := PackedFloat32Array()
+var g_coast := PackedFloat32Array()
+var elev_sites: Array = []
+var n_elev := FastNoiseLite.new()
+
+
+func _blur_grid(src: PackedFloat32Array) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(src.size())
+	for j in g_h:
+		for i in g_w:
+			var s := 0.0
+			var wsum := 0.0
+			for dj in range(-1, 2):
+				for di in range(-1, 2):
+					var qi := i + di
+					var qj := j + dj
+					if qi < 0 or qj < 0 or qi >= g_w or qj >= g_h:
+						continue
+					var wt := (2.0 - absf(di)) * (2.0 - absf(dj))
+					s += src[qj * g_w + qi] * wt
+					wsum += wt
+			out[j * g_w + i] = s / wsum
+	return out
+
+
+func _gs(arr: PackedFloat32Array, cx: float, cz: float) -> float:
+	var fx := clampf(cx / EG, 0.0, g_w - 1.001)
+	var fz := clampf(cz / EG, 0.0, g_h - 1.001)
+	var i0 := floori(fx)
+	var j0 := floori(fz)
+	var tx := smoothstep(0.0, 1.0, fx - i0)
+	var tz := smoothstep(0.0, 1.0, fz - j0)
+	var a := lerpf(arr[j0 * g_w + i0], arr[j0 * g_w + i0 + 1], tx)
+	var b := lerpf(arr[(j0 + 1) * g_w + i0], arr[(j0 + 1) * g_w + i0 + 1], tx)
+	return lerpf(a, b, tz)
+
+
+func _elev_flatten_h(cx: float, cz: float) -> float:
+	var rough := _gs(g_rough, cx, cz)
+	# colline: cupole dove il rumore e' alto (a bassa frequenza: 25-40 celle di diametro), pianura altrove
+	var shape := smoothstep(-0.05, 0.7, n_elev.get_noise_2d(cx, cz))
+	var h := _gs(g_base, cx, cz) + shape * rough
+	h *= _gs(g_river, cx, cz) * _gs(g_coast, cx, cz)
+	return h
+
+
+func _elev_build() -> void:
+	if elev_ok and elev_seed == int(gm.world_seed):
+		return
+	var t0 := Time.get_ticks_msec()
+	var W := Game.MW
+	var H := Game.MH
+	g_w = ceili(float(W) / EG) + 2
+	g_h = ceili(float(H) / EG) + 2
+	g_base.resize(g_w * g_h)
+	g_rough.resize(g_w * g_h)
+	g_river.resize(g_w * g_h)
+	g_coast.resize(g_w * g_h)
+	n_elev.seed = int(gm.world_seed) + 77
+	n_elev.frequency = 0.03
+	n_elev.fractal_octaves = 2
+	n_elev.fractal_gain = 0.4
+	var segs: Array = []
+	for rv in gm.RIVERS:
+		for k in (rv as Array).size() - 1:
+			segs.append([Vector2((rv as Array)[k]), Vector2((rv as Array)[k + 1])])
+	for j in g_h:
+		for i in g_w:
+			var cx := i * EG
+			var cz := j * EG
+			var b := clampi(gm.biome_at(mini(cx, W - 1), mini(cz, H - 1)), 0, ELEV_BASE.size() - 1)
+			g_base[j * g_w + i] = ELEV_BASE[b]
+			g_rough[j * g_w + i] = ELEV_ROUGH[b]
+			# fiumi: a valle (quota 0) con sponde che salgono dolcemente
+			var dr := 999.0
+			var p := Vector2(cx, cz)
+			for sg in segs:
+				var a: Vector2 = sg[0]
+				var bb: Vector2 = sg[1]
+				var ab := bb - a
+				var tt := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.001), 0.0, 1.0)
+				dr = minf(dr, p.distance_to(a + ab * tt))
+			g_river[j * g_w + i] = smoothstep(8.0, 24.0, dr)
+			# costa: l'isola scende a livello del mare
+			var nxc := (cx - 480.0) / 538.0
+			var nyc := (cz - 352.0) / 397.0
+			g_coast[j * g_w + i] = 1.0 - smoothstep(0.78, 0.93, sqrt(nxc * nxc + nyc * nyc))
+	for pass_i in 2:
+		g_base = _blur_grid(g_base)
+		g_rough = _blur_grid(g_rough)
+	g_river = _blur_grid(g_river)
+	elev_sites.clear()
+	for pr in [[0, 31.0], [2, 14.0], [3, 14.0], [5, 12.0]]:
+		var sc := Vector2(gm.SEEDS[int(pr[0])])
+		elev_sites.append([sc, float(pr[1]), float(pr[1]) + 10.0, _elev_flatten_h(sc.x, sc.y)])
+	for e in gm.ENTR.values():
+		var ec := Vector2(e)
+		elev_sites.append([ec, 5.0, 14.0, _elev_flatten_h(ec.x, ec.y)])
+	elev_tw = ceili(float(W) / ET)
+	elev_th = ceili(float(H) / ET)
+	elev.resize(elev_tw * elev_th)
+	for tj in elev_th:
+		for ti in elev_tw:
+			var cx2 := (ti + 0.5) * ET
+			var cz2 := (tj + 0.5) * ET
+			var h := _elev_flatten_h(cx2, cz2)
+			for st in elev_sites:
+				var sc2: Vector2 = st[0]
+				var dx := cx2 - sc2.x
+				var dz := cz2 - sc2.y
+				var rb: float = st[2]
+				if absf(dx) > rb or absf(dz) > rb:
+					continue
+				var f := 1.0 - smoothstep(float(st[1]), rb, sqrt(dx * dx + dz * dz))
+				if f > 0.0:
+					h = lerpf(h, float(st[3]), f)
+			elev[tj * elev_tw + ti] = h
+	var img := Image.create_from_data(elev_tw, elev_th, false, Image.FORMAT_RF, elev.to_byte_array())
+	img.convert(Image.FORMAT_RH)
+	elev_tex = ImageTexture.create_from_image(img)
+	RenderingServer.global_shader_parameter_set("w3d_elev", elev_tex)
+	elev_ok = true
+	elev_seed = int(gm.world_seed)
+	var mx := -99.0
+	var mn := 99.0
+	for hv in elev:
+		mx = maxf(mx, hv)
+		mn = minf(mn, hv)
+	print("QUOTE: mappa %dx%d, quota %.2f..%.2f, calcolata in %d ms" % [elev_tw, elev_th, mn, mx, Time.get_ticks_msec() - t0])
+
+
+## accende/spegne le quote negli shader (spente negli interni)
+func _elev_set(on: bool) -> void:
+	var s := 1.0 if (on and elev_ok) else 0.0
+	RenderingServer.global_shader_parameter_set("w3d_elev_info", Vector4(1.0 / maxf(elev_tw * ET, 1.0), 1.0 / maxf(elev_th * ET, 1.0), s, 0.0))
+
+
+## quota del terreno nel punto (coordinate in celle; 0 negli interni)
+func elev_at(cx: float, cz: float) -> float:
+	if not elev_ok or not world_on:
+		return 0.0
+	var fx := clampf(cx / ET - 0.5, 0.0, elev_tw - 1.001)
+	var fz := clampf(cz / ET - 0.5, 0.0, elev_th - 1.001)
+	var i0 := floori(fx)
+	var j0 := floori(fz)
+	var tx := fx - i0
+	var tz := fz - j0
+	var a := lerpf(elev[j0 * elev_tw + i0], elev[j0 * elev_tw + i0 + 1], tx)
+	var b := lerpf(elev[(j0 + 1) * elev_tw + i0], elev[(j0 + 1) * elev_tw + i0 + 1], tx)
+	return lerpf(a, b, tz)
+
+
+## ------------------------------------------------------------------ suolo per pixel: mappa globale delle distanze dai sentieri
+const GRES := 2                    # texel per cella
+var gmap_img: Image
+var gmap_tex: ImageTexture
+var gmap_w := 0
+var gmap_h := 0
+var gmap_dirty := false
+
+
+func _gmap_init() -> void:
+	gmap_w = Game.MW * GRES
+	gmap_h = Game.MH * GRES
+	gmap_img = Image.create(gmap_w, gmap_h, false, Image.FORMAT_R8)
+	gmap_img.fill(Color(1, 0, 0, 1))
+	gmap_tex = ImageTexture.create_from_image(gmap_img)
+	if mat_ground == null:
+		mat_ground = ShaderMaterial.new()
+		mat_ground.shader = load("res://shaders/w3d_ground.gdshader")
+	mat_ground.set_shader_parameter("gmap", gmap_tex)
+	mat_ground.set_shader_parameter("gmap_inv", Vector2(1.0 / Game.MW, 1.0 / Game.MH))
+	mat_ground.set_shader_parameter("boost", 0.27)
+	mat_ground.set_shader_parameter("sat_k", 1.25)
+
+
+func _gmap_fill(j: Dictionary) -> void:
+	if gmap_img == null or not world_on:
+		return
+	var x0: float = j["x0"]
+	var z0: float = j["z0"]
+	var sub: Array = j["sub"]
+	var tx0 := ceili((x0 + world_off.x) * GRES - 0.5)
+	var tx1 := ceili((x0 + CHS + world_off.x) * GRES - 0.5)
+	var tz0 := ceili((z0 + world_off.y) * GRES - 0.5)
+	var tz1 := ceili((z0 + CHS + world_off.y) * GRES - 0.5)
+	for tz in range(tz0, tz1):
+		if tz < 0 or tz >= gmap_h:
+			continue
+		for tx in range(tx0, tx1):
+			if tx < 0 or tx >= gmap_w:
+				continue
+			var pe := Vector2((tx + 0.5) / GRES - world_off.x, (tz + 0.5) / GRES - world_off.y)
+			var rdv := _road_dist_sub(pe, sub)
+			var sd: float = rdv.x - rdv.y * 0.5
+			gmap_img.set_pixel(tx, tz, Color(clampf(sd / 8.0 + 0.5, 0.0, 1.0), 0, 0, 1))
+	gmap_dirty = true
+
+
 func _world_clear() -> void:
 	for k in wchunks.keys():
 		(wchunks[k] as Node3D).queue_free()
@@ -1899,6 +2129,9 @@ func _sync_doors() -> void:
 
 
 func _world_update() -> void:
+	if gmap_dirty and gmap_tex != null:
+		gmap_tex.update(gmap_img)
+		gmap_dirty = false
 	_sync_doors()
 	var sp := pos
 	pos = sp - world_off
@@ -1972,7 +2205,7 @@ func hit_world_prop(hit_pos: Vector2, face: Vector2, reach: float, arc: float, m
 	if rolling:
 		left = 0.0
 	else:
-		left -= maxf(8.0, 10.0 * mult * Destruct.eff(fam, "molle") * (1.0 + 0.04 * gm.player.a("for")))
+		left -= maxf(16.0, 10.0 * mult * Destruct.eff(fam, "molle") * (1.0 + 0.04 * gm.player.a("for")))
 	var cp := (target_pos + world_off) * Game.TS + Vector2(8, 8)
 	gm.burst(cp, Destruct.COL["molle"], 6, 38.0, 0.35)
 	gm.snd("hit")
@@ -1995,6 +2228,8 @@ func hit_world_prop(hit_pos: Vector2, face: Vector2, reach: float, arc: float, m
 
 
 func _world_init() -> void:
+	_elev_build()
+	_gmap_init()
 	ed_load()
 	ed_hide_sync()
 	for k in chunks:
@@ -2207,7 +2442,7 @@ func _world_lamps() -> void:
 		if ri < nreal:
 			var rv: Vector4 = cand[ri][1]
 			var rfl := 1.0 + sin(lamp_t * 11.0 + rv.x * 3.1) * 0.07 + sin(lamp_t * 23.0 + rv.z) * 0.04
-			rl.position = Vector3(rv.x, 7.5, rv.z)      # sopra lanterne e fiamme: la luce non nasce dentro la geometria che la copre
+			rl.position = Vector3(rv.x, 7.5 + elev_at(rv.x, rv.z), rv.z)      # sopra lanterne e fiamme: la luce non nasce dentro la geometria che la copre
 			rl.shadow_normal_bias = 2.0
 			rl.shadow_bias = 0.3
 			rl.omni_shadow_mode = OmniLight3D.SHADOW_DUAL_PARABOLOID
@@ -2225,7 +2460,7 @@ func _world_lamps() -> void:
 		if i < cand.size():
 			var lv2: Vector4 = cand[i][1]
 			var fl := 1.0 + sin(lamp_t * 11.0 + lv2.x * 3.1) * 0.09 + sin(lamp_t * 23.0 + lv2.z) * 0.05
-			arr.append(Vector4(lv2.x, lv2.y, lv2.z, lv2.w * fl))
+			arr.append(Vector4(lv2.x, lv2.y + elev_at(lv2.x, lv2.z), lv2.z, lv2.w * fl))
 			lc.append(Vector3(0.92, 0.74, 0.60))
 		else:
 			arr.append(Vector4(0, 0, 0, 0))
@@ -2488,8 +2723,10 @@ func _process_inner(dt: float) -> void:
 			room_theme.clear()
 			built_area = "world"
 			world_on = true
-			vp.size = Vector2i(400, 225)      # mondo aperto: risoluzione piu' bassa = oggetti piu' pixellati (e piu' veloce)
-			post_mat.set_shader_parameter("px", Vector2(400, 225))
+			_elev_build()
+			_elev_set(true)
+			vp.size = Vector2i(960, 540)      # stessa risoluzione degli interni: stesso aspetto grafico
+			post_mat.set_shader_parameter("px", Vector2(960, 540))
 			_world_clear()
 			_world_init()
 	elif built_area != str(gm.area) or built_grid_id != gm.grid.size() or world_on:
@@ -2501,6 +2738,7 @@ func _process_inner(dt: float) -> void:
 			jobs.clear()
 			job_keys.clear()
 		world_on = false
+		_elev_set(false)
 		gm.mm3d = null
 		edge_fn = Callable()
 		grid_road_fn = Callable()
@@ -2607,8 +2845,12 @@ func _process_inner(dt: float) -> void:
 			_drop_dyn(id)
 	shake = float(gm.shake_v) * 0.45
 	_booms_update(dt)
+	elev_y = lerpf(elev_y, elev_at(pos.x, pos.y), 0.2) if world_on else 0.0
 	_update_cam()
-	dust.position = Vector3(pos.x, 3.0, pos.y)
+	if OS.get_cmdline_user_args().has("--skintilt"):      # prova: camera inclinata per vedere il rilievo
+		cam.rotation_degrees = Vector3(-42, 0, 0)
+		cam.position.z += cam.position.y * 0.95
+	dust.position = Vector3(pos.x, 3.0 + elev_y, pos.y)
 	RenderingServer.global_shader_parameter_set("w3d_player", Vector3(pos.x, 0, pos.y))
 	fade_a = lerpf(fade_a, ed.fade if (ed != null and ed.on) else (27.0 if world_on else 48.0), 0.15)
 	if not fixed_cam:
@@ -2649,6 +2891,7 @@ func _process_inner(dt: float) -> void:
 	_mp("curve", curve)
 	_mp("fade_a", fade_a)
 	_mp("fade_b", fade_a + 18.0)
+	RenderingServer.global_shader_parameter_set("w3d_curve", Vector3(curve, fade_a, fade_a + 18.0))
 	_mp("floor_min", (0.04 if world_on else 0.34) if (not fwd or world_on) else 0.0)
 	mat_chr.set_shader_parameter("gamma_in", 2.0)
 	mat_chr.set_shader_parameter("boost", 1.8)
@@ -2658,6 +2901,9 @@ func _process_inner(dt: float) -> void:
 	mat.set_shader_parameter("patt", 1.0 if world_on else 0.0)
 	mat.set_shader_parameter("boost", 0.27 if world_on else 1.0)
 	mat.set_shader_parameter("sat_k", 1.25 if world_on else 1.0)
+	if mat_ground != null:
+		mat_ground.set_shader_parameter("boost", 0.27)
+		mat_ground.set_shader_parameter("sat_k", 1.25)
 	mat_chr.set_shader_parameter("patt", 0.0)
 	mat_prop.set_shader_parameter("patt", 0.0)
 	mat_prop.set_shader_parameter("boost", 0.42 if world_on else 0.9)
@@ -2707,6 +2953,34 @@ func _shot(dt: float) -> void:
 		for e in gm.enemies.duplicate():
 			if e.position.distance_to(gm.player.position) < 260.0:
 				e.hurt(99999.0, Vector2.RIGHT, 0.0, false)
+	if OS.get_cmdline_user_args().has("--elevslope"):
+		gm.player.hp = gm.player.max_hp
+	for a in OS.get_cmdline_user_args():
+		if str(a).begins_with("--elevxy=") and shot_t > 0.5 and shot_t < 0.6 and world_on:
+			var xy := str(a).substr(9).split(",")
+			gm.player.position = Vector2(float(xy[0]), float(xy[1])) * 16.0
+			print("QUOTA nel punto: ", elev_at(float(xy[0]), float(xy[1])))
+	for a in OS.get_cmdline_user_args():
+		if str(a).begins_with("--elevseed=") and shot_t > 0.5 and shot_t < 0.6 and world_on:
+			var sv: Vector2i = gm.SEEDS[int(str(a).substr(11))]
+			var off := Vector2.ZERO
+			if OS.get_cmdline_user_args().has("--elevoff"):
+				off = Vector2(22, 0)
+			if OS.get_cmdline_user_args().has("--elevslope"):
+				var bestg := 0.0
+				for dz in range(-60, 61, 2):
+					for dx in range(-60, 61, 2):
+						var qx := sv.x + dx
+						var qz := sv.y + dz
+						if not gm.inb(Vector2i(qx, qz)) or gm.grid[gm.idx(Vector2i(qx, qz))] == 0 or gm.road[gm.idx(Vector2i(qx, qz))] == 1:
+							continue
+						var gr := absf(elev_at(qx + 1.0, qz) - elev_at(qx - 1.0, qz)) + absf(elev_at(qx, qz + 1.0) - elev_at(qx, qz - 1.0))
+						if gr > bestg:
+							bestg = gr
+							off = Vector2(dx, dz)
+				print("PENDIO max=", bestg / 4.0, " a ", off)
+			gm.player.position = (Vector2(sv) + off) * 16.0
+			print("QUOTA nel punto: ", elev_at(sv.x + off.x, sv.y + off.y))
 	for a in OS.get_cmdline_user_args():
 		if str(a).begins_with("--skinroom=") and shot_t > 0.5 and shot_t < 0.6:
 			var ri := int(str(a).substr(11))
@@ -2716,6 +2990,18 @@ func _shot(dt: float) -> void:
 		if str(a).begins_with("--skincam="):
 			cam_h = float(str(a).substr(10))
 			fixed_cam = true
+	if OS.get_cmdline_user_args().has("--fxtest"):
+		var pp: Vector2 = gm.player.position
+		if fx_step == 0 and shot_t > 1.0:
+			fx_step = 1
+			gm.spawn_hazard(pp + Vector2(-70, -20), 40.0, 3.9, 0.3, 0.0, 0.0, Color(1.0, 0.3, 0.2))
+			gm.spawn_hazard(pp + Vector2(60, -30), 30.0, 0.8, 9.0, 0.0, 0.5, Color(0.55, 0.9, 0.3))
+			gm.spawn_hazard(pp + Vector2(0, -75), 34.0, 2.4, 0.3, 0.0, 0.0, Color(0.7, 0.35, 1.0))
+		if shot_t > 2.4 + fx_step * 0.0 and fx_step >= 1 and int(shot_t * 2.0) != fx_last:
+			fx_last = int(shot_t * 2.0)
+			if shot_t < 8.0:
+				gm.spawn_parrow(pp + Vector2(-20, 30), Vector2.from_angle(-0.9 + randf() * 0.3), 70.0, 1.0, 2.5, 3, Color(0.7, 0.4, 1.0), {}, 0.0, true)
+				gm.spawn_parrow(pp + Vector2(20, 40), Vector2.from_angle(-2.2 + randf() * 0.3), 70.0, 1.0, 2.5, 3, Color(0.5, 0.8, 1.0), {"f": "staff", "a": ["gelo"]}, 0.0, true)
 	if shot_t > 3.0 + shot_n * 2.0 and shot_n < 3:
 		get_viewport().get_texture().get_image().save_png("user://skin_%d.png" % shot_n)
 		shot_n += 1
@@ -2839,6 +3125,38 @@ func _ribbon_mesh(ln: Line2D) -> ArrayMesh:
 			var nrm := Vector2(-dir.y, dir.x).normalized() * hw
 			b.quad(Vector3(a.x - nrm.x, y, a.y - nrm.y), Vector3(a.x + nrm.x, y, a.y + nrm.y), Vector3(d.x + nrm.x, y, d.y + nrm.y), Vector3(d.x - nrm.x, y, d.y - nrm.y), c)
 	return b.mesh()
+
+
+## proiettili fatti di luce (magie, bastoni, incantesimi nemici): niente coda a triangolo, ma nucleo + alone + scia luminosa
+func _light_proj_col(n: Node) -> Variant:
+	if n is PArrow:
+		var pa := n as PArrow
+		var fam := str(pa.weapon.get("f", ""))
+		if not (pa.magic or fam == "staff"):
+			return null
+		for a in pa.weapon.get("a", []):
+			match str(a):
+				"fuoco": return Color(1.0, 0.5, 0.15)
+				"gelo": return Color(0.6, 0.9, 1.0)
+				"tuono": return Color(0.75, 0.88, 1.0)
+				"veleno": return Color(0.45, 0.95, 0.3)
+				"sangue": return Color(0.95, 0.12, 0.2)
+		return pa.col
+	if n is Projectile:
+		var st := (n as Projectile).style
+		if st in ["fire", "dark", "ice", "poison", "soul", "blood"]:
+			return Projectile.LIGHT[st]
+	return null
+
+
+func _core_mesh() -> ArrayMesh:
+	if fx_cache.has("core"):
+		return fx_cache["core"]
+	var b := W3DBuilder.new()
+	b.blob(Vector3.ZERO, Vector3(0.13, 0.13, 0.13), _emis(Color(1, 1, 1), 1.0), 6, 3, 0.0, 0.0)
+	var m := b.mesh()
+	fx_cache["core"] = m
+	return m
 
 
 ## ogni arma e ogni nemico ha il suo proiettile: asse lungo Z, la punta guarda verso -Z
