@@ -13,13 +13,14 @@ const HELP := ["TIMELINE (in basso): barra rossa = tempo attuale,",
 	"Shift = x10, Ctrl = /10. Ogni modifica SI SALVA DA SOLA",
 	"K = nuovo keyframe qui (copia lo stato) | CANC = elimina",
 	"M = sposta il keyframe al tempo attuale",
-	"FAR MUOVERE un attore: 2 keyframe a tempi diversi,",
-	"con POSIZIONE/ALTEZZA diverse",
-	"SPAZIO play | F camera libera (WASD QE, tasto dx)",
-	"C = cattura la camera nel keyframe | ESC esci",
-	"Ctrl+Backspace = ripristina l'originale del gioco"]
+	"Z = INQUADRA l'oggetto della riga (camera libera su di lui)",
+	"X = PORTA l'oggetto della riga DAVANTI alla camera attuale",
+	"SPAZIO = play/pausa dal punto attuale (con audio)",
+	"P = ANTEPRIMA pulita dall'inizio, con audio (un tasto la ferma)",
+	"F camera libera (WASD QE, tasto dx) | C = cattura la camera",
+	"ESC esci | Ctrl+Backspace = ripristina l'originale del gioco"]
 const LBL := {"t": "TEMPO (s)", "a": "RIFERIMENTO", "f": "ZOOM (fov)", "m": "MODO (0 alto, 1 libera)", "e": "CURVA (0-3)",
-	"cut": "TAGLIO (1 = secco)", "v": "VISIBILE (1/0)", "s": "SCALA", "w": "PESO (0-1)", "sun": "LUCE SOLE", "fog": "NEBBIA", "k": "TIPO", "n": "NUMERO"}
+	"cut": "TAGLIO (1 = secco)", "v": "VISIBILE (1/0)", "s": "SCALA", "w": "PESO (0-1)", "sun": "LUCE SOLE", "fog": "NEBBIA", "k": "TIPO", "n": "NUMERO", "d": "DURATA (s)", "x": "TESTO"}
 const L3 := {"o": ["POSIZIONE X", "ALTEZZA", "POSIZIONE Z"], "r": ["PITCH su/giu", "YAW gira", "ROLLIO"], "c": ["COLORE R", "COLORE G", "COLORE B"]}
 const TOP := 11.0
 
@@ -38,6 +39,8 @@ var hdr := ""
 var fy0 := 0.0
 var msg := ""
 var drag := false
+var preview := false
+var ui_hp := false
 
 
 func setup(cine: W3DCine) -> void:
@@ -111,14 +114,14 @@ func fields() -> Array:
 		if v is Array:
 			for i in (v as Array).size():
 				out.append([n, i])
-		elif v is float or v is int or n == "a" or (n == "f" and v is String):
+		elif v is float or v is int or n == "a" or (n == "f" and v is String) or (n == "x" and v is String):
 			out.append([n, -1])
 	return out
 
 
 func _label(n: String, i: int) -> String:
 	if names()[tr] == "musica":
-		return {"f": "FILE AUDIO", "v": "VOLUME (dB)", "fade": "DISSOLVENZA (s)"}.get(n, LBL.get(n, n))
+		return {"f": "FILE AUDIO", "vol": "VOLUME (0-100 %)", "from": "PARTI DAL SECONDO (brano)", "fade": "DISSOLVENZA (s)"}.get(n, LBL.get(n, n))
 	if i >= 0 and L3.has(n):
 		return L3[n][i]
 	if n == "e" and names()[tr] == "env":
@@ -134,7 +137,11 @@ func _adjust(dir: float, mult: float) -> void:
 	var k: Dictionary = cur()
 	var n: String = fl[fi][0]
 	var i: int = fl[fi][1]
-	if n == "f" and k[n] is String:
+	if n == "x" and k[n] is String:
+		var tx: Array = ["????", "?!", "...", "!!!", "??"]
+		var jx: int = tx.find(str(k["x"]))
+		k["x"] = tx[(jx + int(dir) + tx.size()) % tx.size()]
+	elif n == "f" and k[n] is String:
 		var opts2: Array = []
 		for fn in DirAccess.get_files_at("res://audio"):
 			if fn.get_extension() in ["mp3", "ogg", "wav"]:
@@ -148,8 +155,8 @@ func _adjust(dir: float, mult: float) -> void:
 		k["a"] = opts[(j + int(dir) + opts.size()) % opts.size()]
 	else:
 		var stp := 0.1
-		if names()[tr] == "musica" and n == "v":
-			stp = 1.0
+		if names()[tr] == "musica" and n in ["vol", "from", "fade"]:
+			stp = 5.0 if n == "vol" else (1.0 if n == "from" else 0.5)
 		elif n in ["m", "v", "e", "cut", "on"] and not (n == "e" and names()[tr] == "env"):
 			stp = 1.0
 		elif n == "o":
@@ -162,6 +169,10 @@ func _adjust(dir: float, mult: float) -> void:
 		var nv := snappedf(cv + dir * stp * mult, 0.001)
 		if n in ["m", "v", "cut", "on"]:
 			nv = maxf(nv, 0.0)
+		if names()[tr] == "musica":
+			nv = maxf(nv, 0.0)
+			if n == "vol":
+				nv = minf(nv, 100.0)
 		if i >= 0:
 			k[n][i] = nv
 		else:
@@ -183,6 +194,9 @@ func input(ev: InputEvent) -> void:
 		return
 	if not (ev is InputEventKey) or not ev.pressed:
 		return
+	if preview:
+		_stop_preview()
+		return
 	var sh: float = 10.0 if ev.shift_pressed else (0.1 if ev.ctrl_pressed else 1.0)
 	var key: int = ev.keycode
 	match key:
@@ -197,6 +211,16 @@ func input(ev: InputEvent) -> void:
 			if c.t >= float(c.cut["dur"]) - 0.01:
 				c.seek(0.0)
 			c.playing = not c.playing
+			if c.playing and c.t > 0.01:
+				c.music_sync(c.t)
+			elif not c.playing:
+				c._music_stop(0.2)
+		KEY_P:
+			_start_preview()
+		KEY_Z:
+			_frame_actor()
+		KEY_X:
+			_bring_actor()
 		KEY_LEFT:
 			c.seek(c.t - 0.1 * (1.0 if ev.ctrl_pressed else sh))
 		KEY_RIGHT:
@@ -248,6 +272,70 @@ func input(ev: InputEvent) -> void:
 			pn.visible = not pn.visible
 
 
+func _start_preview() -> void:
+	preview = true
+	c.preview = true
+	ui_hp = hp.visible
+	pn.visible = false
+	hp.visible = false
+	tl.visible = false
+	fly = false
+	c.seek(0.0)
+	c.playing = true
+
+
+func _stop_preview() -> void:
+	preview = false
+	c.preview = false
+	c.playing = false
+	c._music_stop(0.3)
+	pn.visible = true
+	tl.visible = true
+	hp.visible = ui_hp
+
+
+func _cam_xf() -> Transform3D:
+	if fly:
+		return Transform3D(Basis.from_euler(fr), fp)
+	return c.sk.cam.global_transform
+
+
+func _actor_sel() -> Variant:
+	var nm: String = names()[tr]
+	return c.acts[nm] if c.acts.has(nm) else null
+
+
+## Z: la camera libera si mette davanti all'oggetto della riga scelta, guardandolo
+func _frame_actor() -> void:
+	var n: Variant = _actor_sel()
+	if n == null:
+		msg = "Z/X: scegli con TAB la riga di un attore (ufo, hero...)"
+		return
+	var xf := _cam_xf()
+	var target: Vector3 = (n as Node3D).position + Vector3(0, 1.5, 0)
+	fly = true
+	fr = xf.basis.get_euler()
+	fp = target + xf.basis.z * 16.0
+	msg = "OGGETTO INQUADRATO" + ("" if (n as Node3D).visible else " (ma a questo tempo e' invisibile: usa X)")
+
+
+## X: il keyframe scelto dell'attore viene spostato 14 unita' davanti alla camera attuale (e reso visibile)
+func _bring_actor() -> void:
+	var n: Variant = _actor_sel()
+	if n == null or cur() == null:
+		msg = "Z/X: scegli con TAB la riga di un attore e un keyframe"
+		return
+	var xf := _cam_xf()
+	var target: Vector3 = xf.origin - xf.basis.z * 14.0
+	var k: Dictionary = cur()
+	var rf := c.ref(str(k.get("a", "P0")))
+	var off := Basis(Vector3.UP, float(rf["yaw"])).inverse() * (target - (rf["p"] as Vector3))
+	k["o"] = [snappedf(off.x, 0.01), snappedf(off.y, 0.01), snappedf(off.z, 0.01)]
+	k["v"] = 1
+	_touch()
+	msg = "OGGETTO PORTATO DAVANTI ALLA CAMERA"
+
+
 func _add_key() -> void:
 	var nm: String = names()[tr]
 	var arr := keys()
@@ -265,7 +353,7 @@ func _add_key() -> void:
 	elif nm == "env":
 		k = {"t": snappedf(c.t, 0.01), "w": 1.0, "c": [0.5, 0.5, 0.7], "e": 0.2}
 	elif nm == "musica":
-		k = {"t": snappedf(c.t, 0.01), "k": "music", "f": "res://audio/Midnight_Landing.mp3", "v": -3.0, "fade": 2.0}
+		k = {"t": snappedf(c.t, 0.01), "k": "music", "f": "res://audio/Midnight_Landing.mp3", "vol": 70.0, "from": 0.0, "fade": 2.0}
 		if cur() != null:
 			k = (cur() as Dictionary).duplicate(true)
 			k["t"] = snappedf(c.t, 0.01)
@@ -303,6 +391,8 @@ func _capture() -> void:
 
 
 func update() -> void:
+	if preview and not c.playing:
+		_stop_preview()
 	if fly:
 		var d := Vector3.ZERO
 		var b := Basis.from_euler(fr)

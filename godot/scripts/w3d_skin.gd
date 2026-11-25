@@ -2956,6 +2956,41 @@ func _plan_megas() -> void:
 			clear_pts.append(Vector3(mp.x, mp.y, rad))
 			if add_ents:
 				_mega_guardians(kind, mg, yaw, zr)
+	# il granaio del villaggio: fuori dalle case, verso l'interno dell'isola, sempre nello stesso posto
+	var vc := Vector2(gm.SEEDS[0])
+	var inward := (Vector2(W, H) * 0.5 - vc).normalized()
+	gm.barn_pos = Vector2(-1, -1)
+	var best_bg := Vector2(-1, -1)
+	var best_score := 1e9
+	for k in 30:
+		var ang := inward.angle() + ceili(k / 2.0) * 0.25 * (1.0 if k % 2 == 1 else -1.0)
+		var dist := 38.0 + float(k / 6) * 7.0
+		var bg := vc + Vector2.from_angle(ang) * dist
+		var bmp := bg - world_off
+		var ok2 := true
+		for pt in [Vector2.ZERO, Vector2(5.5, 0.0), Vector2(-5.5, 0.0), Vector2(0.0, 5.5), Vector2(0.0, -5.5)]:
+			var c2 := Vector2i(floori(bg.x + pt.x), floori(bg.y + pt.y))
+			if not gm.inb(c2) or bool(edge_fn.call(bmp + pt)) or gm.water[gm.idx(c2)] == 1:
+				ok2 = false
+		if not ok2 or float(_road_near(bmp)["d"]) < 2.5:
+			continue
+		var lx := floori(bmp.x / LC)
+		var lz := floori(bmp.y / LC)
+		var bad := 0
+		for dz in range(-1, 2):
+			for dx in range(-1, 2):
+				if str(_plan(lx + dx, lz + dz).get("kind", "")) in ["house", "yard"]:
+					bad += 1
+		var score := float(bad) * 20.0 + dist       # poche case attorno, e il piu' vicino possibile al villaggio
+		if score < best_score:
+			best_score = score
+			best_bg = bg
+	if best_bg.x >= 0.0:
+		var toward := (vc - best_bg).normalized()
+		var bmp2 := best_bg - world_off
+		megas.append(["barn", bmp2, atan2(-toward.y, toward.x)])
+		clear_pts.append(Vector3(bmp2.x, bmp2.y, W3DStructs.radius("barn")))
+		gm.barn_pos = best_bg
 	mega_seed = int(gm.world_seed)
 
 
@@ -3564,11 +3599,11 @@ func _process_inner(dt: float) -> void:
 		cam.position.z += cam.position.y * 0.95
 	dust.position = Vector3(pos.x, 3.0 + elev_y, pos.y)
 	RenderingServer.global_shader_parameter_set("w3d_player", Vector3(pos.x, 0, pos.y))
-	fade_a = lerpf(fade_a, ed.fade if (ed != null and ed.on) else ((46.0 if fpv else 27.0) if world_on else 48.0), 0.15)
+	fade_a = lerpf(fade_a, ed.fade if (ed != null and ed.on) else ((46.0 if fpv else 27.0 + cam_extra * 0.9) if world_on else 48.0), 0.15)
 	if not fixed_cam:
 		var target_cam_h := CAM_H_ROOM
 		if world_on:
-			target_cam_h = CAM_H_WORLD_FAR if world_zoom_far else CAM_H_WORLD
+			target_cam_h = (CAM_H_WORLD_FAR if world_zoom_far else CAM_H_WORLD) + cam_extra
 		cam_h = lerpf(cam_h, target_cam_h, 0.08)
 	if fwd:
 		env.ssao_enabled = not world_on
@@ -3783,9 +3818,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			if cine.edit:
 				cine.finish(false)
 		elif world_on and str(gm.state) == "play":
-			if cine == null:
-				cine = W3DCine.new()
-			cine.start(self, "ufo", true)       # editor delle cutscene
+			start_cine(_edit_next(ev.shift_pressed), true)       # editor delle cutscene (Shift+F6 = passa alla cutscene successiva)
 		return
 	if cine != null and cine.active:
 		get_viewport().set_input_as_handled()
@@ -3796,7 +3829,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 			cine.skip()
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10 and world_on and str(gm.state) == "play":
-		start_cine()      # scorciatoia per rivedere la sequenza dell'ufo da qualunque partita (non serve rigiocare dall'inizio)
+		start_cine("liberazione" if ev.shift_pressed else "ufo")      # scorciatoia per rivedere la sequenza dell'ufo (Shift = la liberazione) da qualunque partita (non serve rigiocare dall'inizio)
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F7:
 		fpv_set(not fpv)
@@ -4049,6 +4082,7 @@ func _proj_mesh(n: Node) -> ArrayMesh:
 var cine: W3DCine
 var job_boost := false
 var cine_t0 := 0.0
+var cam_extra := 0.0            # vista piu' alta (assalto al fienile)
 var cine_test := 0
 
 
@@ -4101,31 +4135,48 @@ func _sing_test() -> void:
 				get_tree().quit()
 
 
+var wreck_cine: W3DCine
+var edit_id := "ufo"
+
+
+func _edit_next(shift: bool) -> String:
+	var ids: Array = W3DCine.load_all().keys()
+	if ids.is_empty():
+		return "ufo"
+	if shift or not ids.has(edit_id):
+		edit_id = ids[(ids.find(edit_id) + 1) % ids.size()]
+	return edit_id
+
+
 func cine_prewarm() -> void:
-	if cine == null:
-		cine = W3DCine.new()
-	cine.prewarm(self)
+	var c := W3DCine.new()
+	c.prewarm(self)
 
 
-func start_cine() -> bool:
-	if cine == null:
-		cine = W3DCine.new()
-	return cine.start(self)
+## avvia una cutscene (id nel file cutscenes.json); i resti dell'ufo vivono nella loro istanza (wreck_cine)
+func start_cine(cid := "ufo", editing := false) -> bool:
+	if cine != null and cine.active:
+		return false
+	var c := W3DCine.new()
+	if not c.start(self, cid, editing):
+		return false
+	cine = c
+	if cid == "ufo":
+		wreck_cine = c
+	return true
 
 
 func _cine_tick(dt: float) -> void:
 	if (cine == null or not cine.active) and str(gm.state) == "cine":
 		gm.state = "play"      # rete di sicurezza: mai restare bloccati nello stato della sequenza
-	if cine != null and not cine.active and world_on and Story.is_done(gm, W3DCine.FLAG) and not cine.wreck_alive():
-		cine.restore_wreck(self)      # i resti ricompaiono se il mondo viene ricostruito (morte, cambio zona, nuova partita)
-	if cine == null:
-		if world_on and Story.is_done(gm, W3DCine.FLAG):
-			cine = W3DCine.new()
-			cine.restore_wreck(self)
-		elif not (OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--cinereal") or OS.get_cmdline_user_args().has("--cineedit") or OS.get_cmdline_user_args().has("--singtest")):
-			return
+	if (cine == null or not cine.active) and world_on and Story.is_done(gm, W3DCine.FLAG) and (wreck_cine == null or not wreck_cine.wreck_alive()):
+		if wreck_cine == null:
+			wreck_cine = W3DCine.new()
+		wreck_cine.restore_wreck(self)      # i resti ricompaiono se il mondo viene ricostruito (morte, cambio zona, nuova partita)
+	if cine == null and not (OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--cinereal") or OS.get_cmdline_user_args().has("--cineedit") or OS.get_cmdline_user_args().has("--singtest") or OS.get_cmdline_user_args().has("--barnshot")):
+		return
 	var real := OS.get_cmdline_user_args().has("--cinereal")
-	var test := OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--singtest") or real or OS.get_cmdline_user_args().has("--cineedit")
+	var test := OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--singtest") or OS.get_cmdline_user_args().has("--barnshot") or real or OS.get_cmdline_user_args().has("--cineedit")
 	if test and (cine == null or not cine.active) and cine_test == 0 and lamp_t > 2.0:
 		# prova: porta l'eroe lontano dal villaggio, nel mondo, e lancia la sequenza
 		cine_test = 1
@@ -4153,6 +4204,18 @@ func _cine_tick(dt: float) -> void:
 	if OS.get_cmdline_user_args().has("--singtest"):
 		_sing_test()
 		return
+	if OS.get_cmdline_user_args().has("--barnshot") and cine_test >= 2 and world_on and lamp_t > 5.0:
+		if cine_test == 2:
+			cine_test = 8
+			print("BARN granaio a ", gm.barn_pos, " villaggio ", gm.SEEDS[0], " distanza ", snappedf(gm.barn_pos.distance_to(Vector2(gm.SEEDS[0])), 0.1))
+			gm.player.max_hp = 99999.0
+			gm.player.hp = 99999.0
+			gm.player.position = (gm.barn_pos + Vector2(0.0, 9.0)) * 16.0
+			cine_t0 = lamp_t + 7.0
+		elif cine_test == 8 and lamp_t > cine_t0:
+			get_viewport().get_texture().get_image().save_png("user://barn.png")
+			get_tree().quit()
+		return
 	if test and cine_test == 2 and world_on and lamp_t > 5.0:
 		cine_test = 6
 		cine_prewarm()          # come nel gioco: il precarico parte ~30 s prima dell'ufo
@@ -4167,7 +4230,11 @@ func _cine_tick(dt: float) -> void:
 		get_tree().quit()
 	if test and cine_test == 6 and lamp_t > cine_t0:
 		cine_test = 3
-		start_cine()
+		var tid := "ufo"
+		for ua in OS.get_cmdline_user_args():
+			if str(ua).begins_with("--cineid="):
+				tid = str(ua).substr(9)
+		start_cine(tid)
 	if cine != null and cine.active:
 		var step := 1.0 / 15.0 if test else dt
 		cine.update(step)

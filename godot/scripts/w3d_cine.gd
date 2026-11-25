@@ -37,6 +37,11 @@ var edit_pos := Vector2.ZERO
 var frame_n := 0
 var cam_xz := Vector2.ZERO
 var waited: Array = []
+var preview := false
+var dlg: PanelContainer
+var dlg_lab: Label
+var dlg_t0 := 0.0
+var dlg_until := 0.0
 var mus: AudioStreamPlayer
 var loadlab: Label
 var end_spot := Vector2.ZERO
@@ -665,7 +670,7 @@ func _apply_cam(c: Dictionary) -> void:
 
 # ------------------------------------------------------------------ eventi
 ## musica di sottofondo della cutscene (file in godot/audio, indicato nell'evento "music": f = percorso, v = volume in dB, fade = secondi)
-func _music_play(path: String, vol: float, fade: float) -> void:
+func _music_play(path: String, vol_pct: float, fade: float, from := 0.0) -> void:
 	_music_stop(0.2)
 	var st: AudioStream = null
 	if ResourceLoader.exists(path):
@@ -679,9 +684,62 @@ func _music_play(path: String, vol: float, fade: float) -> void:
 	mus.stream = st
 	mus.volume_db = -60.0
 	gm.add_child(mus)
-	mus.play()
-	mus.create_tween().tween_property(mus, "volume_db", vol, maxf(fade, 0.05))
-	print("CINE musica: ", path, " durata ", snappedf(st.get_length(), 0.1), " s")
+	mus.play(clampf(from, 0.0, maxf(st.get_length() - 0.1, 0.0)))
+	var target := linear_to_db(clampf(vol_pct / 100.0, 0.0, 1.0)) if vol_pct > 0.0 else -80.0
+	mus.create_tween().tween_property(mus, "volume_db", maxf(target, -80.0), maxf(fade, 0.05))
+	print("CINE musica: ", path, " durata ", snappedf(st.get_length(), 0.1), " s, parte da ", snappedf(from, 0.1), " s, volume ", int(vol_pct), "%")
+
+
+## anteprima da un istante qualsiasi: riparte la musica dal punto giusto del brano
+func music_sync(T: float) -> void:
+	var best: Dictionary = {}
+	for ev in cut.get("mus", []):
+		if float(ev["t"]) <= T and (best.is_empty() or float(ev["t"]) > float(best["t"])):
+			best = ev
+	if not best.is_empty() and str(best.get("k", "")) == "music":
+		_music_play(str(best.get("f", "")), float(best.get("vol", 70.0)), 0.2, float(best.get("from", 0.0)) + (T - float(best["t"])))
+	else:
+		_music_stop(0.2)
+
+
+## esplosione in aria (particelle 3D): fiamme e fumo scuro
+## finestra di dialogo (stile del gioco) con un testo che compare lettera per lettera
+func _dialog_show(txt: String, dur: float) -> void:
+	if dlg == null:
+		dlg = PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.05, 0.03, 0.1, 0.93)
+		sb.border_color = Color(0.75, 0.55, 0.2)
+		sb.set_border_width_all(2)
+		sb.set_content_margin_all(10)
+		dlg.add_theme_stylebox_override("panel", sb)
+		dlg.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		dlg.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		dlg.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		dlg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		dlg_lab = Label.new()
+		dlg_lab.add_theme_font_override("font", Game.font())
+		dlg_lab.add_theme_font_size_override("font_size", 24)
+		dlg_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		dlg.custom_minimum_size = Vector2(220, 0)
+		dlg_lab.add_theme_color_override("font_color", Color(1.0, 0.95, 0.8))
+		dlg.add_child(dlg_lab)
+		layer.add_child(dlg)
+	dlg_lab.text = txt
+	dlg_t0 = t
+	dlg_until = t + dur
+
+
+func _boom3d(p: Vector3, n: int) -> void:
+	for cfg in [[Color(1.0, 0.85, 0.4, 1.0), Color(0.6, 0.1, 0.04, 0.0), 1.3, 7.0, 17.0, 0.8, 2.4, true], [Color(0.15, 0.13, 0.14, 0.9), Color(0.2, 0.2, 0.22, 0.0), 2.4, 3.0, 9.0, 1.2, 3.2, false]]:
+		var e := _emitter(cfg[0], cfg[1], n, cfg[2], cfg[3], cfg[4], cfg[5], cfg[6], cfg[7], -1.5)
+		e.one_shot = true
+		e.explosiveness = 1.0
+		e.spread = 180.0
+		e.position = p
+		sk.vp.add_child(e)
+		e.emitting = true
+		sk.get_tree().create_timer(4.0).timeout.connect(e.queue_free)
 
 
 func _music_stop(fade: float) -> void:
@@ -705,7 +763,12 @@ func _fire(ev: Dictionary) -> void:
 		"snd":
 			gm.snd(str(ev.get("n", "hit")))
 		"music":
-			_music_play(str(ev.get("f", "")), float(ev.get("v", -4.0)), float(ev.get("fade", 1.5)))
+			_music_play(str(ev.get("f", "")), float(ev.get("vol", 70.0)), float(ev.get("fade", 1.5)), float(ev.get("from", 0.0)))
+		"text":
+			_dialog_show(str(ev.get("x", "????")), float(ev.get("d", 3.0)))
+		"boom":
+			var bq: Vector3 = ref(str(ev.get("a", "ufo")))["p"]
+			_boom3d(bq, int(ev.get("n", 100)))
 		"musicstop":
 			_music_stop(float(ev.get("fade", 1.5)))
 		"say":
@@ -744,11 +807,13 @@ func update(dt: float) -> void:
 			if edit:
 				t = dur
 				playing = false
+				_music_stop(1.5)
 			else:
 				finish()
 				return
+		var lo := tp if tp > 0.0 else -1.0       # al primo passo scattano anche gli eventi a tempo 0
 		for ev in cut["ev"] + cut.get("mus", []):
-			if float(ev["t"]) > tp and float(ev["t"]) <= t:
+			if float(ev["t"]) > lo and float(ev["t"]) <= t:
 				_fire(ev)
 	tp = t
 	_eval(t)
@@ -761,15 +826,20 @@ func _overlay(dur: float) -> void:
 	var vs: Vector2 = gm.get_viewport().get_visible_rect().size
 	var bh := vs.y * 0.115
 	var k := minf(_ease(t / 0.8), 1.0 - _ease((t - (dur - 1.4)) / 1.2))
-	if edit:
+	if edit and not preview:
 		k = 0.0
 	if loadlab != null:
 		loadlab.visible = hold > 0.4
+	if dlg != null:
+		dlg.visible = t >= dlg_t0 and t < dlg_until
+		dlg_lab.visible_characters = int((t - dlg_t0) / 0.14) + 1
+		dlg.offset_top = -bh - 14.0
+		dlg.offset_bottom = -bh - 14.0
 	bar_t.offset_bottom = bh * k
 	bar_b.offset_top = -bh * k
 	var fa := clampf(flash_a, 0.0, 1.0)
 	var fc := flash_col
-	if t < 0.7 and not edit:       # apertura: dal nero
+	if t < 0.7 and (not edit or preview):       # apertura: dal nero
 		fc = Color.BLACK
 		fa = maxf(fa, 1.0 - t / 0.7)
 	flash.color = Color(fc.r, fc.g, fc.b, fa)

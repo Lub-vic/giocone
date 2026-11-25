@@ -80,6 +80,8 @@ static func radius(k: String) -> float:
 static func pick(bio: int, r: RandomNumberGenerator) -> String:
 	var opts: Array = []
 	for k in KINDS:
+		if k == "barn":
+			continue            # il granaio e' uno solo, accanto al villaggio (vedi _plan_megas)
 		if (KINDS[k] as Array).size() == 3 and (KINDS[k][2] as Array).has(bio):
 			opts.append(k)
 	if opts.is_empty():

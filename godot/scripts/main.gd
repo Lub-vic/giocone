@@ -287,6 +287,7 @@ const OPTIONS := [
 var wake_t := 0.0
 var allies: Array = []
 var horde_t := 0.0
+var barn_pos := Vector2(-1, -1)      # il granaio del villaggio (celle di gioco), lo imposta la pelle 3D
 var horde_age := 0.0      # da quanto dura l'orda: le ondate crescono
 var scout: ScoutFx = null
 const INTERACT := {"res_erba": 1, "res_fungo": 1, "res_legna": 1, "res_minerale": 1, "bed_top": 1, "qitem": 1, "villager": 1, "bell": 1, "shrine": 1, "key": 1, "lever": 1, "stairs_top": 1, "gate_top": 1, "bonfire": 1, "portal": 1, "elder": 1, "npc": 1, "loot": 1, "dig": 1}
@@ -3038,10 +3039,6 @@ func journey_target() -> Variant:
 				if p.kind == "page" and (best == null or p.position.distance_to(player.position) < (best as Vector2).distance_to(player.position)):
 					best = p.position
 			return best
-		2:
-			var pi := int(persist.get("journey_poi", -1))
-			if pi >= 0 and pi < pois.size():
-				return cell_pos(pois[pi]["cell"])
 		3:
 			var bb: Variant = null
 			for p in props:
@@ -3063,8 +3060,7 @@ func journey_text() -> String:
 		1:
 			t = "CERCA UNA PAGINA DI DIARIO NEL VILLAGGIO"
 		2:
-			var pi := int(persist.get("journey_poi", -1))
-			t = "LIBERA: %s" % (str(pois[pi]["n"]) if pi >= 0 and pi < pois.size() else "UN LUOGO VICINO")
+			t = "DIFENDI LE RISERVE DI CIBO AL FIENILE"
 		3:
 			t = "SALI A LIVELLO 3 AI FALO'"
 		4:
@@ -3075,20 +3071,6 @@ func journey_text() -> String:
 	return t
 
 
-func journey_pick_poi() -> void:
-	var best := -1
-	var bd := 1e9
-	var v0 := Vector2(SEEDS[0])
-	for po in pois:
-		if not (str(po["type"]) in ["bandits", "tower", "cave", "farm", "ruin", "hamlet", "barn"]):
-			continue
-		var d := Vector2(po["cell"]).distance_to(v0)
-		if d > 40.0 and d < bd:
-			bd = d
-			best = int(po["id"])
-	persist["journey_poi"] = best
-
-
 func journey_advance(msg: String, souls: int, relics: int, weapon: int) -> void:
 	persist["journey"] = journey_step() + 1
 	player.add_souls(souls)
@@ -3097,8 +3079,6 @@ func journey_advance(msg: String, souls: int, relics: int, weapon: int) -> void:
 		drop_relic(player.position + Vector2(randf_range(-8, 8), 14))
 	if weapon > 0:
 		drop_loot(player.position + Vector2(10, 14), Rpg.make_weapon(weapon))
-	if journey_step() == 2 and int(persist.get("journey_poi", -1)) < 0:
-		journey_pick_poi()
 	say(msg)
 	snd("level")
 	burst(player.position, Color(1.0, 0.85, 0.4), 24, 60.0, 0.6)
@@ -3110,28 +3090,18 @@ func journey_update() -> void:
 		Story.update(self, get_process_delta_time())
 	if journey_step() >= JOURNEY_N or area != "world" or not persist["bosses"].has("boss_jailer"):
 		return
-	if journey_step() == 2 and int(persist.get("journey_poi", -1)) < 0:
-		journey_pick_poi()
 	match journey_step():
 		0:
 			var tg: Variant = journey_target()
 			if tg != null and Story.village_free(self) and (tg as Vector2).distance_to(player.position) < 30.0:
-				persist["journey_poi"] = -1
 				journey_advance("L'ANZIANO: FUORI C'E' PIU' DI QUEL CHE VEDI. CERCA I DIARI: RACCONTANO COME FINI' TUTTO", 60, 0, 0)
 		1:
 			if pages_found >= 1:
-				journey_advance("UNA PAGINA RITROVATA. ORA SERVE FORZA: LIBERA UN LUOGO DAI NEMICI", 80, 1, 0)
+				journey_advance("UNA PAGINA RITROVATA. UN CONTADINO CHIEDE AIUTO: DIFENDI LE SCORTE DEL FIENILE", 80, 1, 0)
 		2:
-			var pi := int(persist.get("journey_poi", -1))
-			if pi >= 0 and pi < pois.size():
-				var po: Dictionary = pois[pi]
-				if po.get("built", false):
-					var left := 0
-					for en in po.get("spawns", []):
-						if en.get("alive", true) and spawn_present(en):
-							left += 1
-					if left == 0:
-						journey_advance("LUOGO LIBERATO! HAI TROVATO UN'ARMA NEL BOTTINO", 120, 0, 2)
+			if Story.barn_done(self):
+				journey_advance("FIENILE SALVO! LE SCORTE BASTERANNO PER L'INVERNO", 120, 1, 0)
+				add_item("arrosto", 2)
 		3:
 			if player.lv >= 3:
 				journey_advance("PIU' FORTE. ORA ANDRAI ANCORA PIU' LONTANO", 100, 1, 0)
@@ -5194,6 +5164,7 @@ const NPCS := {
 			"FABBRO: Il Colosso di Brace fu forgiato per custodire il secondo sigillo.",
 			"FABBRO: Affilo la tua lama per 600 anime. Il ferro non mente."]},
 	"fuggiasco": {"n": "IL FUGGIASCO", "spr": "villager_a", "tint": Color(0.8, 0.65, 0.65)},
+	"contadino_assalto": {"n": "IL CONTADINO", "spr": "villager_a", "tint": Color(0.85, 0.75, 0.55)},
 }
 const PAGES := [
 	"DIARIO DEL CUSTODE: Il Signore non volle morire, e la cenere fu il suo debito.",
@@ -5246,6 +5217,9 @@ func souls_ok(n: int) -> bool:
 func talk(p: Prop) -> void:
 	if p.npc_id == "fuggiasco":
 		say(Story.ESCAPE_LINE)
+		return
+	if p.npc_id == "contadino_assalto":
+		Story.talk_barn_farmer(self, p)
 		return
 	var d: Dictionary = NPCS[p.npc_id]
 	var st: Dictionary = persist.get("npc", {})
@@ -5370,14 +5344,21 @@ func obj_targets() -> Array:
 	var green := Color(0.45, 1.0, 0.7)
 	if area == "world":
 		var jt: Variant = journey_target()
+		if barn_pos.x >= 0.0 and Story.barn_status(self) in ["active", "final"]:
+			out.append({"p": barn_pos * 16.0, "c": Color(1.0, 0.8, 0.4), "n": "FIENILE"})
 		var dvc: Variant = Story.device_cell(self)
-		if dvc != null:
+		if journey_step() == 2 and Story.barn_status(self) == "approach":
+			for p in props:
+				if p.kind == "npc" and p.npc_id == "contadino_assalto":
+					out.append({"p": p.position, "c": gold, "n": "IL CONTADINO"})
+					break
+		elif dvc != null:
 			out.append({"p": (dvc as Vector2) * 16.0, "c": Color(0.75, 0.5, 1.0), "n": "APPARECCHIO"})
 		elif persist["bosses"].has("boss_jailer") and not Story.village_free(self):
 			out.append({"p": cell_pos(SEEDS[0]), "c": gold, "n": "VILLAGGIO"})      # la freccia guida al villaggio invaso
 		elif jt != null:
 			out.append({"p": jt, "c": gold, "n": "OBIETTIVO"})
-		else:
+		elif journey_step() >= JOURNEY_N:
 			var g := main_gate()
 			if g != "" and ENTR.has(g):
 				out.append({"p": cell_pos(ENTR[g]), "c": gold, "n": str(DUNS[g]["n"])})
@@ -7046,16 +7027,19 @@ func clear_horde() -> void:
 func horde_update(real: float) -> void:
 	if player.zmode != 1:
 		return
+	if Story.barn_final_active(self):
+		return
 	horde_age += real
 	horde_t -= real
 	if horde_t > 0.0:
 		return
-	horde_t = maxf(0.7, 1.6 - horde_age / 60.0)   # ondate sempre piu' fitte
+	var big := Story.barn_status(self) == "active"      # assalto al fienile: ondate molto piu' grosse
+	horde_t = maxf(0.35 if big else 0.7, (0.9 if big else 1.6) - horde_age / 60.0)   # ondate sempre piu' fitte
 	var alive := 0
 	for e in enemies:
 		if e.horde:
 			alive += 1
-	var cap := mini(110, 45 + int(horde_age / 3.0))
+	var cap := mini(180 if big else 110, (80 if big else 45) + int(horde_age / (1.5 if big else 3.0)))
 	if alive >= cap:
 		return
 	var pool: Array = []
@@ -7068,14 +7052,14 @@ func horde_update(real: float) -> void:
 	else:
 		pool = Game.BIO[int(dun.get("bio", 1))]["pool"]
 	# a gruppi: ogni ondata arriva da una o due direzioni, appena fuori dallo schermo
-	var n := mini(cap - alive, 6 + player.lv / 6 + int(horde_age / 15.0))
+	var n := mini(cap - alive, (14 if big else 6) + player.lv / 6 + int(horde_age / (8.0 if big else 15.0)))
 	var dirs: Array = [randf() * TAU]
 	if n > 8:
 		dirs.append(dirs[0] + PI + randf_range(-0.8, 0.8))
 	for i in n:
 		var a0: float = dirs[i % dirs.size()]
 		for att in 12:
-			var pos := player.position + Vector2.from_angle(a0 + randf_range(-0.6, 0.6)) * randf_range(250.0, 330.0)
+			var pos := player.position + Vector2.from_angle(a0 + randf_range(-0.6, 0.6)) * randf_range(250.0, 330.0) * (1.25 if big else 1.0)
 			if att >= 8:
 				pos = player.position + Vector2.from_angle(randf() * TAU) * randf_range(220.0, 320.0)
 			if free_at(pos, 5.0):
@@ -10271,7 +10255,9 @@ func _process(_dt: float) -> void:
 	if OS.get_cmdline_user_args().has("--journeytest"):
 		tgs += 1
 		if tgs == 5:
+			persist["journey"] = 0
 			persist["bosses"]["boss_jailer"] = true
+			Story.flags(self)[Story.INV] = true
 			for k in JOURNEY_N + 1:
 				print("JOURNEY tappa ", journey_step(), " | ", objective(), " | souls=", player.souls)
 				match journey_step():
@@ -10280,16 +10266,49 @@ func _process(_dt: float) -> void:
 					1:
 						pages_found = 1
 					2:
-						var po: Dictionary = pois[int(persist["journey_poi"])]
-						po["built"] = true
-						for en in po.get("spawns", []):
-							en["alive"] = false
+						Story.flags(self)[Story.BARN_ASSAULT] = "done"
 					3:
 						player.lv = 3
 					4:
 						player.position = journey_target()
 				journey_update()
 			print("JOURNEY fine: ", objective())
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--barnassaulttest"):
+		tgs += 1
+		if tgs == 5:
+			persist["bosses"]["boss_jailer"] = true
+			persist["journey"] = 2
+			var story_flags := Story.flags(self)
+			story_flags[Story.INV] = true
+			story_flags.erase(Story.BARN_ASSAULT)
+			Story.barn_runner = null
+			Story.barn_runtime = false
+			Story.barn_t = 0.0
+			Story.barn_wait = 0.0
+			Story.update(self, 0.05)
+			print("BARN prima del ritardo: stato=", Story.barn_status(self))
+			Story.barn_wait = Story.BARN_DELAY       # il contadino arriva solo dopo il ritardo: lo salto
+			player.items.erase("arrosto")
+			player.focus = Player.MAX_FOCUS
+			state = "play"
+			Story.update(self, 0.05)
+			var steps := 0
+			while steps < 400 and Story.barn_status(self) != "active":
+				Story.update(self, 0.05)
+				steps += 1
+			var started := Story.barn_status(self) == "active" and player.zmode == 1 and state == "dialog"
+			state = "play"
+			Story.update(self, Story.BARN_TIME + 0.1)
+			var final_spawned: bool = Story.barn_final_active(self) and is_instance_valid(Story.barn_final) and Story.barn_final.kind == "knight_fallen"
+			if is_instance_valid(Story.barn_final):
+				Story.barn_final.dying = true
+			Story.update(self, 0.05)
+			var completed := Story.barn_done(self) and player.zmode == 0
+			journey_update()
+			var advanced := journey_step() == 3 and int(player.items.get("arrosto", 0)) == 2
+			print("BARN richiesta=", started, " capobranco=", final_spawned, " conclusa=", completed, " progresso=", advanced, " avvicinamento=", steps, " obiettivo=", objective())
+			assert(started and final_spawned and completed and advanced, "Assalto al fienile non completato correttamente")
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--storytest"):
 		tgs += 1

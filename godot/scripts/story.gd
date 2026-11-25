@@ -1,20 +1,34 @@
 class_name Story
 extends RefCounted
 ## Eventi di storia: si svolgono una sola volta, in ordine, e creano urgenze che bloccano il resto del gioco.
-## Ogni evento e' una "flag" salvata in persist["flags"] (finita = true). Le cose bloccate controllano la flag.
+## Ogni evento salva il proprio stato in persist["flags"]; le cose bloccate controllano quello stato.
 ##
 ## 1. IL CARCERIERE   (gia' nel gioco)  - dalle Celle si esce solo sconfiggendo il carceriere
 ## 2. VILLAGGIO INVASO                  - il falo' del villaggio e' spento e l'anziano si nasconde finche' i mostri non sono morti
+## 3. ASSALTO AL FIENILE                - dopo il primo diario, il contadino chiede aiuto e il giocatore resiste all'orda
 ##
-## Per aggiungere un evento: una flag, uno spawn (con "story": id, "force": true), un testo per objective() e un complete().
+## Gli eventi aggiornano l'obiettivo principale e salvano il completamento insieme alla progressione.
 
 const INV := "villaggio_libero"
 const CHRONO := "chrono_found"     # l'eroe ha raccolto l'apparecchio caduto dall'ufo: senza, niente Cronotone
 const ESCAPE_INTRO := "escape_intro"
+const BARN_ASSAULT := "barn_assault"
+const BARN_TIME := 120.0           # durata dell'assalto al fienile (secondi)
+const BARN_DELAY := 150.0          # il contadino arriva solo dopo tanti secondi di gioco da quando la missione si sblocca
+const BARN_CAM := 26.0             # di quanto si alza la vista durante l'assalto
 const FIRE_OFF := Vector2i(3, 0)           # il falo' del villaggio e' a SEEDS[0] + questo
 const ESCAPE_LINE := "IL VILLAGGIO E' STATO INVASO DURANTE LA NOTTE. I MOSTRI SONO OVUNQUE E IL FALO' E' SPENTO. LIBERALO, TI PREGO: E' LA' DOVE INDICA LA FRECCIA"
 static var runner = null    # il fuggiasco che corre incontro all'eroe appena uscito dalle celle
 static var runner_done := false
+static var barn_runner = null
+static var barn_final = null
+static var barn_t := 0.0
+static var barn_wait := 0.0
+static var barn_prev_mode := 0
+static var barn_prev_focus := 0.0
+static var barn_prev_horde_age := 0.0
+static var barn_prev_horde_t := 0.0
+static var barn_runtime := false
 static var left_n := 0
 static var timer := 0.0
 const UFO_AFTER := 60.0
@@ -80,7 +94,170 @@ static func _run_to_hero(m, dt: float) -> void:
 	m.save_game()
 
 
-## chiamata all'inizio di populate_world: decide se il villaggio e' invaso
+static func barn_status(m) -> String:
+	return str(flags(m).get(BARN_ASSAULT, ""))
+
+
+static func barn_done(m) -> bool:
+	return barn_status(m) == "done"
+
+
+static func barn_final_active(m) -> bool:
+	return barn_status(m) == "final"
+
+
+static func _spawn_barn_farmer(m) -> void:
+	var pc := Vector2i(floori(m.player.position.x / 16.0), floori(m.player.position.y / 16.0))
+	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var sc: Vector2i = m.free_near(pc + dirs[randi_range(0, dirs.size() - 1)])
+	barn_runner = m.add_npc("contadino_assalto", sc)
+	if barn_runner != null:
+		m.block.erase(barn_runner.cell)
+
+
+static func _restore_barn_mode(m) -> void:
+	if m.player.zmode != barn_prev_mode:
+		m.player.set_zmode(barn_prev_mode)
+	m.player.focus = barn_prev_focus
+	if barn_prev_mode == 1:
+		m.horde_age = barn_prev_horde_age
+		m.horde_t = barn_prev_horde_t
+	else:
+		m.horde_age = 0.0
+		m.horde_t = 0.0
+	barn_runtime = false
+
+
+static func _ensure_barn_mode(m) -> void:
+	if not barn_runtime:
+		barn_runtime = true
+		barn_t = BARN_TIME
+		barn_prev_mode = m.player.zmode
+		barn_prev_focus = m.player.focus
+		barn_prev_horde_age = m.horde_age
+		barn_prev_horde_t = m.horde_t
+		if barn_prev_mode != 1:
+			m.horde_age = 0.0
+			m.horde_t = 0.0
+	m.player.focus = Player.MAX_FOCUS
+	if m.player.zmode != 1:
+		m.player.set_zmode(1)
+
+
+static func _start_barn_assault(m, p) -> void:
+	var f := flags(m)
+	if str(f.get(BARN_ASSAULT, "")) != "approach":
+		return
+	f[BARN_ASSAULT] = "active"
+	if p != null and is_instance_valid(p):
+		m.block.erase(p.cell)
+		m.props.erase(p)
+		p.queue_free()
+	barn_runner = null
+	_ensure_barn_mode(m)
+	m.dlg = {"head": "IL CONTADINO", "text": "AIUTO! I MOSTRI STANNO ASSALTANDO IL FIENILE. SE DISTRUGGONO LE SCORTE, IL VILLAGGIO NON AVRA' CIBO PER L'INVERNO!", "opts": ["..."], "sel": 0, "qs": "story", "qid": ""}
+	m.state = "dialog"
+	m.snd("roar")
+	m.shake(3.0)
+	m.save_game()
+
+
+static func talk_barn_farmer(m, p) -> void:
+	_start_barn_assault(m, p)
+
+
+static func _run_to_hero_barn(m, dt: float) -> void:
+	if not is_instance_valid(barn_runner):
+		_spawn_barn_farmer(m)
+		return
+	var p: Prop = barn_runner
+	var to: Vector2 = m.player.position - p.position
+	if to.length() > 30.0:
+		m.move_body(p, to.normalized() * 62.0 * dt, 4.0)
+		p.spr.flip_h = to.x < 0.0
+		p.spr.offset.y = -6.0 - absf(sin(Time.get_ticks_msec() / 90.0)) * 1.2
+		return
+	p.spr.offset.y = -6.0
+	p.cell = Vector2i(floori(p.position.x / 16.0), floori(p.position.y / 16.0))
+	m.block[p.cell] = true
+	_start_barn_assault(m, p)
+
+
+static func _finish_barn_assault(m) -> void:
+	flags(m)[BARN_ASSAULT] = "done"
+	barn_final = null
+	_restore_barn_mode(m)
+	m.popup(m.player.position + Vector2(0, -30), "RISERVE DEL FIENILE SALVE!", Color(1.0, 0.85, 0.5))
+	m.snd("level")
+	m.shake(4.0)
+	m.save_game()
+
+
+static func _spawn_barn_final(m) -> void:
+	var pos: Vector2 = m.player.position + Vector2(180.0, 0.0)
+	for att in 20:
+		var candidate: Vector2 = m.player.position + Vector2.from_angle(randf() * TAU) * randf_range(170.0, 230.0)
+		if m.free_at(candidate, 8.0):
+			pos = candidate
+			break
+	barn_final = m.spawn_enemy("knight_fallen", pos, 0.7, false, Color(1.0, 0.8, 0.55))
+	barn_final.awake = true
+	barn_final.set_process(true)
+	m.say("IL CAPOBRANCO HA RAGGIUNTO IL FIENILE!")
+	m.snd("roar")
+
+
+static func _barn_cam(m) -> void:
+	if m.skin is W3DSkin:
+		(m.skin as W3DSkin).cam_extra = BARN_CAM if (barn_status(m) == "active" and m.area == "world" and not m.run_mode) else 0.0
+
+
+static func _barn_update(m, dt: float) -> void:
+	_barn_cam(m)
+	if m.run_mode or not village_free(m) or m.journey_step() != 2:
+		return
+	var f := flags(m)
+	var status := str(f.get(BARN_ASSAULT, ""))
+	if status == "":
+		if m.area != "world":
+			return
+		if m.state == "play":
+			barn_wait += dt
+		if barn_wait < BARN_DELAY:
+			return
+		f[BARN_ASSAULT] = "approach"
+		barn_runner = null
+		barn_final = null
+		barn_runtime = false
+		barn_t = 0.0
+		status = "approach"
+	if status == "approach":
+		if m.area == "world" and m.state == "play":
+			_run_to_hero_barn(m, dt)
+		return
+	if status != "active":
+		if status != "final":
+			return
+	if m.area != "world":
+		if m.player.zmode == 1:
+			m.player.set_zmode(barn_prev_mode)
+		return
+	_ensure_barn_mode(m)
+	if m.state != "play":
+		return
+	if status == "active":
+		barn_t -= dt
+		if barn_t <= 0.0:
+			f[BARN_ASSAULT] = "final"
+			barn_final = null
+			m.clear_horde()
+			_spawn_barn_final(m)
+	elif not is_instance_valid(barn_final):
+		_spawn_barn_final(m)
+	elif barn_final.dying:
+		_finish_barn_assault(m)
+
+
 static func init_world(m) -> void:
 	var f := flags(m)
 	if f.has(INV) or m.run_mode:
@@ -239,8 +416,8 @@ static func _device(m) -> void:
 	if m.player.position.distance_to((dc as Vector2) * 16.0) > 30.0:
 		return
 	flags(m)[CHRONO] = true
-	if m.skin is W3DSkin and (m.skin as W3DSkin).cine != null:
-		(m.skin as W3DSkin).cine.take_device()
+	if m.skin is W3DSkin and (m.skin as W3DSkin).wreck_cine != null:
+		(m.skin as W3DSkin).wreck_cine.take_device()
 	m.burst((dc as Vector2) * 16.0, Color(0.75, 0.5, 1.0), 40, 90.0, 1.0)
 	m.player.chrono = Chrono.MAX_E
 	m.snd("level")
@@ -254,9 +431,25 @@ static func _device(m) -> void:
 	m.save_game()
 
 
+static var lib_t := -1.0
+
+
+## dopo l'ultimo nemico si resta un istante dall'alto, poi parte la cutscene in prima persona
+static func _lib_update(m, dt: float) -> void:
+	if lib_t < 0.0 or m.state != "play":
+		return
+	lib_t -= dt
+	if lib_t <= 0.0:
+		lib_t = -1.0
+		if m.skin is W3DSkin:
+			(m.skin as W3DSkin).start_cine("liberazione")      # eroe confuso in prima persona
+
+
 static func update(m, dt: float) -> void:
+	_lib_update(m, dt)
 	_sing_update(m, dt)
 	_device(m)
+	_barn_update(m, dt)
 	if village_free(m) or m.area != "world":
 		return
 	if not is_done(m, ESCAPE_INTRO) and m.persist["bosses"].has("boss_jailer") and m.state == "play":
@@ -302,12 +495,23 @@ static func complete_invasion(m) -> void:
 	m.popup(m.player.position + Vector2(0, -22), "+150 ANIME", Color(0.6, 1.0, 0.85))
 	m.drop_relic(m.player.position + Vector2(0, 14))
 	m.say("VILLAGGIO LIBERATO! IL FALO' BRUCIA DI NUOVO")
+	lib_t = 2.5      # un momento ancora dall'alto, poi la vista in prima persona (vedi _lib_update)
 	m.snd("level")
 	m.save_game()
 
 
 ## testo dell'obiettivo (vuoto se nessun evento di storia e' in corso)
 static func objective(m) -> String:
+	if not m.run_mode and village_free(m) and m.journey_step() == 2:
+		match barn_status(m):
+			"approach":
+				return "IL CONTADINO STA ARRIVANDO"
+			"active":
+				return "DIFENDI IL FIENILE: %d S" % maxi(1, ceili(barn_t))
+			"final":
+				return "SCONFIGGI IL CAPOBRANCO AL FIENILE"
+			_:
+				return "ATTENDI IL CONTADINO"
 	var dc: Variant = device_cell(m)
 	if dc != null:
 		var dv: Vector2 = (dc as Vector2) * 16.0
