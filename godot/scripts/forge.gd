@@ -158,7 +158,35 @@ static func _add(cost: Dictionary, mat: String, n: int) -> void:
 
 
 ## calcola costo, descrizione e risultato di una combinazione. roll=true aggiunge la piccola variazione casuale.
+## qualita' massima forgiabile in base al livello del giocatore: la qualita' 5 si sblocca verso il livello 13
+static func max_quality(lv: int) -> int:
+	return clampi(1 + (lv - 1) / 3, 1, 5)
+
+
 static func make(tab: int, v: Array, p, roll := false) -> Dictionary:
+	var res := _make_raw(tab, v, p, roll)
+	if (tab == 0 or tab == 2) and p != null and res.get("item") is Dictionary and not (res["item"] as Dictionary).is_empty():
+		var q: int = int(v[4]) if tab == 0 else int(v[3])
+		var mq := max_quality(int(p.lv))
+		if q > mq:
+			res["err"] = "QUALITA' %d: SERVE IL LIVELLO %d (ORA MAX %d)" % [q, 1 + (q - 1) * 3, mq]
+	if p != null and res.get("item") is Dictionary and not (res["item"] as Dictionary).is_empty() and str(res.get("err", "")) == "":
+		var lv := int(p.lv)
+		if tab == 1:
+			var it: Dictionary = res["item"]
+			if str(v[0]) != "purifica" and int(it.get("u", 0)) > 1 + lv / 2:
+				res["err"] = "TROPPE MODIFICHE PER IL TUO LIVELLO (MAX %d)" % (1 + lv / 2)
+			elif str(v[0]) == "infondi" and (it["a"] as Array).size() > 1 + lv / 5:
+				res["err"] = "SERVE UN LIVELLO PIU' ALTO PER ALTRE ESSENZE (ORA MAX %d)" % (1 + lv / 5)
+		elif tab == 3:
+			if int(v[3]) >= 3 and lv < 6:
+				res["err"] = "LA DOSE FORTE RICHIEDE IL LIVELLO 6"
+			elif str(v[1]) != "" and str(v[2]) != "" and lv < 4:
+				res["err"] = "DUE ADDITIVI RICHIEDONO IL LIVELLO 4"
+	return res
+
+
+static func _make_raw(tab: int, v: Array, p, roll := false) -> Dictionary:
 	match tab:
 		0:
 			return _make_weapon(v, roll)

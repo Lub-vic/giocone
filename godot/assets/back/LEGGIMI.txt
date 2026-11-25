@@ -1,0 +1,11 @@
+Retri (vista da dietro) dei personaggi a blocchi in prima persona.
+Nome file: <personaggio>_b.png, stesso nome dello sprite frontale in assets/sprites/.
+
+File presenti: derivati automaticamente dal fronte (scurita' della testa, niente riflessi degli occhi,
+sagoma specchiata). Sono segnaposto: per i personaggi piu' visibili conviene sostituirli.
+
+Per generare quelli veri con l'AI (metodo img2img SDXL + Pixel Art XL, come per le viste dall'alto):
+  input: assets/topdown/<nome>.png (vista dall'alto) e assets/sprites/<nome>.png (vista frontale)
+  prompt: "pixel art character, same costume and palette, back view, seen from behind, same pixel size"
+  output: salva il risultato come assets/back/<nome>_b.png (stessa risoluzione dello sprite frontale)
+Il gioco usa automaticamente il file se esiste; se manca usa lo sprite frontale scurito.

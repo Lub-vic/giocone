@@ -288,6 +288,299 @@ func inflate(img: Image, vox: float, k := 0.12) -> void:
 
 
 ## sfera/ellisse a poligoni: forme tonde per personaggi e cespugli (poli come punti, anelli sfalsati)
+## personaggio a blocchi IN PIEDI: ogni pixel opaco dello sprite frontale diventa un cubo, con spessore; i piedi stanno a quota 0
+## e il fronte guarda +Z (si ruota verso chi guarda). Si usa nella prima persona.
+func upright(img: Image, vox: float, depth: int) -> void:
+	var w := img.get_width()
+	var h := img.get_height()
+	var maxy := 0
+	for y in h:
+		for x in w:
+			if img.get_pixel(x, y).a > 0.5:
+				maxy = maxi(maxy, y)
+	var hd := depth * vox * 0.5
+	for y in h:
+		for x in w:
+			var c := img.get_pixel(x, y)
+			if c.a < 0.5:
+				continue
+			c.a = 1.0
+			var cx := (x - w * 0.5 + 0.5) * vox
+			var cy := (maxy - y + 0.5) * vox
+			box(Transform3D(Basis.IDENTITY, Vector3(cx, cy, 0.0)), Vector3(vox * 1.02, vox * 1.02, hd * 2.0), c, 0.0, 8)
+
+
+## personaggio a blocchi COMPLETO, visibile da ogni lato: il fronte e' lo sprite frontale; il volume ha sezione ellittica per ogni riga di pixel
+## (corpo tondeggiante, braccia sottili); il retro usa lo sprite posteriore se esiste (nome_b.png), altrimenti il fronte specchiato e scurito;
+## i fianchi riprendono i colori del fronte. Piedi a quota 0, il davanti guarda -Z (come i modelli visti dall'alto).
+func solid(front: Image, back: Image, vox: float) -> void:
+	var w := front.get_width()
+	var h := front.get_height()
+	var maxy := 0
+	for y in h:
+		for x in w:
+			if front.get_pixel(x, y).a > 0.5:
+				maxy = maxi(maxy, y)
+	var vs := {}
+	var xa_row: Array = []
+	var xb_row: Array = []
+	for y in h:
+		var xa := -1
+		var xb := -1
+		for x in w:
+			if front.get_pixel(x, y).a > 0.5:
+				if xa < 0:
+					xa = x
+				xb = x
+		xa_row.append(xa)
+		xb_row.append(xb)
+		if xa < 0:
+			continue
+		var cx := (xa + xb + 1) * 0.5
+		var rw := (xb - xa + 1) * 0.5
+		var dz := clampf(rw * 0.7, 1.5, 5.5)
+		for x in range(xa, xb + 1):
+			if front.get_pixel(x, y).a < 0.5:
+				continue
+			var u := ((x + 0.5) - cx) / maxf(rw, 0.5)
+			var zd := maxi(1, roundi(dz * sqrt(maxf(0.0, 1.0 - u * u * 0.85))))
+			for z in range(-zd, zd):
+				vs[Vector3i(x, maxy - y, z)] = true
+	var offs: Array = [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	for key in vs:
+		var k: Vector3i = key
+		var py := maxy - k.y
+		var fc := front.get_pixel(k.x, py)
+		fc.a = 1.0
+		var x0 := (w * 0.5 - 1.0 - k.x) * vox       # il fronte guarda -Z: +X appare a sinistra, quindi l'immagine si specchia nel mondo
+		var x1 := x0 + vox
+		var y0 := k.y * vox
+		var y1 := y0 + vox
+		var z0 := k.z * vox
+		var z1 := z0 + vox
+		for d in 5:
+			if vs.has(k + (offs[d] as Vector3i)):
+				continue
+			match d:
+				0:      # fianco destro
+					quad(Vector3(x1, y0, z0), Vector3(x1, y0, z1), Vector3(x1, y1, z1), Vector3(x1, y1, z0), Color(fc.r * 0.72, fc.g * 0.72, fc.b * 0.74, 1.0))
+				1:      # fianco sinistro
+					quad(Vector3(x0, y0, z1), Vector3(x0, y0, z0), Vector3(x0, y1, z0), Vector3(x0, y1, z1), Color(fc.r * 0.72, fc.g * 0.72, fc.b * 0.74, 1.0))
+				2:      # sopra
+					quad(Vector3(x0, y1, z0), Vector3(x1, y1, z0), Vector3(x1, y1, z1), Vector3(x0, y1, z1), Color(minf(fc.r * 1.08, 1.0), minf(fc.g * 1.08, 1.0), minf(fc.b * 1.08, 1.0), 1.0))
+				3:      # dietro
+					var bc := fc
+					var dark := 0.8
+					if back != null and k.x < back.get_width() and py < back.get_height() and back.get_pixel(k.x, py).a > 0.5:
+						bc = back.get_pixel(k.x, py)
+						dark = 1.0
+					else:
+						var xm: int = int(xa_row[py]) + int(xb_row[py]) - k.x      # il fronte specchiato
+						if xm >= 0 and xm < w and front.get_pixel(xm, py).a > 0.5:
+							bc = front.get_pixel(xm, py)
+					quad(Vector3(x1, y0, z1), Vector3(x0, y0, z1), Vector3(x0, y1, z1), Vector3(x1, y1, z1), Color(bc.r * dark, bc.g * dark, bc.b * dark, 1.0))
+				4:      # davanti
+					quad(Vector3(x0, y0, z0), Vector3(x1, y0, z0), Vector3(x1, y1, z0), Vector3(x0, y1, z0), fc)
+
+
+## personaggio a blocchi dal volume vero, ricavato da DUE viste: lo sprite frontale (sagoma e colori davanti) e la vista dall'alto
+## (impronta e altezze). Un cubo esiste solo se lo conferma la sagoma frontale E l'impronta E l'altezza dall'alto: ne escono le sagome
+## laterali (testa, spalla, braccio, arma) e quella posteriore. Colori: davanti dallo sprite frontale, sopra dalla vista dall'alto,
+## dietro lo sprite posteriore (se esiste) o il fronte scurito, ai lati un misto fra fronte e alto.
+func hull(front: Image, back: Image, topc: Image, toph: Image, vox: float, side: Image = null) -> void:
+	var w := front.get_width()
+	var h := front.get_height()
+	var fx0 := w
+	var fx1 := -1
+	var fy0 := h
+	var fy1 := -1
+	for y in h:
+		for x in w:
+			if front.get_pixel(x, y).a > 0.5:
+				fx0 = mini(fx0, x)
+				fx1 = maxi(fx1, x)
+				fy0 = mini(fy0, y)
+				fy1 = maxi(fy1, y)
+	if fx1 < 0:
+		return
+	var tw := topc.get_width()
+	var th := topc.get_height()
+	var tx0 := tw
+	var tx1 := -1
+	var ty0 := th
+	var ty1 := -1
+	var hmax := 1.0
+	for y in th:
+		for x in tw:
+			if topc.get_pixel(x, y).a > 0.5:
+				tx0 = mini(tx0, x)
+				tx1 = maxi(tx1, x)
+				ty0 = mini(ty0, y)
+				ty1 = maxi(ty1, y)
+				hmax = maxf(hmax, toph.get_pixel(x, y).r * 255.0)
+	if tx1 < 0:
+		solid(front, back, vox)
+		return
+	var fw := fx1 - fx0 + 1
+	var fh := fy1 - fy0 + 1
+	var s := float(tx1 - tx0 + 1) / float(fw)          # pixel della vista dall'alto per pixel dello sprite frontale
+	var hs := float(fh) / hmax
+	var fcx := (fx0 + fx1 + 1) * 0.5
+	var tcx := (tx0 + tx1 + 1) * 0.5
+	var tcy := (ty0 + ty1 + 1) * 0.5
+	var nz := mini(int(ceil(float(ty1 - ty0 + 1) / s * 0.5)), int(ceil(fw * 0.34)))      # profondita' massima: un corpo non e' profondo quanto largo
+	var imin := -int(ceil(fw * 0.5))
+	var imax := int(ceil(fw * 0.5))
+	var vs := {}
+	for i in range(imin, imax):
+		var px := int(floor(fcx - (i + 0.5)))
+		if px < fx0 or px > fx1:
+			continue
+		var u := int(floor(tcx + (i + 0.5) * s))
+		if u < 0 or u >= tw:
+			continue
+		for k in range(-nz, nz):
+			var v := int(floor(tcy + (k + 0.5) * s))
+			if v < 0 or v >= th:
+				continue
+			if topc.get_pixel(u, v).a < 0.5:
+				continue
+			var hh := toph.get_pixel(u, v).r * 255.0 * hs
+			for j in fh:
+				if float(j) + 0.5 > hh + 0.5:
+					break
+				if front.get_pixel(px, fy1 - j).a > 0.5:
+					vs[Vector3i(i, j, k)] = true
+	# sprite di profilo (rivolto a destra): se c'e', scolpisce il volume con la sua sagoma e colora i fianchi
+	var use_side := false
+	var s_sx0 := 0
+	var s_sw := 1
+	var s_sy1 := 0
+	var s_sh := 1
+	var s_zmin := 9999
+	var s_zmax := -9999
+	if side != null and not vs.is_empty():
+		var ax0 := side.get_width()
+		var ax1 := -1
+		var ay0 := side.get_height()
+		var ay1 := -1
+		for y in side.get_height():
+			for x in side.get_width():
+				if side.get_pixel(x, y).a > 0.5:
+					ax0 = mini(ax0, x)
+					ax1 = maxi(ax1, x)
+					ay0 = mini(ay0, y)
+					ay1 = maxi(ay1, y)
+		if ax1 >= 0:
+			use_side = true
+			s_sx0 = ax0
+			s_sw = ax1 - ax0 + 1
+			s_sy1 = ay1
+			s_sh = ay1 - ay0 + 1
+			for key in vs:
+				var vk: Vector3i = key
+				s_zmin = mini(s_zmin, vk.z)
+				s_zmax = maxi(s_zmax, vk.z)
+			var before := vs.size()
+			var keep := {}
+			for key in vs:
+				var vk2: Vector3i = key
+				if _side_sample(side, vk2, s_sx0, s_sw, s_sy1, s_sh, s_zmin, s_zmax, fh, false).a > 0.5:
+					keep[key] = true
+			if keep.size() * 10 >= before * 4:       # se la sagoma laterale non combacia, non si scolpisce
+				vs = keep
+	# ogni pixel dello sprite frontale deve restare coperto: se la vista dall'alto non lo conferma, si mette una lastra sottile
+	for i in range(imin, imax):
+		var px2 := int(floor(fcx - (i + 0.5)))
+		if px2 < fx0 or px2 > fx1:
+			continue
+		for j in fh:
+			if front.get_pixel(px2, fy1 - j).a < 0.5:
+				continue
+			var any := false
+			for k in range(-nz, nz):
+				if vs.has(Vector3i(i, j, k)):
+					any = true
+					break
+			if not any:
+				vs[Vector3i(i, j, -1)] = true
+				vs[Vector3i(i, j, 0)] = true
+	var bw := 0
+	var bcx := 0.0
+	var by1 := 0
+	if back != null:
+		var bx0 := back.get_width()
+		var bx1 := -1
+		var byy := -1
+		for y in back.get_height():
+			for x in back.get_width():
+				if back.get_pixel(x, y).a > 0.5:
+					bx0 = mini(bx0, x)
+					bx1 = maxi(bx1, x)
+					byy = maxi(byy, y)
+		if bx1 >= 0:
+			bw = bx1 - bx0 + 1
+			bcx = (bx0 + bx1 + 1) * 0.5
+			by1 = byy
+	var offs: Array = [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	for key in vs:
+		var kk: Vector3i = key
+		var fxp := clampi(int(floor(fcx - (kk.x + 0.5))), 0, w - 1)
+		var fyp := clampi(fy1 - kk.y, 0, h - 1)
+		var fc := front.get_pixel(fxp, fyp)
+		fc.a = 1.0
+		var uu := clampi(int(floor(tcx + (kk.x + 0.5) * s)), 0, tw - 1)
+		var vv := clampi(int(floor(tcy + (kk.z + 0.5) * s)), 0, th - 1)
+		var tc := topc.get_pixel(uu, vv)
+		tc.a = 1.0
+		var x0 := kk.x * vox
+		var x1 := x0 + vox
+		var y0 := kk.y * vox
+		var y1 := y0 + vox
+		var z0 := kk.z * vox
+		var z1 := z0 + vox
+		for d in 5:
+			if vs.has(kk + (offs[d] as Vector3i)):
+				continue
+			match d:
+				0, 1:      # fianchi: dallo sprite di profilo se c'e', altrimenti fra i colori del fronte e quelli visti dall'alto
+					var sc := fc.lerp(tc, 0.45)
+					sc = Color(sc.r * 0.74, sc.g * 0.74, sc.b * 0.76, 1.0)
+					if use_side:
+						var sp := _side_sample(side, kk, s_sx0, s_sw, s_sy1, s_sh, s_zmin, s_zmax, fh, d == 1)
+						if sp.a > 0.5:
+							sc = Color(sp.r * 0.92, sp.g * 0.92, sp.b * 0.92, 1.0)
+					if d == 0:
+						quad(Vector3(x1, y0, z0), Vector3(x1, y0, z1), Vector3(x1, y1, z1), Vector3(x1, y1, z0), sc)
+					else:
+						quad(Vector3(x0, y0, z1), Vector3(x0, y0, z0), Vector3(x0, y1, z0), Vector3(x0, y1, z1), sc)
+				2:        # sopra: i colori della vista dall'alto
+					quad(Vector3(x0, y1, z0), Vector3(x1, y1, z0), Vector3(x1, y1, z1), Vector3(x0, y1, z1), Color(minf(tc.r * 1.1, 1.0), minf(tc.g * 1.1, 1.0), minf(tc.b * 1.1, 1.0), 1.0))
+				3:        # dietro
+					var bc := fc
+					var dark := 0.78
+					if back != null and bw > 0:
+						var bpx := int(floor(bcx + (kk.x + 0.5)))
+						var bpy := by1 - kk.y
+						if bpx >= 0 and bpx < back.get_width() and bpy >= 0 and bpy < back.get_height() and back.get_pixel(bpx, bpy).a > 0.5:
+							bc = back.get_pixel(bpx, bpy)
+							dark = 1.0
+					quad(Vector3(x1, y0, z1), Vector3(x0, y0, z1), Vector3(x0, y1, z1), Vector3(x1, y1, z1), Color(bc.r * dark, bc.g * dark, bc.b * dark, 1.0))
+				4:        # davanti
+					quad(Vector3(x0, y0, z0), Vector3(x1, y0, z0), Vector3(x1, y1, z0), Vector3(x0, y1, z0), fc)
+
+
+## colore dello sprite di profilo (rivolto a destra) per un cubo: il davanti del personaggio e' a -Z; guardando il fianco +X il davanti sta a destra
+func _side_sample(side: Image, k: Vector3i, sx0: int, sw: int, sy1: int, sh: int, zmin: int, zmax: int, fh: int, mirror: bool) -> Color:
+	var dd := float(zmax - zmin + 1)
+	var fz := (zmax + 1.0 - (k.z + 0.5)) / dd
+	if mirror:
+		fz = 1.0 - fz
+	var px := clampi(sx0 + int(fz * sw), sx0, sx0 + sw - 1)
+	var py := clampi(sy1 - int((k.y + 0.5) / float(fh) * sh), sy1 - sh + 1, sy1)
+	return side.get_pixel(px, py)
+
+
 func blob(c: Vector3, r: Vector3, col: Color, seg := 7, rings := 4, j := 0.1, wob := 0.05) -> void:
 	var pts: Array = []
 	for ri in rings + 1:

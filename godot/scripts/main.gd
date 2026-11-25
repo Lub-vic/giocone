@@ -211,6 +211,8 @@ var over_t := 0.0
 var msg := ""
 var msg_t := 0.0
 var shake_v := 0.0
+var death_area := ""          # dove si e' morti (serve al respawn prima dell'ufo)
+var death_pos := Vector2.ZERO
 var hitstop_t := 0.0
 var last_ms := 0
 var t := 0.0
@@ -2756,7 +2758,7 @@ func objective() -> String:
 		var left := maxi(0, int(run_boss_time() - run_t))
 		return "CUSTODE IN ARRIVO %d:%02d" % [left / 60, left % 60]
 	if not persist["bosses"].has("boss_jailer"):
-		return "ESCI DALLE CELLE: SCONFIGGI IL CARCERIERE"
+		return "ESCI DALLE CELLE: SCONFIGGI IL CARCERIERE (F5: SALTA LE CELLE)"
 	var story_obj := Story.objective(self)
 	if story_obj != "":
 		return story_obj
@@ -3506,7 +3508,7 @@ func add_mat(id: String, n: int) -> void:
 
 func gather(p) -> void:
 	var id := str(p.kind).substr(4)
-	var n := randi_range(2, 3) if (id == "erba" or id == "legna") else randi_range(1, 2)
+	var n := randi_range(1, 2) if (id == "erba" or id == "legna") else 1
 	add_mat(id, n)
 	persist["broken"][key(p.cell)] = true
 	props.erase(p)
@@ -3528,7 +3530,8 @@ func res_chunk(key: Vector2i) -> void:
 	}
 	var bi: int = biome[idx(Vector2i((r0.position.x + r0.end.x) / 2, (r0.position.y + r0.end.y) / 2))]
 	for entry in cfg[bi]:
-		var cnt := int(entry[1]) + (1 if randf() < fmod(float(entry[1]), 1.0) else 0)
+		var dens := float(entry[1]) * 0.45      # le risorse sono preziose: poche e da cercare
+		var cnt := int(dens) + (1 if randf() < fmod(dens, 1.0) else 0)
 		for k in cnt:
 			var c := Vector2i(randi_range(r0.position.x + 3, r0.end.x - 4), randi_range(r0.position.y + 3, r0.end.y - 4))
 			if not inb(c) or reach[idx(c)] != 1 or road[idx(c)] == 1 or cobble[idx(c)] == 1 or block.has(c) or outside[idx(c)] == 1:
@@ -3579,6 +3582,8 @@ func mat_drops(kind: String, champ: bool) -> void:
 		drops["osso"] = int(drops.get("osso", 0)) + 2
 		drops["minerale"] = int(drops.get("minerale", 0)) + 1
 	for k in drops:
+		if not champ and randf() > 0.6:
+			continue      # non ogni bestia lascia materiali
 		add_mat(k, int(drops[k]))
 
 
@@ -3879,6 +3884,9 @@ func stock_chrono(cid: String, nm: String) -> bool:
 ## bolla spazio-temporale: un tasto, un oggetto a caso dal passato o dal futuro
 func summon() -> void:
 	if state != "play" or player == null:
+		return
+	if not Story.has_chrono(self):
+		say("NON HAI NESSUN APPARECCHIO PER EVOCARE")
 		return
 	if player.chrono < Chrono.COST:
 		say("CRONOTONE: %d%%" % int(player.chrono))
@@ -5214,7 +5222,7 @@ func free_near(c: Vector2i) -> Vector2i:
 	return c
 
 
-func add_npc(id: String, c: Vector2i) -> void:
+func add_npc(id: String, c: Vector2i) -> Prop:
 	var d: Dictionary = NPCS[id]
 	var cc := free_near(c)
 	var p := Prop.new()
@@ -5225,6 +5233,7 @@ func add_npc(id: String, c: Vector2i) -> void:
 	block[cc] = true
 	ents.add_child(p)
 	props.append(p)
+	return p
 
 
 func souls_ok(n: int) -> bool:
@@ -5285,7 +5294,7 @@ func talk(p: Prop) -> void:
 func place_npcs_and_pages() -> void:
 	add_npc("becchino", SEEDS[1] + Vector2i(2, 10))
 	add_npc("eremita", SEEDS[2] + Vector2i(-1, 4))
-	if persist["bosses"].has("boss_jailer") and not Story.village_free(self):
+	if persist["bosses"].has("boss_jailer") and not Story.village_free(self) and Story.is_done(self, Story.ESCAPE_INTRO):
 		add_npc("fuggiasco", ENTR["d0"] + Vector2i(3, 0))
 	add_npc("strega", SEEDS[3] + Vector2i(3, 2))
 	add_npc("sacerdote", SEEDS[4] + Vector2i(0, 11))
@@ -5358,7 +5367,12 @@ func obj_targets() -> Array:
 	var green := Color(0.45, 1.0, 0.7)
 	if area == "world":
 		var jt: Variant = journey_target()
-		if jt != null:
+		var dvc: Variant = Story.device_cell(self)
+		if dvc != null:
+			out.append({"p": (dvc as Vector2) * 16.0, "c": Color(0.75, 0.5, 1.0), "n": "APPARECCHIO"})
+		elif persist["bosses"].has("boss_jailer") and not Story.village_free(self):
+			out.append({"p": cell_pos(SEEDS[0]), "c": gold, "n": "VILLAGGIO"})      # la freccia guida al villaggio invaso
+		elif jt != null:
 			out.append({"p": jt, "c": gold, "n": "OBIETTIVO"})
 		else:
 			var g := main_gate()
@@ -5583,19 +5597,59 @@ func room_kind(ty: String, i: int) -> String:
 	return "fucina" if i == 0 else "alloggio"
 
 
-## oggetto addossato a una parete (N, S, W, E) alla posizione `along`
+## una cella di pavimento che collega questa stanza a un'altra (porta, corridoio): davanti non si mette mai niente
+func blocks_opening(c: Vector2i, f: Vector2i) -> bool:
+	for dy in f.y:
+		for dx in f.x:
+			var cc := Vector2i(c.x + dx, c.y + dy)
+			if not inb(cc):
+				return true
+			var ri: int = room_of[idx(cc)]
+			for dv in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var n: Vector2i = cc + dv
+				if inb(n) and is_floor(n) and room_of[idx(n)] != ri:
+					return true
+	return false
+
+
+## oggetto addossato a una parete (N, S, W, E) alla posizione `along`: se tra l'oggetto e il muro resta un vuoto lo avvicina al muro
 func wp(name: String, inner: Rect2i, side: String, along: int) -> Prop:
 	var f := tex_fp(name)
 	var c := Vector2i.ZERO
+	var dv := Vector2i.ZERO
 	match side:
 		"N":
 			c = Vector2i(inner.position.x + along, inner.position.y)
+			dv = Vector2i(0, -1)
 		"S":
 			c = Vector2i(inner.position.x + along, inner.end.y - f.y)
+			dv = Vector2i(0, 1)
 		"W":
 			c = Vector2i(inner.position.x, inner.position.y + along)
+			dv = Vector2i(-1, 0)
 		_:
 			c = Vector2i(inner.end.x - f.x, inner.position.y + along)
+			dv = Vector2i(1, 0)
+	for k in 3:
+		var gap := false
+		for t in (f.x if dv.y != 0 else f.y):
+			var bc := Vector2i.ZERO
+			if dv.y < 0:
+				bc = Vector2i(c.x + t, c.y - 1)
+			elif dv.y > 0:
+				bc = Vector2i(c.x + t, c.y + f.y)
+			elif dv.x < 0:
+				bc = Vector2i(c.x - 1, c.y + t)
+			else:
+				bc = Vector2i(c.x + f.x, c.y + t)
+			if is_floor(bc) and not block.has(bc):
+				gap = true
+		if gap and area_free(c + dv, f):
+			c += dv
+		else:
+			break
+	if blocks_opening(c, f):
+		return null
 	return try_place(name, c)
 
 
@@ -5632,9 +5686,44 @@ func table_set(cx: int, cy: int) -> void:
 
 
 func corner_lamps(inner: Rect2i, both := true) -> void:
-	try_place("lamp_top", inner.position, true)
-	if both:
+	if not blocks_opening(inner.position, Vector2i.ONE):
+		try_place("lamp_top", inner.position, true)
+	if both and not blocks_opening(Vector2i(inner.end.x - 1, inner.position.y), Vector2i.ONE):
 		try_place("lamp_top", Vector2i(inner.end.x - 1, inner.position.y), true)
+
+
+## stesso oggetto (lampione, colonna...) in tutti e quattro gli angoli della stanza: simmetria, non a caso
+func corner_set(name: String, inner: Rect2i, fx := false) -> void:
+	for c in [inner.position, Vector2i(inner.end.x - 1, inner.position.y), Vector2i(inner.position.x, inner.end.y - 1), Vector2i(inner.end.x - 1, inner.end.y - 1)]:
+		if not blocks_opening(c, Vector2i.ONE):
+			try_place(name, c, fx)
+
+
+## gruppo di casse/barili/sacchi in un angolo (0 NO, 1 NE, 2 SO, 3 SE)
+func corner_cluster(inner: Rect2i, corner: int, names: Array, n: int) -> void:
+	var sx := 1 if corner % 2 == 0 else -1
+	var sy := 1 if corner < 2 else -1
+	var c0 := Vector2i(inner.position.x if sx > 0 else inner.end.x - 1, inner.position.y if sy > 0 else inner.end.y - 1)
+	var offs := [Vector2i(0, 0), Vector2i(sx, 0), Vector2i(0, sy), Vector2i(sx, sy)]
+	for k in mini(n, 4):
+		var nm: String = names[randi() % names.size()]
+		var c: Vector2i = c0 + offs[k]
+		if not blocks_opening(c, tex_fp(nm)):
+			try_place(nm, c)
+
+
+## sedie accanto a un oggetto (camino, tavolo): davanti e di lato
+func chairs_near(p: Prop, count: int) -> void:
+	if p == null:
+		return
+	var f := tex_fp(p.kind)
+	var spots := [Vector2i(p.cell.x + f.x / 2, p.cell.y + f.y), Vector2i(p.cell.x - 1, p.cell.y + f.y), Vector2i(p.cell.x + f.x, p.cell.y + f.y)]
+	var n := 0
+	for s in spots:
+		if n >= count:
+			break
+		if not blocks_opening(s, Vector2i.ONE) and try_place("chair_top", s) != null:
+			n += 1
 
 
 func place_chest(inner: Rect2i) -> void:
@@ -5684,7 +5773,7 @@ func furnish(ty: String, i: int, r: Rect2i, inner: Rect2i) -> void:
 			if randf() < 0.35:
 				drop_loot(cell_pos(Vector2i(cx, cy + 3)), Rpg.random_weapon([40, 45, 14, 1]))
 		"cucina":
-			wp("hearth_top", inner, "N", clampi(iw / 2 - 1, 0, maxi(iw - 2, 0)))
+			chairs_near(wp("hearth_top", inner, "N", clampi(iw / 2 - 1, 0, maxi(iw - 2, 0))), 2)
 			spread("shelf_top", inner, "N", 1)
 			wp("cauldron_top", inner, "N", 0)
 			table_set(cx, cy)
@@ -5760,8 +5849,8 @@ func furnish(ty: String, i: int, r: Rect2i, inner: Rect2i) -> void:
 			spread("barrel_top", inner, "E", 2)
 			corner_lamps(inner)
 		_:  # fucina
-			wp("hearth_top", inner, "N", clampi(iw / 2 - 1, 0, maxi(iw - 2, 0)))
-			try_place("anvil_top", Vector2i(cx, inner.position.y + 2))
+			chairs_near(wp("hearth_top", inner, "N", clampi(iw / 2 - 1, 0, maxi(iw - 2, 0))), 1)
+			try_place("anvil_top", Vector2i(cx, inner.position.y + 3))
 			wp("rack_top", inner, "N", 0)
 			if i == 0 and randf() < 0.5:
 				drop_loot(cell_pos(Vector2i(inner.position.x + 1, inner.position.y + 2)), Rpg.random_weapon([30, 50, 18, 2]))
@@ -6010,13 +6099,11 @@ func populate_dungeon() -> void:
 		var inner := r.grow(-1)
 		var corners := [inner.position, Vector2i(inner.end.x - 1, inner.position.y),
 			Vector2i(inner.position.x, inner.end.y - 1), Vector2i(inner.end.x - 1, inner.end.y - 1)]
-		for c in corners:
-			if i == far:
+		if i == far:
+			for c in corners:
 				add_prop("brazier", c)
-			elif randf() < 0.55:
-				try_place("lamp_top", c, true)
-			elif r.size.x >= 10 and randf() < 0.5:
-				try_place("column_top", c)
+		elif i == 0:
+			corner_set("lamp_top", inner, true)
 		if fires.has(i) and i != far:
 			var fc := center(r) + Vector2i(2, 0)
 			if i == 0:
@@ -6037,15 +6124,13 @@ func populate_dungeon() -> void:
 			add_prop("altar", center(r) + Vector2i(0, -2))
 			boss_pos = cell_pos(center(r))
 			continue
-		for k in randi_range(2, 5):
-			var c := rand_cell(inner)
-			if c != Vector2i(-1, -1):
-				var pick: String = ["grave_slab_0", "tomb", "skullpile", "barrel_top", "crate_top", "coffin", "statue_top", "column_top"][randi() % 8]
-				try_place(pick, c)
+		dungeon_room(r, inner)
 		if randf() < 0.09:
-			var cc := rand_cell(inner)
-			if cc != Vector2i(-1, -1):
-				add_prop("chest", cc)
+			for att in 12:
+				var cc := Vector2i(inner.position.x + randi() % inner.size.x, inner.position.y if randf() < 0.5 else inner.end.y - 1)
+				if is_floor(cc) and not block.has(cc) and not blocks_opening(cc, Vector2i.ONE):
+					add_prop("chest", cc)
+					break
 		var n: int = min(2 + randi() % 3 + i / 4, 8)
 		for k in n:
 			var cc := rand_cell(inner)
@@ -6058,6 +6143,40 @@ func populate_dungeon() -> void:
 			if cc != Vector2i(-1, -1):
 				add_champion(cc, float(dun["mult"]) / 1.5)
 	spawn_all()
+
+
+## tema della stanza: lo stesso calcolo della grafica 3D (che aggiunge sarcofagi, altari, scrigni... lungo i muri secondo il tema)
+func room_theme(room: Rect2i) -> int:
+	var rr := RandomNumberGenerator.new()
+	rr.seed = hash(Vector3i(room.position.x, room.position.y, int(world_seed)))
+	var t := int(rr.randi() % 5)
+	if room.size.x < 7 or room.size.y < 6:
+		t = 4
+	return t
+
+
+## una stanza di dungeon ha un tema e un ordine: angoli tutti uguali, oggetti addossati ai muri, mai a caso in mezzo
+func dungeon_room(r: Rect2i, inner: Rect2i) -> void:
+	var big := r.size.x >= 10 and r.size.y >= 8
+	match room_theme(r):
+		0:   # cripta
+			corner_set("lamp_top", inner, true)
+			spread("skullpile", inner, "S", 2)
+		1:   # tesoro
+			corner_set("lamp_top", inner, true)
+		2:   # prigione
+			spread("skullpile", inner, "S", 1)
+		3:   # santuario
+			corner_set("column_top" if big else "lamp_top", inner, true)
+		_:   # magazzino: casse e barili raggruppati in due angoli opposti
+			var c0 := randi() % 4
+			corner_cluster(inner, c0, ["barrel_top", "crate_top", "sack_top"], 3 + randi() % 2)
+			corner_cluster(inner, 3 - c0, ["crate_top", "barrel_top", "sack_top"], 3)
+
+
+func add_candelabra(c: Vector2i) -> void:
+	if not blocks_opening(c, Vector2i.ONE):
+		add_prop("candelabra", c)
 
 
 func rand_cell(r: Rect2i) -> Vector2i:
@@ -6375,7 +6494,7 @@ func slope_speed(pos: Vector2, dir: Vector2) -> float:
 	var sk := skin as W3DSkin
 	var d := dir.normalized() * 12.0
 	var g := sk.elev_at((pos.x + d.x) / 16.0, (pos.y + d.y) / 16.0) - sk.elev_at(pos.x / 16.0, pos.y / 16.0)
-	return clampf(1.0 - g / 12.0 * 16.0 * 0.4, 0.8, 1.12)
+	return clampf(1.0 - g / 12.0 * 16.0 * 0.5, 0.6, 1.2)
 
 
 func break_prop(p: Prop) -> void:
@@ -6484,6 +6603,8 @@ func game_over(_win: bool) -> void:
 	if state == "dying":
 		return
 	state = "dying"
+	death_area = area
+	death_pos = player.position
 	arena_cancel()
 	player.set_zmode(0)
 	snd("death")
@@ -6502,7 +6623,46 @@ func game_over(_win: bool) -> void:
 	player.relics = {}
 
 
+## salta il dungeon iniziale: il carceriere conta come sconfitto e si esce nel mondo
+func skip_d0() -> void:
+	persist["bosses"]["boss_jailer"] = true
+	for e in enemies:
+		if is_instance_valid(e):
+			e.queue_free()
+	enemies.clear()
+	change_area("world")
+
+
+var respawn_fix := 0.0
+
+
+## primo punto libero attorno a p (anche dai solidi del mondo 3D): niente respawn incastrati
+func safe_spot(p: Vector2) -> Vector2:
+	for ring in range(0, 21):
+		for a in (1 if ring == 0 else 16):
+			var q := p + Vector2.from_angle(TAU * a / 16.0) * (ring * 8.0)
+			if free_at(q, 5.0):
+				return q
+	return p
+
+
+## dopo il respawn, quando il terreno attorno e' carico, se si e' incastrati si viene spostati
+func respawn_fix_update(dt: float) -> void:
+	if respawn_fix <= 0.0:
+		return
+	respawn_fix -= dt
+	if respawn_fix <= 0.0 and not free_at(player.position, 5.0):
+		player.position = safe_spot(player.position)
+
+
 func respawn() -> void:
+	# prima dell'ufo (uscito dalle celle) si risorge nel punto in cui si e' morti, non al falo' ne' al villaggio
+	var here := false
+	if death_area == "world" and persist["bosses"].has("boss_jailer") and not Story.is_done(self, W3DCine.FLAG):
+		last_fire = {"area": "world", "cell": Vector2i(floori(death_pos.x / 16.0), floori(death_pos.y / 16.0))}
+		ensure_area(death_pos, 2)
+		last_fire["cell"] = free_near(last_fire["cell"])
+		here = true
 	var lf_area: String = last_fire["area"]
 	if lf_area != area:
 		build_area(lf_area)
@@ -6519,9 +6679,13 @@ func respawn() -> void:
 	player.drink_t = 0.0
 	player.spr.visible = true
 	ensure_area(cell_pos(last_fire["cell"]), 2)
-	player.position = cell_pos(last_fire["cell"]) + Vector2(0, 18)
+	player.position = safe_spot(cell_pos(last_fire["cell"]) + Vector2(0, 18))
+	respawn_fix = 2.0
 	player.cam.reset_smoothing()
 	spawn_all()
+	if here:
+		say("TI RIALZI DOVE SEI CADUTO")
+		return
 	say("TI SVEGLI ALL'ACCAMPAMENTO" if stain_data.get("relics", {}).size() == 0 else "TI SVEGLI ALL'ACCAMPAMENTO: LE RELIQUIE SONO NELLA MACCHIA")
 
 
@@ -6532,6 +6696,14 @@ func sleep_skip() -> void:
 		day_t = fposmod(day_t + 0.25, 1.0)
 	set_weather("")
 	weather_t = randf_range(60.0, 120.0)
+	# durante lo schermo nero gli abitanti tornano ai loro posti (niente folla che esce tutta dalla stessa porta accanto al giocatore)
+	for v in villagers:
+		if is_instance_valid(v) and v.state != "work" and not v.pts.is_empty():
+			v.state = "work"
+			v.visible = true
+			v.position = v.pts[randi() % v.pts.size()]
+			v.goal = Vector2.ZERO
+			v.st_t = randf_range(0.5, 4.0)
 
 
 func rest(p: Prop) -> void:
@@ -7461,6 +7633,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 		elif ev.is_action_pressed("ui_accept"):
 			state = "play"
 			change_area(str(debug_list[debug_sel][0]))
+		return
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F5 and state == "play" and area == "d0" and not persist["bosses"].has("boss_jailer"):
+		skip_d0()
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10:
 		return     # il vecchio editor 2D non c'e' piu': l'editor del mondo e' dentro il gioco (F12)
@@ -10121,6 +10296,16 @@ func _process(_dt: float) -> void:
 			for pr in props:
 				if pr.kind == "bonfire" and Story.blocks_fire(self, pr):
 					fire = pr
+			Story.on_prison_exit(self)
+			Story.update(self, 0.1)
+			var rd0: float = (Story.runner as Prop).position.distance_to(player.position) if is_instance_valid(Story.runner) else -1.0
+			print("STORY corridore creato a ", snappedf(rd0 / 16.0, 0.1), " celle; frecce: ", obj_targets().map(func(t): return str(t["n"]) + "@" + str(snapped(t["p"].distance_to(player.position) / 16.0, 0.1))))
+			var steps := 0
+			while steps < 400 and state != "dialog":
+				Story.update(self, 0.05)
+				steps += 1
+			print("STORY dialogo corridore: stato=", state, " testo=", str(dlg.get("text", "")).substr(0, 40), " dopo ", steps, " passi")
+			state = "play"
 			print("STORY area=", area, " libero=", Story.village_free(self), " nemici evento=", Story.total, " falo bloccato trovato=", fire != null, " acceso=", fire != null and fire.lit)
 			Story.update(self, 0.6)
 			print("STORY obiettivo: ", objective(), " | msg=", msg)
@@ -10450,6 +10635,7 @@ func _process(_dt: float) -> void:
 	if player != null and state == "play":
 		quest_update()
 		journey_update()
+		respawn_fix_update(get_process_delta_time())
 	if player != null and state == "play" and area == "world":
 		arena_update(real)
 	if player != null and state == "play":
@@ -10467,7 +10653,11 @@ func _process(_dt: float) -> void:
 		horde_update(real)
 		inv_pad_update(real)
 	if Engine.get_process_frames() % 2 == 0:
+		if Engine.get_process_frames() % 120 == 0:
+			flick = flick.filter(func(fe): return is_instance_valid(fe[0]))       # luci di oggetti rimossi
 		for f in flick:
+			if not is_instance_valid(f[0]):
+				continue
 			f[2] += real * 22.0
 			(f[0] as PointLight2D).energy = f[1] * (1.0 + sin(f[2]) * 0.07 + sin(f[2] * 2.7) * 0.05 + randf() * 0.04)
 	if Engine.get_process_frames() % 6 == 0 and player != null:

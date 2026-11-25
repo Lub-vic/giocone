@@ -69,6 +69,52 @@ vec2 pebble(vec2 w, float cell, float density, float rmin, float rmax, float see
 	return vec2(1.0 - smoothstep(r - aa, r + aa, dd), smoothstep(r - aa, r + aa, dd) * (1.0 - smoothstep(r + 0.03 / cell, r + 0.03 / cell + aa, dd)) * 0.6);
 }
 
+// sassi poligonali: celle di Voronoi con punti totalmente casuali (niente reticolo), bordo = distanza esatta dal confine fra due celle
+// ritorna x = copertura (1 dentro il sasso), y = contorno scuro, z = id casuale del sasso (per variare il colore)
+vec3 stones(vec2 w, float scale, float density, float gap, float seed) {
+	vec2 p = w * scale;
+	p += (vec2(vnoise(p * 0.7 + seed), vnoise(p * 0.7 + seed + 9.1)) - 0.5) * 0.55;     // deforma le celle: forme e dimensioni mai uniformi
+	vec2 n = floor(p);
+	vec2 f = fract(p);
+	vec2 mg = vec2(0.0);
+	vec2 mr = vec2(0.0);
+	float md = 8.0;
+	for (int j = -1; j <= 1; j++) {
+		for (int i = -1; i <= 1; i++) {
+			vec2 g = vec2(float(i), float(j));
+			vec2 o = vec2(0.5) + (vec2(hsh(n + g + seed), hsh(n + g + seed + 17.3)) - 0.5) * 0.92;
+			vec2 r = g + o - f;
+			float d = dot(r, r);
+			if (d < md) {
+				md = d;
+				mr = r;
+				mg = g;
+			}
+		}
+	}
+	float ed = 8.0;
+	for (int j = -2; j <= 2; j++) {
+		for (int i = -2; i <= 2; i++) {
+			vec2 g = mg + vec2(float(i), float(j));
+			vec2 o = vec2(0.5) + (vec2(hsh(n + g + seed), hsh(n + g + seed + 17.3)) - 0.5) * 0.92;
+			vec2 r = g + o - f;
+			vec2 dr = r - mr;
+			if (dot(dr, dr) > 0.00001) {
+				ed = min(ed, dot(0.5 * (mr + r), normalize(dr)));
+			}
+		}
+	}
+	float id = hsh(n + mg + seed + 3.7);
+	if (id > density) {
+		return vec3(0.0, 0.0, id);
+	}
+	float aa = max(fwidth(ed) * 1.1, 0.025);
+	float cover = smoothstep(gap, gap + aa, ed);
+	float rim = smoothstep(gap - 0.07, gap, ed) * (1.0 - cover);
+	return vec3(cover, rim * 0.6, id / max(density, 0.001));
+}
+
+
 void fragment() {
 	vec3 fn = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
 	if (dot(fn, VIEW) < 0.0) {
@@ -101,9 +147,24 @@ void fragment() {
 		}
 	}
 	// --- sassolini sparsi, con contorno scuro
-	vec2 pb = pebble(w, 0.55, 0.16, 0.05, 0.1, 9.1);
+	vec3 pb = stones(w, 2.2, 0.1, 0.27, 9.1);
 	col = mix(col, col * 0.4, pb.y);
-	col = mix(col, vec3(0.2, 0.19, 0.2) * (0.9 + 0.3 * hsh(floor(w * 3.0))), pb.x * 0.7);
+	col = mix(col, vec3(0.2, 0.19, 0.2) * (0.8 + 0.4 * pb.z), pb.x * 0.7);
+
+	// --- rilievo: le salite si vedono dall'alto (luce da nord-ovest) e i pendii ripidi diventano roccia
+	{
+		vec2 e2 = vec2(2.4);
+		float hl = elev(w - vec2(e2.x, 0.0));
+		float hr = elev(w + vec2(e2.x, 0.0));
+		float hu = elev(w - vec2(0.0, e2.y));
+		float hd = elev(w + vec2(0.0, e2.y));
+		vec2 gd = vec2(hr - hl, hd - hu) / (2.0 * e2.x);
+		float slope = length(gd);
+		float lit = 1.0 + 2.4 * dot(gd, vec2(0.6, 0.8));
+		col *= clamp(lit, 0.5, 1.55);
+		float rk = smoothstep(0.3, 0.62, slope);
+		col = mix(col, vec3(0.2, 0.19, 0.21) * (0.85 + 0.3 * hsh(floor(w * 5.0))), rk * 0.85);
+	}
 
 	// --- sentiero: bordo netto e irregolare, orlo scuro, terra battuta con pietre incastonate
 	float sd = (texture(gmap, w * gmap_inv).r - 0.5) * 8.0;
@@ -114,9 +175,9 @@ void fragment() {
 	if (inside > 0.001) {
 		float pg = hsh(floor(w / 0.11));
 		vec3 pc = vec3(0.19, 0.165, 0.142) * (pg < 0.25 ? 0.82 : (pg > 0.85 ? 1.18 : 1.0));
-		vec2 st = pebble(w + 3.7, 0.5, 0.5, 0.07, 0.15, 21.0);
+		vec3 st = stones(w + 3.7, 2.6, 0.55, 0.075, 21.0);
 		pc = mix(pc, pc * 0.45, st.y);
-		pc = mix(pc, vec3(0.24, 0.225, 0.23) * (0.85 + 0.3 * hsh(floor(w * 2.5))), st.x * 0.75);
+		pc = mix(pc, vec3(0.24, 0.225, 0.23) * (0.72 + 0.5 * st.z), st.x * 0.75);
 		col = mix(col, pc, inside);
 	}
 	col *= 1.0 - rim * 0.4;

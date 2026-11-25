@@ -488,6 +488,10 @@ func _process(dt: float) -> void:
 		regen_t -= dt
 		hp = min(max_hp, hp + regen_rate * dt)
 	var dir := Vector2.ZERO if main.inv_open else Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	var fsk = main.skin
+	var in_fpv: bool = fsk is W3DSkin and (fsk as W3DSkin).fpv
+	if in_fpv:
+		dir = dir.rotated(-(fsk as W3DSkin).fpv_yaw)       # prima persona: avanti e' dove guardi
 	if bool(main.settings["aim_manual"]):
 		if act("lock"):
 			cycle_lock()
@@ -516,6 +520,10 @@ func _process(dt: float) -> void:
 	var free := atk_t <= 0.0 and dash_t <= 0.0 and heavy_t <= 0.0
 	if dir.length() > 0.1 and free and not bool(main.settings["aim_manual"]):
 		face = dir.normalized()
+	if in_fpv:
+		var fy: float = (fsk as W3DSkin).fpv_yaw
+		face = Vector2(-sin(fy), -cos(fy))       # si colpisce dove si guarda
+		aim_world = position + face * 80.0
 	# V / croce destra cambia Orda/Tattica; U / croce giu' cambia zoom. Il movimento usa lo stick sinistro.
 	if act("zoom"):
 		cycle_zoom()

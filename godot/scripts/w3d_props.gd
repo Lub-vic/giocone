@@ -6,7 +6,7 @@ extends RefCounted
 static func ok(kind: String) -> bool:
 	for p in ["roof_", "top_dead", "top_sick", "tbig_", "boulder_", "bush_", "fence_", "lamp_top", "crate_top", "barrel_top", "hay_top",
 			"sack_top", "woodpile", "wall_top", "grave_", "column_top", "skullpile", "cart_top", "bonfire", "well_top", "stall_top",
-			"table_top", "hearth_top", "bed_top", "cauldron_top", "rack_top", "shelf_top", "chair_top", "rug_top", "anvil_top", "pew_top", "door_top", "stairs_top", "campfire_top", "portal", "brazier", "altar", "shrine", "res_", "qitem", "lever", "key", "dig", "candelabra", "bell", "arena_core", "mausoleum_top", "ruin_tower", "tower_top", "chapel_top", "smithy_top", "archive_top", "sanatorium_top", "mill_top", "cathedral_top", "pond_", "circle_top", "arch_top", "stump_", "log_top", "chest", "tomb", "statue_top", "signpost", "bone_"]:
+			"table_top", "hearth_top", "bed_top", "cauldron_top", "rack_top", "shelf_top", "chair_top", "rug_top", "anvil_top", "pew_top", "door_top", "exit", "door", "stairs_top", "campfire_top", "portal", "brazier", "altar", "shrine", "res_", "qitem", "lever", "key", "dig", "candelabra", "bell", "arena_core", "mausoleum_top", "ruin_tower", "tower_top", "chapel_top", "smithy_top", "archive_top", "sanatorium_top", "mill_top", "cathedral_top", "pond_", "circle_top", "arch_top", "stump_", "log_top", "chest", "tomb", "statue_top", "signpost", "bone_"]:
 		if kind.begins_with(p):
 			return true
 	return false
@@ -117,10 +117,20 @@ static func build(kind: String, w: float, h: float, avg: Color, seed_v: int) -> 
 		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.85, -h * 0.28)), Vector3(w * 0.95, 0.8, 0.08), _dk(wd6, 0.85), 0.08, 0)
 		for sx in [-1, 1]:
 			b.box(Transform3D(Basis.IDENTITY, Vector3(sx * w * 0.46, 0.4, 0)), Vector3(0.1, 0.8, h * 0.7), _dk(wd6, 0.7), 0.06, 0)
-	elif kind.begins_with("door_top"):
-		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 1.0, 0)), Vector3(w * 0.95, 2.0, 0.3), Color(0.2, 0.12, 0.07), 0.06, 0)
-		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.9, 0.17)), Vector3(w * 0.7, 1.8, 0.06), Color(0.32, 0.2, 0.11), 0.06, 0)
-		b.box(Transform3D(Basis.IDENTITY, Vector3(w * 0.22, 0.9, 0.22)), Vector3(0.08, 0.08, 0.06), Color(0.8, 0.65, 0.2), 0.0, 0)
+	elif kind.begins_with("door_top") or kind == "exit" or kind == "door":
+		# porta vera: stipiti e architrave di pietra, battente di assi con fasce di ferro, maniglia
+		var stn := Color(0.26, 0.25, 0.28)
+		var pw := maxf(w, 1.0) * 0.95
+		for sx in [-1, 1]:
+			b.box(Transform3D(Basis.IDENTITY, Vector3(sx * (pw * 0.5 - 0.09), 1.05, 0)), Vector3(0.18, 2.1, 0.36), stn, 0.12, 0)
+		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 2.18, 0)), Vector3(pw + 0.1, 0.24, 0.4), _dk(stn, 1.1), 0.12, 0)
+		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.97, 0.05)), Vector3(pw - 0.34, 1.94, 0.14), Color(0.3, 0.19, 0.1), 0.08, 0)
+		for q in 4:
+			b.box(Transform3D(Basis.IDENTITY, Vector3(-pw * 0.3 + q * pw * 0.2, 0.97, 0.13)), Vector3(0.025, 1.9, 0.03), Color(0.14, 0.08, 0.05), 0.0, 0)
+		for hy in [0.45, 1.5]:
+			b.box(Transform3D(Basis.IDENTITY, Vector3(0, hy, 0.14)), Vector3(pw - 0.34, 0.12, 0.05), Color(0.17, 0.17, 0.19), 0.1, 0)
+		b.box(Transform3D(Basis.IDENTITY, Vector3(pw * 0.26, 1.0, 0.2)), Vector3(0.1, 0.1, 0.06), Color(0.8, 0.65, 0.2), 0.0, 0)
+		b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.02, 0.2)), Vector3(pw - 0.2, 0.05, 0.4), _dk(stn, 0.8), 0.1, 0)
 	elif kind.begins_with("stairs_top"):
 		for q in 5:
 			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.1 - q * 0.0, -h * 0.4 + q * h * 0.2)), Vector3(w * 0.9, 0.12 + (4 - q) * 0.0, h * 0.2), Color(0.26, 0.25, 0.28).lerp(Color(0.12, 0.12, 0.14), q / 4.0), 0.1, 0)

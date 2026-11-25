@@ -186,11 +186,12 @@ func _draw() -> void:
 	_bar(Vector2(5, 17), msw, 3, p.mana / p.max_mana, Color(0.3, 0.5, 0.98))
 	_bar(Vector2(5, 22), 46, 3, p.focus / 100.0, Color(0.72, 0.42, 0.98))
 	var cr_full: bool = p.chrono >= Chrono.COST
-	_bar(Vector2(54, 22), 40, 3, p.chrono / Chrono.MAX_E, Color(0.4, 1.0, 1.0) if cr_full else Color(0.25, 0.55, 0.7))
+	if Story.has_chrono(main):
+		_bar(Vector2(54, 22), 40, 3, p.chrono / Chrono.MAX_E, Color(0.4, 1.0, 1.0) if cr_full else Color(0.25, 0.55, 0.7))
 	if not p.veh.is_empty():
 		_bar(Vector2(54, 27), 40, 3, float(p.veh["hp"]) / float(p.veh["max"]), Color(1.0, 0.6, 0.25))
 		_txt("%s %ds" % [str(Chrono.JACKPOT[p.veh["id"]]["n"]), int(ceil(float(p.veh["t"])))], Vector2(98, 30), Color(1.0, 0.8, 0.5))
-	elif cr_full and main.state == "play":
+	elif cr_full and Story.has_chrono(main) and main.state == "play":
 		_txt("N: EVOCA", Vector2(98, 25), Color(0.5, 1.0, 1.0))
 	draw_texture(Game.tex("flask"), Vector2(4, 26), Color(1, 1, 1, 0.95))
 	_txt("x%d" % p.flasks, Vector2(16, 34), Color(1, 0.82, 0.4))

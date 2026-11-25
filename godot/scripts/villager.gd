@@ -143,9 +143,11 @@ func _process(dt: float) -> void:
 				state = "inside"
 				visible = false
 				position = home_door
+				st_t = randf_range(0.0, 25.0)      # al mattino escono scaglionati, non tutti insieme
 		"inside":
 			visible = false
-			if light > 0.4:
+			st_t -= dt
+			if light > 0.4 and st_t <= 0.0:
 				state = "work"
 				visible = true
 				position = home_door

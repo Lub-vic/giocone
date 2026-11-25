@@ -201,6 +201,8 @@ func ci_is_stone(_c: Vector2i) -> bool:
 
 
 func _rebuild_static() -> void:
+	ed_set_area(str(gm.area))
+	ed_apply_props()
 	for c in static_root.get_children():
 		c.queue_free()
 	for k in dyn.keys():
@@ -324,21 +326,32 @@ func _rebuild_static() -> void:
 			room_lamps.append([rc, TH_LIGHT[int(room_theme.get(ri4, 4))]])
 	_extras(fb, ob, wb, mw, mh)
 	decor_lights.clear()
+	reg_static.clear()
+	_reg_props()
+	if decor_blk != null and is_same(decor_blk, gm.block) and decor_area == str(gm.area) and decor_seed == str(gm.world_seed):
+		for dc in decor_cells:
+			gm.block.erase(dc)
+	decor_cells.clear()
+	decor_blk = gm.block
+	decor_area = str(gm.area)
+	decor_seed = str(gm.world_seed)
 	var pb := W3DBuilder.new()
 	pb.rn.seed = 14
 	pb.sat = 1.75
 	pb.con = 1.4
 	pb.gain = 1.3
-	if gm.rooms is Array and gm.rooms.size() > 0:
+	if gm.rooms is Array and gm.rooms.size() > 0 and not wood:
 		_build_decor(pb, decor_lights)
 	if wood and gm.rooms is Array:
 		# case: una lampada a olio al centro di ogni stanza, luce calda e bassa
 		for rw3 in gm.rooms:
 			var rc3: Rect2i = rw3
 			var cc3 := Vector2(rc3.position) + Vector2(rc3.size) * 0.5
-			decor_lights.append(Vector3(cc3.x, 1.7, cc3.y))
-			ob.cyl(Transform3D(Basis.IDENTITY, Vector3(cc3.x, 0.0, cc3.y)), 0.18, 0.12, 0.5, 6, Color(0.2, 0.12, 0.07), 0.08)
-			ob.box(Transform3D(Basis.IDENTITY, Vector3(cc3.x, 0.62, cc3.y)), Vector3(0.16, 0.2, 0.16), Color(1.0, 0.75, 0.4, 0.15), 0.0, 8)
+			if not ed_hide_keys.has(Vector2i(roundi(cc3.x * 100.0), roundi(cc3.y * 100.0))):
+				reg_static.append(["dec:hlamp", cc3, 0.0, 0, 0])
+				_hlamp_make(ob, cc3, decor_lights)
+	_ed_apply_static([wb, ob, pb], ob, decor_lights)
+	_ed_block_adds()
 	for pr in [[fb, false], [wb, true], [ob, true], [pb, true]]:
 		var bld: W3DBuilder = pr[0]
 		if bld.v.size() == 0:
@@ -350,18 +363,278 @@ func _rebuild_static() -> void:
 		static_root.add_child(mi)
 
 
+# ------------------------------------------------------------------ editor: oggetti-nodo (colonne, statue, tombe, tavoli...) dei dungeon e delle case
+const ED_DEC_CAT := [["dec:sarc", "Sarcofago (interno)", true], ["dec:coffin", "Bara decorativa (interno)", true], ["dec:altar", "Altare con luce (interno)", true],
+		["dec:statue", "Statua su piedistallo (interno)", true], ["dec:brazier", "Braciere con luce (interno)", true], ["dec:chest", "Scrigno decorativo (interno)", true],
+		["dec:barrels", "Barili (interno)", true], ["dec:rack", "Cavalletto (interno)", true], ["dec:cage", "Gabbia appesa (interno)", true],
+		["dec:torch", "Torcia a muro con luce (interno)", true], ["dec:beam", "Trave con lanterna (interno)", true], ["dec:candles", "Candele (interno)", true],
+		["dec:hlamp", "Lampada a olio (casa)", true], ["dec:w_pillar", "Pilastro a muro (interno)", true], ["dec:w_skulls", "Fila di teschi (interno)", true],
+		["dec:w_niche", "Nicchia con teschio (interno)", true], ["dec:w_banner", "Stendardo (interno)", true], ["dec:w_chains", "Catene (interno)", true],
+		["dec:w_web", "Ragnatela (interno)", true]]
+const ED_PROP_CAT := [["column_top", "Colonna"], ["statue_top", "Statua"], ["tomb", "Tomba"], ["skullpile", "Mucchio di teschi"], ["coffin", "Bara (rompibile)"],
+		["barrel_top", "Botte"], ["crate_top", "Cassa"], ["sack_top", "Sacchi"], ["table_top", "Tavolo"], ["chair_top", "Sedia"], ["bed_top", "Letto"],
+		["hearth_top", "Camino"], ["cauldron_top", "Calderone"], ["rack_top", "Rastrelliera"], ["shelf_top", "Scaffale"], ["anvil_top", "Incudine"],
+		["pew_top", "Panca da chiesa"], ["lamp_top", "Lampione"], ["candelabra", "Candelabro"], ["brazier", "Braciere (prop)"], ["chest", "Scrigno (apribile)"]]
+const ED_PROP_1X1 := ["chest", "brazier", "candelabra"]
+var ed_made: Array = []        # props creati dall'editor
+
+
+func ed_prop_names() -> Array:
+	var out: Array = []
+	for pc in ED_PROP_CAT:
+		if ResourceLoader.exists("res://assets/sprites/%s.png" % str(pc[0])):
+			out.append(["prop:" + str(pc[0]), str(pc[1]) + " (oggetto)", true])
+	return out
+
+
+func ed_prop_mesh(kind: String) -> ArrayMesh:
+	if not W3DProps.ok(kind):
+		return null
+	var t := Game.tex(kind)
+	var tw := float(t.get_width()) / 16.0
+	var th := float(t.get_height()) / 16.0
+	var m := _base_prop(kind, tw, th, hash(kind))
+	if m == null:
+		m = W3DProps.build(kind, tw, th, Color(0.45, 0.42, 0.4), hash(kind))
+	return m
+
+
+func _pfp(p: Prop) -> Vector2i:
+	if not p.scene or p.spr == null or p.spr.texture == null:
+		return Vector2i.ONE
+	var t := p.spr.texture
+	return Vector2i(maxi(1, ceili((t.get_width() - 4) / 16.0)), maxi(1, ceili((t.get_height() - 4) / 16.0)))
+
+
+func _pcells(p: Prop, c: Vector2i) -> Array:
+	var f := _pfp(p)
+	var out: Array = []
+	for dy in f.y:
+		for dx in f.x:
+			out.append(Vector2i(c.x + dx, c.y + dy))
+	return out
+
+
+func _pblock(p: Prop, c: Vector2i, on: bool) -> void:
+	for cc in _pcells(p, c):
+		if on:
+			gm.block[cc] = true
+		else:
+			gm.block.erase(cc)
+
+
+func _pset(p: Prop, c: Vector2i) -> void:
+	var oc: Vector2i = p.get_meta("ed_c")
+	var o: Vector2 = p.get_meta("ed_o")
+	p.cell = c
+	p.position = o + Vector2(c - oc) * 16.0
+	for fe in gm.furn:
+		if fe[0] == p:
+			fe[1] = _pcells(p, c)
+
+
+## applica le modifiche agli oggetti-nodo dell'area (spostamenti, nascosti, aggiunti); ritorna quante aggiunte non hanno trovato posto
+func ed_apply_props() -> int:
+	if world_on or gm.ents == null:
+		return 0
+	for n in ed_made:
+		if is_instance_valid(n):
+			var np: Prop = n
+			_pblock(np, np.cell, false)
+			gm.props.erase(np)
+			for fi in range(gm.furn.size() - 1, -1, -1):
+				if gm.furn[fi][0] == np:
+					gm.furn.remove_at(fi)
+			np.queue_free()
+	ed_made.clear()
+	var all: Array = gm.ents.get_children()
+	for n in all:
+		if not is_instance_valid(n) or not (n is Prop) or (n as Prop).spr == null or n.is_queued_for_deletion():
+			continue
+		var p: Prop = n
+		if not p.has_meta("ed_o"):
+			p.set_meta("ed_o", p.position)
+			p.set_meta("ed_c", p.cell)
+			p.set_meta("ed_bl", gm.block.has(p.cell))
+			p.set_meta("ed_st", 0)
+			p.set_meta("ed_ip", gm.props.has(p))
+		var st := int(p.get_meta("ed_st"))
+		var bl := bool(p.get_meta("ed_bl"))
+		var oc: Vector2i = p.get_meta("ed_c")
+		var o: Vector2 = p.get_meta("ed_o")
+		var want := 0
+		var wd := Vector2i.ZERO
+		var wyaw := 0.0
+		var wsc := 1.0
+		for e in ed_props:
+			if str(e.get("t", "")) != "add" and str(e.get("k", "")) == p.kind and int(e.get("ox", 0)) == roundi(o.x) and int(e.get("oy", 0)) == roundi(o.y):
+				want = 2 if str(e["t"]) == "del" else 1
+				wd = Vector2i(int(e.get("dx", 0)), int(e.get("dy", 0)))
+				wyaw = float(e.get("yaw", 0.0))
+				wsc = float(e.get("sc", 1.0))
+		if wyaw != 0.0 or wsc != 1.0:
+			p.set_meta("ed_yaw", wyaw)
+			p.set_meta("ed_sc", wsc)
+		elif p.has_meta("ed_yaw"):
+			p.remove_meta("ed_yaw")
+			p.remove_meta("ed_sc")
+		if want == 0 and st == 0:
+			continue
+		if bl:
+			_pblock(p, p.cell, false)
+		p.visible = true
+		if bool(p.get_meta("ed_ip")) and not gm.props.has(p):
+			gm.props.append(p)
+		_pset(p, oc)
+		if want == 2:
+			p.visible = false
+			gm.props.erase(p)
+		else:
+			_pset(p, oc + wd)
+			if bl:
+				_pblock(p, p.cell, true)
+		p.set_meta("ed_st", want)
+	var failed := 0
+	for e in ed_props.duplicate():
+		if str(e.get("t", "")) != "add":
+			continue
+		var c := Vector2i(int(e["cx"]), int(e["cy"]))
+		var kd := str(e["k"])
+		var made: Prop = _ed_spawn_prop(kd, c)
+		if made == null:
+			failed += 1
+			continue
+		if float(e.get("yaw", 0.0)) != 0.0 or float(e.get("sc", 1.0)) != 1.0:
+			made.set_meta("ed_yaw", float(e.get("yaw", 0.0)))
+			made.set_meta("ed_sc", float(e.get("sc", 1.0)))
+		made.set_meta("ed_entry", e)
+		made.set_meta("ed_o", made.position)
+		made.set_meta("ed_c", made.cell)
+		made.set_meta("ed_bl", true)
+		made.set_meta("ed_st", 0)
+		ed_made.append(made)
+	_reg_props()
+	return failed
+
+
+## crea un oggetto-nodo dell'editor: l'utente decide dove metterlo, quindi niente vincoli di spazio libero (serve solo che sia pavimento)
+func _ed_spawn_prop(kd: String, c: Vector2i) -> Prop:
+	if not gm.is_floor(c):
+		return null
+	if kd in ED_PROP_1X1:
+		var had: bool = gm.block.has(c)
+		gm.block.erase(c)
+		var np: Prop = gm.add_prop(kd, c)
+		if np == null and had:
+			gm.block[c] = true
+		return np
+	var f: Vector2i = gm.tex_fp(kd)
+	var p := Prop.new()
+	p.setup_top(kd, c, f)
+	var cells: Array = []
+	for dy in f.y:
+		for dx in f.x:
+			var cc := Vector2i(c.x + dx, c.y + dy)
+			gm.block[cc] = true
+			cells.append(cc)
+	gm.ents.add_child(p)
+	if str(gm.area).begins_with("int|"):
+		gm.furn.append([p, cells])
+	gm.add_fx(p, kd, f, false)
+	return p
+
+
+func ed_entry_ok(e: Dictionary) -> bool:
+	for n in ed_made:
+		if is_instance_valid(n) and (n as Node).has_meta("ed_entry") and is_same((n as Node).get_meta("ed_entry"), e):
+			return true
+	return false
+
+
+## registra i props vivi (visibili) cosi' l'editor li puo' selezionare: [tipo, centro, 0, nodo, raggio]
+func _reg_props() -> void:
+	for i in range(reg_static.size() - 1, -1, -1):
+		if str(reg_static[i][0]).begins_with("prop:"):
+			reg_static.remove_at(i)
+	if world_on or gm.ents == null:
+		return
+	for n in gm.ents.get_children():
+		if not is_instance_valid(n) or not (n is Prop) or n.is_queued_for_deletion():
+			continue
+		var p: Prop = n
+		if p.kind == "" or p.spr == null or p.spr.texture == null or not p.visible:
+			continue
+		var f := _pfp(p)
+		reg_static.append(["prop:" + p.kind, _sprite_center(p, p.spr) / 16.0, 0.0, p, maxf(1.0, float(maxi(f.x, f.y)) * 0.5 + 0.4)])
+
+
+func _prop_entry(p: Prop, create: bool) -> Dictionary:
+	var o: Vector2 = p.get_meta("ed_o")
+	for e in ed_props:
+		if str(e.get("t", "")) != "add" and str(e.get("k", "")) == p.kind and int(e.get("ox", 0)) == roundi(o.x) and int(e.get("oy", 0)) == roundi(o.y):
+			return e
+	if not create:
+		return {}
+	var ne := {"t": "mv", "k": p.kind, "ox": roundi(o.x), "oy": roundi(o.y), "dx": 0, "dy": 0}
+	ed_props.append(ne)
+	return ne
+
+
+func ed_prop_move(p: Prop, d: Vector2i) -> bool:
+	if p.has_meta("ed_entry"):
+		var e: Dictionary = p.get_meta("ed_entry")
+		var ox := int(e["cx"])
+		var oy := int(e["cy"])
+		e["cx"] = ox + d.x
+		e["cy"] = oy + d.y
+		ed_apply_props()
+		if not ed_entry_ok(e):          # posto non valido: l'oggetto torna dov'era
+			e["cx"] = ox
+			e["cy"] = oy
+			ed_apply_props()
+			return false
+		return true
+	var e2 := _prop_entry(p, true)
+	e2["t"] = "mv"
+	e2["dx"] = int(e2.get("dx", 0)) + d.x
+	e2["dy"] = int(e2.get("dy", 0)) + d.y
+	ed_apply_props()
+	return true
+
+
+func ed_prop_turn(p: Prop, d_yaw: float, factor: float) -> Dictionary:
+	var e: Dictionary
+	if p.has_meta("ed_entry"):
+		e = p.get_meta("ed_entry")
+	else:
+		e = _prop_entry(p, true)
+	e["yaw"] = fposmod(float(e.get("yaw", 0.0)) + d_yaw, TAU)
+	e["sc"] = clampf(float(e.get("sc", 1.0)) * factor, 0.3, 4.0)
+	ed_apply_props()
+	return e
+
+
+func ed_prop_delete(p: Prop) -> void:
+	if p.has_meta("ed_entry"):
+		ed_props.erase(p.get_meta("ed_entry"))
+	else:
+		var e := _prop_entry(p, true)
+		e["t"] = "del"
+	ed_apply_props()
+
+
 ## elementi d'atmosfera: torce con fiamma, travi con lanterne sui corridoi, cerchi runici, candele
 func _extras(fb: W3DBuilder, ob: W3DBuilder, wb: W3DBuilder, mw: int, mh: int) -> void:
 	# torce: staffa di ferro, fiamma emissiva a schegge, anello di bagliore
 	for f in gm.flick:
 		var l = f[0]
-		if not is_instance_valid(l):
+		if not is_instance_valid(l) or not (l as CanvasItem).is_visible_in_tree():
 			continue
 		var gp: Vector2 = (l as Node2D).global_position / 16.0
-		ob.box(Transform3D(Basis.IDENTITY, Vector3(gp.x, 1.2, gp.y)), Vector3(0.1, 0.9, 0.1), Color(0.18, 0.15, 0.13), 0.1, 8)
-		ob.cyl(Transform3D(Basis.IDENTITY, Vector3(gp.x, 1.62, gp.y)), 0.13, 0.17, 0.2, 6, Color(0.2, 0.17, 0.15), 0.1)
-		ob.shard(Vector3(gp.x, 1.7, gp.y), Vector3(gp.x, 2.45, gp.y), 0.17, 0.15, Color(1.0, 0.55, 0.18, 0.08), 0.35, 0.0, 0.1)
-		ob.shard(Vector3(gp.x, 1.75, gp.y), Vector3(gp.x + 0.02, 2.2, gp.y), 0.09, 0.08, Color(1.0, 0.9, 0.55, 0.0), 0.4, 0.0, 0.1)
+		if ed_hide_keys.has(Vector2i(roundi(gp.x * 100.0), roundi(gp.y * 100.0))):
+			continue
+		reg_static.append(["dec:torch", gp, 0.0, 0, 0])
+		_torch_make(ob, gp)
 	# travi di legno sopra i corridoi stretti, con anelli e lanterne appese
 	for y in range(1, mh - 1):
 		for x in range(1, mw - 1):
@@ -372,15 +645,16 @@ func _extras(fb: W3DBuilder, ob: W3DBuilder, wb: W3DBuilder, mw: int, mh: int) -
 			var wr: bool = not gm.is_floor(Vector2i(x + 1, y))
 			var wu: bool = not gm.is_floor(Vector2i(x, y - 1))
 			var wd: bool = not gm.is_floor(Vector2i(x, y + 1))
+			var bkey := Vector2i(roundi((x + 0.5) * 100.0), roundi((y + 0.5) * 100.0))
 			if wl and wr and (y % 5 == 0):
-				wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 3.15, y + 0.5)), Vector3(1.9, 0.3, 0.3), Color(0.20, 0.13, 0.09), 0.14, 8)
-				wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 3.05, y + 0.5)), Vector3(0.3, 0.12, 0.5), Color(0.15, 0.1, 0.07), 0.1, 8)
-				if _hash2(x, y, 90) < 0.5:
-					ob.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 2.65, y + 0.5)), Vector3(0.04, 0.8, 0.04), Color(0.2, 0.2, 0.22), 0.1, 8)
-					ob.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 2.15, y + 0.5)), Vector3(0.26, 0.34, 0.26), Color(1.0, 0.72, 0.4, 0.22), 0.0, 8)
+				if not ed_hide_keys.has(bkey):
+					var lant := 1 if _hash2(x, y, 90) < 0.5 else 0
+					reg_static.append(["dec:beam", Vector2(x + 0.5, y + 0.5), 0.0, lant, 0])
+					_beam_make(wb, ob, Vector2(x + 0.5, y + 0.5), 0.0, lant == 1)
 			elif wu and wd and (x % 5 == 0):
-				wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 3.15, y + 0.5)), Vector3(0.3, 0.3, 1.9), Color(0.20, 0.13, 0.09), 0.14, 8)
-				wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, 3.05, y + 0.5)), Vector3(0.5, 0.12, 0.3), Color(0.15, 0.1, 0.07), 0.1, 8)
+				if not ed_hide_keys.has(bkey):
+					reg_static.append(["dec:beam", Vector2(x + 0.5, y + 0.5), PI * 0.5, 0, 0])
+					_beam_make(wb, ob, Vector2(x + 0.5, y + 0.5), PI * 0.5, false)
 	# cerchi runici luminosi al centro delle stanze grandi
 	if gm.rooms is Array:
 		for ri3 in gm.rooms.size():
@@ -404,11 +678,9 @@ func _extras(fb: W3DBuilder, ob: W3DBuilder, wb: W3DBuilder, mw: int, mh: int) -
 	for y in range(1, mh - 1):
 		for x in range(1, mw - 1):
 			if gm.is_floor(Vector2i(x, y)) and _hash2(x, y, 55) > 0.985:
-				for q in 3:
-					var ox := 0.3 + _hash2(x, y, 60 + q) * 0.4
-					var oz := 0.3 + _hash2(x, y, 70 + q) * 0.4
-					ob.cyl(Transform3D(Basis.IDENTITY, Vector3(x + ox, 0.0, y + oz)), 0.05, 0.045, 0.16 + q * 0.04, 5, Color(0.8, 0.76, 0.65), 0.1)
-					ob.shard(Vector3(x + ox, 0.2 + q * 0.04, y + oz), Vector3(x + ox, 0.34 + q * 0.04, y + oz), 0.04, 0.03, Color(1.0, 0.8, 0.4, 0.0), 0.4, 0.0, 0.0)
+				if not ed_hide_keys.has(Vector2i(roundi((x + 0.5) * 100.0), roundi((y + 0.5) * 100.0))):
+					reg_static.append(["dec:candles", Vector2(x + 0.5, y + 0.5), 0.0, 0, 0])
+					_candles_make(ob, Vector2(x + 0.5, y + 0.5))
 
 
 # ------------------------------------------------------------------ arredi del dungeon (modelli poligonali)
@@ -593,114 +865,296 @@ func _decor_place(room: Rect2i, fw: int, fh: int, occ: Dictionary, r: RandomNumb
 			for dx in fw:
 				occ[Vector2i(cx + dx, cy + dy)] = true
 				gm.block[Vector2i(cx + dx, cy + dy)] = true
+				decor_cells.append(Vector2i(cx + dx, cy + dy))
 		return {"x": cx, "y": cy}
 	return {}
 
 
+var decor_cells: Array = []     # celle bloccate dagli arredi generati (si ricalcolano a ogni ricostruzione, cosi' spostare o togliere un arredo libera il passaggio)
+var decor_area := ""
+var decor_seed := ""
+var decor_blk = null
+const DEC_HALF := {"sarc": Vector2(1.5, 1.0), "coffin": Vector2(1.5, 0.5), "altar": Vector2(2.0, 1.5), "rack": Vector2(1.5, 0.5), "chest": Vector2(1.0, 0.5),
+		"barrels": Vector2(0.5, 1.0), "statue": Vector2(0.5, 0.5), "brazier": Vector2(0.5, 0.5)}
+
+
+func _ed_erased(c0: Vector2i, fw: int, fh: int) -> bool:
+	for e in ed_erase:
+		var ep := Vector2(float(e[0]), float(e[1]))
+		for dy in fh:
+			for dx in fw:
+				if Vector2(c0.x + dx + 0.5, c0.y + dy + 0.5).distance_to(ep) < float(e[2]):
+					return true
+	return false
+
+
+## gli arredi piazzati dall'editor bloccano il passaggio come quelli generati
+func _ed_block_adds() -> void:
+	for a in ed_adds:
+		var kk := str(a["k"])
+		if not kk.begins_with("dec:") or not DEC_HALF.has(kk.substr(4)):
+			continue
+		var h: Vector2 = DEC_HALF[kk.substr(4)] * float(a.get("sc", 1.0))
+		if absf(sin(float(a["yaw"]))) > 0.7:
+			h = Vector2(h.y, h.x)
+		var px := float(a["x"])
+		var pz := float(a["z"])
+		for cy in range(floori(pz - h.y + 0.01), ceili(pz + h.y - 0.01)):
+			for cx in range(floori(px - h.x + 0.01), ceili(px + h.x - 0.01)):
+				gm.block[Vector2i(cx, cy)] = true
+				decor_cells.append(Vector2i(cx, cy))
+
+
+const DEC_SC := {"sarc": 1.5, "coffin": 1.5, "rack": 1.5, "altar": 1.5, "chest": 1.4, "barrels": 1.3, "brazier": 1.3, "statue": 1.35, "cage": 1.3}
+var reg_static: Array = []      # arredi generati dell'interno: [tipo, posizione, rotazione, stato rng, 0]; l'editor li rende selezionabili
+
+
+## costruisce un arredo dell'interno; i numeri casuali si consumano sempre nello stesso ordine
+func _decor_make(item: String, b: W3DBuilder, p: Vector3, yaw: float, lamps: Array, r: RandomNumberGenerator, sc: float) -> void:
+	var old_sz := b.sz
+	dscale = sc
+	b.sz = sc
+	match item:
+		"sarc":
+			_m_sarcophagus(b, p, yaw, r.randf() < 0.35)
+		"coffin":
+			_m_coffin(b, p, yaw, r.randf() < 0.5)
+		"altar":
+			_m_altar(b, p, yaw, lamps)
+		"statue":
+			_m_statue(b, p, yaw + r.randf_range(-0.25, 0.25))
+		"brazier":
+			_m_brazier(b, p, lamps)
+		"chest":
+			_m_chest(b, p, r.randf_range(-0.08, 0.08) + yaw, r.randf() < 0.2)
+		"barrels":
+			_m_barrels(b, p, yaw + r.randf_range(-0.4, 0.4), r)
+		"rack":
+			_m_rack(b, p, yaw)
+		"cage":
+			_m_cage(b, p, lamps)
+	dscale = 1.0
+	b.sz = old_sz
+
+
+func _torch_make(ob: W3DBuilder, gp: Vector2) -> void:
+	ob.box(Transform3D(Basis.IDENTITY, Vector3(gp.x, 1.2, gp.y)), Vector3(0.1, 0.9, 0.1), Color(0.18, 0.15, 0.13), 0.1, 8)
+	ob.cyl(Transform3D(Basis.IDENTITY, Vector3(gp.x, 1.62, gp.y)), 0.13, 0.17, 0.2, 6, Color(0.2, 0.17, 0.15), 0.1)
+	ob.shard(Vector3(gp.x, 1.7, gp.y), Vector3(gp.x, 2.45, gp.y), 0.17, 0.15, Color(1.0, 0.55, 0.18, 0.08), 0.35, 0.0, 0.1)
+	ob.shard(Vector3(gp.x, 1.75, gp.y), Vector3(gp.x + 0.02, 2.2, gp.y), 0.09, 0.08, Color(1.0, 0.9, 0.55, 0.0), 0.4, 0.0, 0.1)
+
+
+func _beam_make(wb: W3DBuilder, ob: W3DBuilder, p: Vector2, yaw: float, lantern: bool) -> void:
+	var t := Transform3D(Basis(Vector3.UP, yaw), Vector3(p.x, 0.0, p.y))
+	wb.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 3.15, 0)), Vector3(1.9, 0.3, 0.3), Color(0.20, 0.13, 0.09), 0.14, 8)
+	wb.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 3.05, 0)), Vector3(0.3, 0.12, 0.5), Color(0.15, 0.1, 0.07), 0.1, 8)
+	if lantern:
+		ob.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 2.65, 0)), Vector3(0.04, 0.8, 0.04), Color(0.2, 0.2, 0.22), 0.1, 8)
+		ob.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 2.15, 0)), Vector3(0.26, 0.34, 0.26), Color(1.0, 0.72, 0.4, 0.22), 0.0, 8)
+
+
+func _candles_make(ob: W3DBuilder, p: Vector2) -> void:
+	var x := floori(p.x)
+	var y := floori(p.y)
+	for q in 3:
+		var ox := p.x - x - 0.5 + 0.3 + _hash2(x, y, 60 + q) * 0.4
+		var oz := p.y - y - 0.5 + 0.3 + _hash2(x, y, 70 + q) * 0.4
+		ob.cyl(Transform3D(Basis.IDENTITY, Vector3(x + ox, 0.0, y + oz)), 0.05, 0.045, 0.16 + q * 0.04, 5, Color(0.8, 0.76, 0.65), 0.1)
+		ob.shard(Vector3(x + ox, 0.2 + q * 0.04, y + oz), Vector3(x + ox, 0.34 + q * 0.04, y + oz), 0.04, 0.03, Color(1.0, 0.8, 0.4, 0.0), 0.4, 0.0, 0.0)
+
+
+func _hlamp_make(ob: W3DBuilder, c: Vector2, lamps: Array) -> void:
+	lamps.append(Vector3(c.x, 1.7, c.y))
+	ob.cyl(Transform3D(Basis.IDENTITY, Vector3(c.x, 0.0, c.y)), 0.18, 0.12, 0.5, 6, Color(0.2, 0.12, 0.07), 0.08)
+	ob.box(Transform3D(Basis.IDENTITY, Vector3(c.x, 0.62, c.y)), Vector3(0.16, 0.2, 0.16), Color(1.0, 0.75, 0.4, 0.15), 0.0, 8)
+
+
+func _wall_col() -> Color:
+	var bio := clampi(int(gm.dun.get("bio", 0)) if gm.dun is Dictionary else 0, 0, 6)
+	return WALL_COL[bio] * (0.95 if fwd else 1.0)
+
+
+## hook dell'editor: arredo dell'interno piazzato o spostato
+func _ed_decor(item: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, sc: float, lamps: Array) -> void:
+	match item:
+		"torch":
+			_torch_make(o, p)
+			lamps.append(Vector3(p.x, 1.9, p.y))
+			return
+		"beam":
+			_beam_make(o, o, p, yaw, r.state % 2 == 1)
+			return
+		"candles":
+			_candles_make(o, p)
+			return
+		"hlamp":
+			_hlamp_make(o, p, lamps)
+			return
+		"w_pillar", "w_skulls", "w_niche", "w_banner", "w_chains", "w_web":
+			var hv := float(r.state / 2) / 100.0
+			if hv < 2.0 or hv > 4.0:
+				hv = 3.0
+			_wall_deco(item, o, o, Vector3(p.x, 0.0, p.y), yaw, hv, int(r.state % 2), _wall_col())
+			return
+	_decor_make(item, o, Vector3(p.x, 0.0, p.y), yaw, lamps, r, float(DEC_SC.get(item, 1.4)) * sc)
+
+
+const DEC_FACE := {"N": 0.0, "S": PI, "W": PI * 0.5, "E": -PI * 0.5}      # rotazione che rivolge l'oggetto verso la stanza
+
+
+## ingombro (in celle) di un arredo addossato a un muro: la lunghezza corre lungo il muro
+func _dec_dims(item: String, side: String) -> Vector2i:
+	var horiz := side == "N" or side == "S"
+	var d := Vector2i(1, 1)
+	match item:
+		"sarc":
+			d = Vector2i(3, 2)
+		"coffin", "rack":
+			d = Vector2i(3, 1)
+		"altar":
+			d = Vector2i(4, 3)
+		"chest", "barrels":
+			d = Vector2i(2, 1)
+	return d if horiz else Vector2i(d.y, d.x)
+
+
+## spazio libero per un arredo contro un muro: pavimento, niente altro sopra, e mai davanti a una porta o a un corridoio
+func _dec_free(room: Rect2i, cx: int, cy: int, fw: int, fh: int, occ: Dictionary) -> bool:
+	for dy in fh:
+		for dx in fw:
+			var c := Vector2i(cx + dx, cy + dy)
+			if occ.has(c) or gm.block.has(c) or gm.reserved.has(c) or not gm.is_floor(c) or gm.has_carpet(c):
+				return false
+			for dv in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var n: Vector2i = c + dv
+				if gm.is_floor(n) and not room.has_point(n):
+					return false      # apertura verso un altro locale
+	if Vector2(cx + fw * 0.5, cy + fh * 0.5).distance_to(gm.player.position / 16.0) < 3.0:
+		return false
+	return true
+
+
+## posto contro il muro `side`, a `frac` (0..1) della lunghezza; se occupato prova poco piu' in la
+func _wall_spot(room: Rect2i, item: String, side: String, frac: float, occ: Dictionary) -> Dictionary:
+	var d := _dec_dims(item, side)
+	var horiz := side == "N" or side == "S"
+	var span := (room.size.x - d.x) if horiz else (room.size.y - d.y)
+	if span < 0:
+		return {}
+	var base := roundi(frac * span)
+	for sh in [0, 1, -1, 2, -2, 3, -3]:
+		var a := clampi(base + sh, 0, span)
+		var cx := room.position.x + a if horiz else (room.position.x if side == "W" else room.end.x - d.x)
+		var cy := (room.position.y if side == "N" else room.end.y - d.y) if horiz else room.position.y + a
+		if _dec_free(room, cx, cy, d.x, d.y, occ):
+			for dy in d.y:
+				for dx in d.x:
+					occ[Vector2i(cx + dx, cy + dy)] = true
+					gm.block[Vector2i(cx + dx, cy + dy)] = true
+					decor_cells.append(Vector2i(cx + dx, cy + dy))
+			return {"x": cx, "y": cy, "w": d.x, "h": d.y}
+	return {}
+
+
+## piano di una stanza: [arredo, muro, posizione lungo il muro]; coppie e file simmetriche
+func _decor_plan(theme: int, room: Rect2i) -> Array:
+	var tall := room.size.y >= 9
+	var wide := room.size.x >= 9
+	match theme:
+		0:   # cripta: sarcofagi in fila lungo i lati, statua in fondo fra due bracieri
+			var p0: Array = [["statue", "N", 0.5], ["brazier", "N", 0.12], ["brazier", "N", 0.88], ["sarc", "W", 0.2 if tall else 0.5], ["sarc", "E", 0.2 if tall else 0.5]]
+			if tall:
+				p0.append(["sarc", "W", 0.8])
+				p0.append(["sarc", "E", 0.8])
+			return p0
+		1:   # tesoro: scrigni in fila contro il muro, bracieri ai lati
+			return [["chest", "N", 0.3], ["chest", "N", 0.5], ["chest", "N", 0.7], ["brazier", "N", 0.0], ["brazier", "N", 1.0]]
+		2:   # prigione: cavalletti lungo i lati, barili in un angolo
+			var p2: Array = [["rack", "W", 0.25], ["rack", "E", 0.25], ["barrels", "S", 1.0]]
+			if tall:
+				p2.append(["rack", "W", 0.8])
+				p2.append(["rack", "E", 0.8])
+			return p2
+		3:   # santuario: altare in fondo, due bracieri ai lati, due statue davanti
+			var p3: Array = [["altar", "N", 0.5], ["brazier", "N", 0.0], ["brazier", "N", 1.0]]
+			if wide:
+				p3.append(["statue", "S", 0.1])
+				p3.append(["statue", "S", 0.9])
+			return p3
+		_:   # magazzino: barili e casse raggruppati negli angoli
+			return [["barrels", "N", 0.0], ["barrels", "S", 1.0], ["chest", "E", 0.5], ["barrels", "N", 1.0]]
+
+
+## un punto a pochi passi da un muro: il disordine (ossa, paglia, macchie) sta lungo i muri, non in mezzo alla stanza
+func _edge_point(room: Rect2i, r: RandomNumberGenerator, depth: float) -> Vector3:
+	var side := r.randi() % 4
+	var t := r.randf()
+	match side:
+		0:
+			return Vector3(room.position.x + 0.8 + t * (room.size.x - 1.6), 0, room.position.y + depth)
+		1:
+			return Vector3(room.position.x + 0.8 + t * (room.size.x - 1.6), 0, room.end.y - depth)
+		2:
+			return Vector3(room.position.x + depth, 0, room.position.y + 0.8 + t * (room.size.y - 1.6))
+	return Vector3(room.end.x - depth, 0, room.position.y + 0.8 + t * (room.size.y - 1.6))
+
+
 func _build_decor(b: W3DBuilder, lamps: Array) -> void:
 	var occ: Dictionary = {}
-	var ri := 0
 	for room in gm.rooms:
-		ri += 1
 		var r := RandomNumberGenerator.new()
 		r.seed = hash(Vector3i(room.position.x, room.position.y, int(gm.world_seed)))
 		var theme := _theme_of(room)
-		var plan: Array = []
-		match theme:
-			0:   # cripta: pochi grandi sarcofagi, una statua
-				plan = ["sarc", "sarc", "statue"]
-			1:   # tesoro: scrigni e fuochi
-				plan = ["chest", "chest", "chest", "brazier"]
-			2:   # prigione: cavalletti e barili, gabbie appese
-				plan = ["rack", "rack", "barrels"]
-			3:   # santuario: altare e due fuochi
-				plan = ["altar", "brazier", "brazier"]
-			_:   # magazzino: barili e un paio di casse
-				plan = ["barrels", "barrels", "chest"]
-		for item in plan:
-			var yaw := 0.0 if r.randf() < 0.5 else PI * 0.5
-			var fw := 1
-			var fh := 1
-			var sc := 1.4
-			match item:
-				"sarc":
-					sc = 1.5
-					fw = 3 if yaw == 0.0 else 2
-					fh = 2 if yaw == 0.0 else 3
-				"coffin":
-					sc = 1.5
-					fw = 3 if yaw == 0.0 else 1
-					fh = 1 if yaw == 0.0 else 3
-				"rack":
-					sc = 1.5
-					fw = 3 if yaw == 0.0 else 1
-					fh = 1 if yaw == 0.0 else 3
-				"altar":
-					sc = 1.5
-					fw = 4 if yaw == 0.0 else 3
-					fh = 3 if yaw == 0.0 else 4
-				"chest", "barrels":
-					sc = 1.4 if item == "chest" else 1.3
-					fw = 2 if yaw == 0.0 else 1
-					fh = 1 if yaw == 0.0 else 2
-				"brazier":
-					sc = 1.3
-				"statue":
-					sc = 1.35
-			var spot := _decor_place(room, fw, fh, occ, r)
+		for entry in _decor_plan(theme, room):
+			var item := str(entry[0])
+			var side := str(entry[1])
+			var sc := float(DEC_SC.get(item, 1.4))
+			var spot := _wall_spot(room, item, side, float(entry[2]), occ)
 			if spot.is_empty():
 				continue
+			var fw: int = spot["w"]
+			var fh: int = spot["h"]
 			var cx: float = float(spot["x"]) + fw * 0.5
 			var cz: float = float(spot["y"]) + fh * 0.5
-			var p := Vector3(cx, 0, cz)
-			var ya := -yaw if yaw != 0.0 else 0.0
-			dscale = sc
-			b.sz = sc
-			match item:
-				"sarc":
-					_m_sarcophagus(b, p, ya, r.randf() < 0.35)
-				"coffin":
-					_m_coffin(b, p, ya, r.randf() < 0.5)
-				"altar":
-					_m_altar(b, p, ya, lamps)
-				"statue":
-					_m_statue(b, p, r.randf() * TAU)
-				"brazier":
-					_m_brazier(b, p, lamps)
-				"chest":
-					_m_chest(b, p, r.randf_range(-0.4, 0.4) + (0.0 if yaw == 0.0 else PI * 0.5), r.randf() < 0.2)
-				"barrels":
-					_m_barrels(b, p, r.randf() * TAU, r)
-				"rack":
-					_m_rack(b, p, ya)
-		# gabbie appese e ossa, senza collisione
+			var base_yaw: float = DEC_FACE[side] if item != "brazier" else 0.0
+			var pv := Vector2(cx, cz)
+			var st := r.state
+			if ed_hide_keys.has(Vector2i(roundi(cx * 100.0), roundi(cz * 100.0))) or _ed_erased(Vector2i(int(spot["x"]), int(spot["y"])), fw, fh):
+				# nascosto o spostato dall'editor: si genera in un contenitore di scarto (i numeri casuali avanzano uguale) e si libera lo spazio
+				var tmp := W3DBuilder.new()
+				_decor_make(item, tmp, Vector3(cx, 0, cz), base_yaw, [], r, sc)
+				for dy3 in fh:
+					for dx3 in fw:
+						gm.block.erase(Vector2i(int(spot["x"]) + dx3, int(spot["y"]) + dy3))
+			else:
+				reg_static.append(["dec:" + item, pv, base_yaw, st, 0])
+				_decor_make(item, b, Vector3(cx, 0, cz), base_yaw, lamps, r, sc)
+		# gabbie appese in fila lungo il muro nord
 		if theme == 2:
 			for q in 2:
-				var cx2 := r.randf_range(room.position.x + 2.0, room.end.x - 2.0)
-				var cz2 := r.randf_range(room.position.y + 2.0, room.end.y - 2.0)
-				dscale = 1.3
-				b.sz = 1.3
-				_m_cage(b, Vector3(cx2, 0, cz2), lamps)
+				var cx2: float = room.position.x + room.size.x * (0.3 + 0.4 * q)
+				var cz2: float = room.position.y + 1.6
+				if ed_hide_keys.has(Vector2i(roundi(cx2 * 100.0), roundi(cz2 * 100.0))):
+					continue
+				reg_static.append(["dec:cage", Vector2(cx2, cz2), 0.0, r.state, 0])
+				_decor_make("cage", b, Vector3(cx2, 0, cz2), 0.0, lamps, r, 1.3)
 		dscale = 1.0
 		b.sz = 1.3
 		if theme == 2:
-			for q in 5:
-				var bx := r.randf_range(room.position.x + 1.0, room.end.x - 1.0)
-				var bz := r.randf_range(room.position.y + 1.0, room.end.y - 1.0)
-				var rs := r.randf_range(0.5, 1.1)
-				b.quad(Vector3(bx - rs, 0.026, bz - rs * 0.7), Vector3(bx + rs, 0.026, bz - rs * 0.5), Vector3(bx + rs * 0.8, 0.026, bz + rs), Vector3(bx - rs, 0.026, bz + rs * 0.6), Color(0.28, 0.03, 0.04))
+			for q in 4:
+				var bp := _edge_point(room, r, 1.5)
+				var rs := r.randf_range(0.5, 0.9)
+				b.quad(Vector3(bp.x - rs, 0.026, bp.z - rs * 0.7), Vector3(bp.x + rs, 0.026, bp.z - rs * 0.5), Vector3(bp.x + rs * 0.8, 0.026, bp.z + rs), Vector3(bp.x - rs, 0.026, bp.z + rs * 0.6), Color(0.28, 0.03, 0.04))
 		elif theme == 1:
 			for q in 14:
-				var cx3 := r.randf_range(room.position.x + 1.5, room.end.x - 1.5)
-				var cz3 := r.randf_range(room.position.y + 1.5, room.end.y - 1.5)
-				b.box(Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(cx3, 0.04, cz3)), Vector3(0.14, 0.03, 0.14), Color(1.0, 0.78, 0.25, 0.3), 0.0, 8)
+				var cp := _edge_point(room, r, 1.7)
+				b.box(Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(cp.x, 0.04, cp.z)), Vector3(0.14, 0.03, 0.14), Color(1.0, 0.78, 0.25, 0.3), 0.0, 8)
 		elif theme == 4:
-			for q in 8:
-				var sx := r.randf_range(room.position.x + 1.0, room.end.x - 1.0)
-				var sz := r.randf_range(room.position.y + 1.0, room.end.y - 1.0)
-				b.box(Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(sx, 0.03, sz)), Vector3(0.9, 0.04, 0.12), Color(0.42, 0.34, 0.15), 0.18, 8)
+			for q in 6:
+				var sp2 := _edge_point(room, r, 1.2)
+				b.box(Transform3D(Basis(Vector3.UP, r.randf() * TAU), Vector3(sp2.x, 0.03, sp2.z)), Vector3(0.9, 0.04, 0.12), Color(0.42, 0.34, 0.15), 0.18, 8)
 		for q in r.randi_range(0, 2):
-			var sp := Vector3(r.randf_range(room.position.x + 1.5, room.end.x - 1.5), 0, r.randf_range(room.position.y + 1.5, room.end.y - 1.5))
+			var sp := _edge_point(room, r, 0.9)
 			for k in 5:
 				b.rock(sp + Vector3(r.randf_range(-0.3, 0.3), 0.12 + k * 0.03, r.randf_range(-0.3, 0.3)), Vector3(0.24, 0.2, 0.24), BONE * r.randf_range(0.8, 1.05), 0.1, 0.25, r.randf() * TAU)
 	b.sz = 1.0
@@ -731,36 +1185,61 @@ func _wall_faces(wb: W3DBuilder, ob: W3DBuilder, x: int, y: int, h: float, wc: C
 				var off := (q - 1.0 + (0.18 if row == 1 else -0.18)) * 0.33
 				var bh := _hash2(x * 3 + q, y * 5 + row, 200 + k)
 				wb.rock(base + nrm * (0.05 + bh * 0.04) + tan * off + Vector3(0, yy, 0), Vector3(0.3 + bh * 0.1, 0.5, 0.2 + bh * 0.06), _k(wc, (0.85 + bh * 0.5)), 0.2, 0.28, yaw + bh)
+		var dk := ""
 		if hh > 0.3 and hh < 0.44:
+			dk = "w_pillar"
+		elif hh > 0.44 and hh < 0.5:
+			dk = "w_skulls"
+		elif hh < 0.05:
+			dk = "w_niche"
+		elif hh < 0.1:
+			dk = "w_banner"
+		elif hh < 0.16:
+			dk = "w_chains"
+		elif hh < 0.22:
+			dk = "w_web"
+		if dk != "":
+			var bx := roundi(base.x * 100.0)
+			var bz := roundi(base.z * 100.0)
+			var extra := 1 if _hash2(x, y, 7) > 0.5 else 0
+			if ed_hide_keys.has(Vector2i(bx, bz)):
+				pass
+			else:
+				reg_static.append(["dec:" + dk, Vector2(base.x, base.z), yaw, int(h * 100.0) * 2 + extra, 0])
+				_wall_deco(dk, wb, ob, base, yaw, h, extra, wc)
+
+
+## decorazioni appese ai muri (registrate: l'editor le sposta); base = centro della faccia del muro, yaw = direzione verso la stanza
+func _wall_deco(kind: String, wb: W3DBuilder, ob: W3DBuilder, base: Vector3, yaw: float, h: float, extra: int, wc: Color) -> void:
+	var nrm := Vector3(cos(yaw), 0, -sin(yaw))
+	var tan := Vector3(-nrm.z, 0, nrm.x)
+	match kind:
+		"w_pillar":
 			# pilastro addossato: base, fusto a sei lati, capitello (sporge solo 0.3: dentro la fascia dove il giocatore non arriva)
 			var pb := base + nrm * 0.15
 			wb.box(Transform3D(Basis(Vector3.UP, yaw), pb + Vector3(0, 0.15, 0)), Vector3(0.34, 0.3, 0.5), _k(wc, 0.8), 0.12, 8)
 			wb.cyl(Transform3D(Basis.IDENTITY, pb + Vector3(0, 0.3, 0)), 0.2, 0.17, h - 0.8, 6, _k(wc, 1.2), 0.14)
 			wb.box(Transform3D(Basis(Vector3.UP, yaw), pb + Vector3(0, h - 0.4, 0)), Vector3(0.36, 0.3, 0.5), _k(wc, 0.85), 0.12, 8)
-		elif hh > 0.44 and hh < 0.5:
+		"w_skulls":
 			for q in 5:
-				ob.rock(base + nrm * 0.1 + tan * (q - 2) * 0.18 + Vector3(0, 0.95, 0), Vector3(0.17, 0.17, 0.17), Color(0.8, 0.76, 0.66), 0.08, 0.2, hh * 40.0 + q)
+				ob.rock(base + nrm * 0.1 + tan * (q - 2) * 0.18 + Vector3(0, 0.95, 0), Vector3(0.17, 0.17, 0.17), Color(0.8, 0.76, 0.66), 0.08, 0.2, 17.0 + q)
 				ob.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.1 + tan * (q - 2) * 0.18 + Vector3(0, 0.85, 0)), Vector3(0.1, 0.06, 0.1), Color(0.05, 0.04, 0.05), 0.0, 8)
-		if hh < 0.05:
-			# nicchia con teschio e un lumicino
+		"w_niche":
 			wb.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.02 + Vector3(0, 1.4, 0)), Vector3(0.1, 0.8, 0.55), Color(0.02, 0.015, 0.02), 0.0, 8)
-			ob.rock(base + nrm * 0.12 + Vector3(0, 1.2, 0), Vector3(0.3, 0.3, 0.3), Color(0.8, 0.76, 0.65), 0.08, 0.2, hh * 50.0)
+			ob.rock(base + nrm * 0.12 + Vector3(0, 1.2, 0), Vector3(0.3, 0.3, 0.3), Color(0.8, 0.76, 0.65), 0.08, 0.2, 3.0)
 			ob.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.12 + tan * 0.18 + Vector3(0, 1.1, 0)), Vector3(0.07, 0.12, 0.07), Color(1.0, 0.85, 0.5, 0.15), 0.0, 8)
-		elif hh < 0.1:
-			# stendardo di stoffa strappata, rosso o blu scuro
-			var cc := Color(0.45, 0.08, 0.1) if _hash2(x, y, 7) > 0.5 else Color(0.12, 0.17, 0.4)
+		"w_banner":
+			var cc := Color(0.45, 0.08, 0.1) if extra == 1 else Color(0.12, 0.17, 0.4)
 			ob.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.06 + Vector3(0, h - 0.5, 0)), Vector3(0.05, 0.08, 0.9), Color(0.2, 0.15, 0.1), 0.1, 8)
 			var t0 := base + nrm * 0.08 + tan * -0.34 + Vector3(0, h - 0.55, 0)
 			var t1 := base + nrm * 0.08 + tan * 0.34 + Vector3(0, h - 0.55, 0)
 			ob.quad(t0, t1, t1 + Vector3(0, -1.5, 0), t0 + Vector3(0, -1.5, 0), cc)
 			ob.tri(t0 + Vector3(0, -1.5, 0), t1 + Vector3(0, -1.5, 0), (t0 + t1) * 0.5 + Vector3(0, -1.95, 0), _k(cc, 0.8))
-		elif hh < 0.16:
-			# catene appese con anello
+		"w_chains":
 			for q in 3:
 				ob.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.07 + tan * (q - 1) * 0.28 + Vector3(0, h - 0.9, 0)), Vector3(0.05, 1.5 - q * 0.3, 0.05), Color(0.2, 0.2, 0.22), 0.1, 8)
 				ob.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.08 + tan * (q - 1) * 0.28 + Vector3(0, h - 1.7 + q * 0.3, 0)), Vector3(0.14, 0.14, 0.14), Color(0.28, 0.28, 0.3), 0.1, 8)
-		elif hh < 0.22:
-			# ragnatela all'angolo alto
+		"w_web":
 			var a0 := base + nrm * 0.04 + tan * -0.5 + Vector3(0, h - 0.1, 0)
 			var a1 := base + nrm * 0.04 + tan * 0.0 + Vector3(0, h - 0.1, 0)
 			ob.tri(a0, a1, a0 + Vector3(0, -1.0, 0) + nrm * 0.02, Color(0.7, 0.7, 0.75, 0.9))
@@ -803,9 +1282,11 @@ func _real_lights(dt: float) -> void:
 	var cand: Array = []
 	for f in gm.flick:
 		var l = f[0]
-		if not is_instance_valid(l):
+		if not is_instance_valid(l) or not (l as CanvasItem).is_visible_in_tree():
 			continue
 		var gp: Vector2 = (l as Node2D).global_position / 16.0
+		if not world_on and ed_hide_keys.has(Vector2i(roundi(gp.x * 100.0), roundi(gp.y * 100.0))):
+			continue
 		cand.append([gp.distance_squared_to(pos), Vector3(gp.x, 1.9, gp.y), minf(4.2, float(f[1]) * 3.4) * (0.55 if world_on else 1.0), Color(0.96, 0.76, 0.62)])
 	for dl in decor_lights:
 		var dv: Vector3 = dl
@@ -1371,7 +1852,7 @@ func _make_td(name: String) -> Node3D:
 
 
 func _make_exact(spr: Sprite2D) -> Node3D:
-	var key := "exflat_%d" % spr.texture.get_rid().get_id()
+	var key := ("exsolid_%d" if fpv else "exflat_%d") % spr.texture.get_rid().get_id()
 	var mesh: ArrayMesh
 	if vox_cache.has(key):
 		mesh = vox_cache[key]
@@ -1382,7 +1863,39 @@ func _make_exact(spr: Sprite2D) -> Node3D:
 		img.convert(Image.FORMAT_RGBA8)
 		var b := W3DBuilder.new()
 		var iw := img.get_width()
-		if iw >= 48:
+		if fpv:
+			# retro: lo sprite posteriore (nome_b.png) se esiste
+			var back: Image = null
+			var tp := spr.texture.resource_path
+			if tp.ends_with(".png"):
+				var bp := tp.trim_suffix(".png") + "_b.png"
+				if not ResourceLoader.exists(bp):
+					bp = "res://assets/back/" + tp.get_file().get_basename() + "_b.png"      # retri derivati o generati, per i personaggi senza sprite posteriore
+				if ResourceLoader.exists(bp):
+					back = (load(bp) as Texture2D).get_image()
+					if back.is_compressed():
+						back.decompress()
+					back.convert(Image.FORMAT_RGBA8)
+			# vista dall'alto (colori + altezze) se disponibile: da lì vengono impronta e sagome laterali
+			var tdn2 := tp.get_file().get_basename()
+			if tp.begins_with("res://assets/sprites/") and td_has(tdn2):
+				var tci: Image = (load("res://assets/topdown/%s.png" % tdn2) as Texture2D).get_image()
+				var thi: Image = (load("res://assets/topdown/%s_h.png" % tdn2) as Texture2D).get_image()
+				for q in [tci, thi]:
+					if (q as Image).is_compressed():
+						(q as Image).decompress()
+					(q as Image).convert(Image.FORMAT_RGBA8)
+				var sidei: Image = null
+				var sp2 := "res://assets/side/" + tdn2 + "_s.png"
+				if ResourceLoader.exists(sp2):
+					sidei = (load(sp2) as Texture2D).get_image()
+					if sidei.is_compressed():
+						sidei.decompress()
+					sidei.convert(Image.FORMAT_RGBA8)
+				b.hull(img, back, tci, thi, 1.0 / 16.0 * 1.1, sidei)
+			else:
+				b.solid(img, back, 1.0 / 16.0 * 1.1)
+		elif iw >= 48:
 			b.voxel(img, 1.0 / 16.0 * 1.1, 24, 7)      # edifici: blocchi alti con tetto a scalini
 		elif iw >= 26:
 			b.voxel(img, 1.0 / 16.0 * 1.1, 7, 4)
@@ -1472,7 +1985,7 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 			okey = "ally"
 		elif n is Villager:
 			okey = "npc"
-		if okey != "" and tdn == "":
+		if okey != "" and tdn == "" and char_mode == 2:      # i personaggi a blocchi (cubetti) non hanno contorno nero
 			_add_outline(node, okey)
 		dyn[id] = {"node": node, "kind": kind, "model": model, "last": n2.position, "ph": randf() * 6.0, "flow": 0.0, "td": tdn}
 	var d: Dictionary = dyn[id]
@@ -1507,7 +2020,7 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 		_flow_anim(node3, float(d["flow"]), lamp_t + float(d["ph"]))
 		if is_player:
 			var p: Player = gm.player
-			node3.visible = p.spr.visible or not (p.veh as Dictionary).is_empty()
+			node3.visible = (p.spr.visible or not (p.veh as Dictionary).is_empty()) and not fpv and not (cine != null and cine.active)
 			if p.atk_t > 0.0 and p.atk_dur > 0.0 and str(Rpg.FAM[p.weapon()["f"]]["ranged"]) == "false":
 				var k := 1.0 - p.atk_t / p.atk_dur
 				node3.rotation.y += lerpf(-0.9, 0.9, k * k * (3.0 - 2.0 * k))
@@ -1523,6 +2036,20 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 			node3.scale *= 0.9
 			node3.scale *= 1.0 + (0.12 if (n is Enemy and float((n as Enemy).flash) > 0.0) else 0.0)
 		node3.visible = spr.visible and n2.visible
+		if fpv and char_mode == 1 and (n is Enemy or n is Villager or n is Ally or n is Critter):
+			# prima persona: personaggio a blocchi completo che guarda dove si muove (i nemici verso di te): si vedono fianchi e schiena
+			node3.position = Vector3(n2.position.x / 16.0, node3.position.y, n2.position.y / 16.0)
+			var fdir := Vector2.ZERO
+			if n is Enemy:
+				fdir = gm.player.position - n2.position
+			elif moving:
+				fdir = dirv
+			if fdir.length() > 0.5:
+				var want := atan2(-fdir.x, -fdir.y)
+				node3.rotation.y = lerp_angle(node3.rotation.y, want, 0.25)
+		if n is Prop and n.has_meta("ed_yaw"):
+			node3.rotation.y = float(n.get_meta("ed_yaw"))
+			node3.scale *= float(n.get_meta("ed_sc", 1.0))
 	var hit := false
 	if n is Enemy:
 		hit = float((n as Enemy).flash) > 0.0
@@ -1811,8 +2338,8 @@ func _wh(vx: float, vz: float) -> float:
 ## Il suolo ha vere altezze: ogni bioma ha una quota di base (il cimitero e' su una collina, la cattedrale su un altopiano...), sfumata
 ## fra una regione e l'altra, con ondulazioni; piatta (a quota fissa) per villaggi e ingressi, scavata a valle lungo i fiumi.
 ## La mappa delle quote va alla GPU: lo shader solleva ogni vertice (terreno, case, alberi, personaggi) in base alla sua posizione.
-const ELEV_BASE := [0.0, 1.2, 0.3, 0.0, 1.0, 1.4, 0.4]       # quota di base di ogni regione (sfumata)
-const ELEV_ROUGH := [0.25, 3.8, 2.6, 0.3, 2.4, 4.5, 2.0]     # altezza dei rilievi (colline) di ogni regione
+const ELEV_BASE := [0.0, 1.6, 1.0, 0.0, 2.0, 5.0, 1.0]       # quota di base di ogni regione (sfumata)
+const ELEV_ROUGH := [1.6, 7.5, 8.0, 0.8, 9.0, 17.0, 10.0]     # altezza dei rilievi (colline) di ogni regione
 const EG := 8                      # passo della griglia grossa (celle)
 const ET := 4                      # passo dei texel della mappa delle quote (celle)
 var elev := PackedFloat32Array()
@@ -2019,6 +2546,9 @@ func _gmap_fill(j: Dictionary) -> void:
 			if tx < 0 or tx >= gmap_w:
 				continue
 			var pe := Vector2((tx + 0.5) / GRES - world_off.x, (tz + 0.5) / GRES - world_off.y)
+			if edge_fn.is_valid() and bool(edge_fn.call(pe)):
+				gmap_img.set_pixel(tx, tz, Color(1.0, 0, 0, 1))      # fuori dall'isola (il vuoto scuro): niente sentiero
+				continue
 			var rdv := _road_dist_sub(pe, sub)
 			var sd: float = rdv.x - rdv.y * 0.5
 			gmap_img.set_pixel(tx, tz, Color(clampf(sd / 8.0 + 0.5, 0.0, 1.0), 0, 0, 1))
@@ -2138,7 +2668,7 @@ func _world_update() -> void:
 	wframe += 1
 	if wframe % 5 == 1:
 		_stream(false)
-	_run_jobs(3.5)
+	_run_jobs(45.0 if job_boost else (12.0 if fpv else (6.0 if not pins.is_empty() else 3.5)))
 	pos = sp
 	for k in chunks:
 		var nd: Node3D = chunks[k]["node"]
@@ -2219,7 +2749,8 @@ func hit_world_prop(hit_pos: Vector2, face: Vector2, reach: float, arc: float, m
 		gm.burst(cp, Destruct.COL["molle"], 18, 70.0, 0.55)
 		gm.snd("kill")
 		gm.shake(2.5)
-		gm.add_mat("erba" if target_kind == "hay" else "legna", 1)
+		if randf() < 0.35:
+			gm.add_mat("erba" if target_kind == "hay" else "legna", 1)
 	else:
 		hp_map[key] = left
 		gm.persist["w3d_hp"] = hp_map
@@ -2231,6 +2762,7 @@ func _world_init() -> void:
 	_elev_build()
 	_gmap_init()
 	ed_load()
+	ed_set_area("world")
 	ed_hide_sync()
 	for k in chunks:
 		(chunks[k]["node"] as Node3D).queue_free()
@@ -2247,13 +2779,7 @@ func _world_init() -> void:
 	_gen_roads()
 	# il falo' del villaggio di gioco coincide con il primo falo' del motore: stesse strade organiche, stessa partenza
 	world_off = Vector2(gm.SEEDS[0]) + Vector2(3.5, 0.5) - (bonfires[1] as Vector2)
-	for key in gm.persist.get("broken", {}):
-		var broken_key := str(key)
-		if not broken_key.begins_with("w3d:"):
-			continue
-		var coords := broken_key.substr(4).split(",")
-		if coords.size() == 2:
-			ed_hide_keys[Vector2i(int(coords[0]), int(coords[1]))] = true
+	_merge_broken_keys()
 	if OS.get_cmdline_user_args().has("--listkinds"):
 		var cnt := {}
 		for g in gm.ents.get_children():
@@ -2271,6 +2797,31 @@ func _world_init() -> void:
 	no_base_houses = false
 	grid_road_fn = Callable()
 	bio_fn = Callable(self, "_bio_game")
+	megas.clear()
+	_rebuild_clear_pts()
+	_plan_megas()
+	pos = gm.player.position / 16.0      # la posizione dell'ultimo fotogramma e' ancora quella dell'interno
+	fade_a = 27.0       # visibilita' del mondo aperto (negli interni e' piu' ampia: costruire quell'anello sarebbe 3 volte piu' lento)
+	var sp := pos
+	pos = sp - world_off
+	_stream(true)
+	pos = sp
+	_world_update()
+
+
+## le cose distrutte dal giocatore nel mondo restano nascoste
+func _merge_broken_keys() -> void:
+	for key in gm.persist.get("broken", {}):
+		var broken_key := str(key)
+		if not broken_key.begins_with("w3d:"):
+			continue
+		var coords := broken_key.substr(4).split(",")
+		if coords.size() == 2:
+			ed_hide_keys[Vector2i(int(coords[0]), int(coords[1]))] = true
+
+
+## zone da tenere libere nei blocchi nuovi: partenza del giocatore, falo', portali, anziano, grandi strutture
+func _rebuild_clear_pts() -> void:
 	clear_pts.clear()
 	clear_pts.append(Vector3(gm.player.position.x / 16.0 - world_off.x, gm.player.position.y / 16.0 - world_off.y, 2.5))
 	for g in gm.props:
@@ -2278,11 +2829,153 @@ func _world_init() -> void:
 			continue
 		var gc := Vector2(g.cell) + Vector2(0.5, 0.5) - world_off
 		clear_pts.append(Vector3(gc.x, gc.y, 4.5 if g.kind == "portal" else 2.4))
+	for mg in megas:
+		clear_pts.append(Vector3((mg[1] as Vector2).x, (mg[1] as Vector2).y, W3DStructs.radius(str(mg[0]))))
+
+
+var world_stashed := false
+var world_stash_seed := -1
+
+
+## accoda i blocchi mancanti e costruisce subito solo quelli sotto i piedi del giocatore: gli altri arrivano a poco a poco durante il gioco
+func _stream_near() -> void:
+	_stream(false)
+	var guard := 0
+	while not jobs.is_empty() and guard < 80:
+		var jk: Vector2i = jobs[0]["k"]
+		var ctr := Vector2((jk.x + 0.5) * CHS, (jk.y + 0.5) * CHS)
+		if ctr.distance_to(pos) > CHS * 0.95:
+			break
+		_run_jobs(0.0)
+		guard += 1
+
+
+## uscendo nel mondo verso un interno i blocchi gia' costruiti non si buttano: si nascondono, cosi' al ritorno il mondo e' li' subito
+func _world_stash() -> void:
+	_world_clear()
+	for k in chunks:
+		var nd := chunks[k]["node"] as Node3D
+		nd.visible = false
+		nd.process_mode = Node.PROCESS_MODE_DISABLED
+	jobs.clear()
+	job_keys.clear()
+	world_stashed = true
+	world_stash_seed = int(gm.world_seed)
+
+
+func _world_unstash() -> void:
+	world_stashed = false
+	for c in static_root.get_children():
+		c.queue_free()
+	for k in dyn.keys():
+		_drop_dyn(k)
+	room_lamps.clear()
+	decor_lights.clear()
+	room_theme.clear()
+	built_area = "world"
+	world_on = true
+	_elev_set(true)
+	vp.size = Vector2i(960, 540)
+	post_mat.set_shader_parameter("px", Vector2(960, 540))
+	edge_fn = Callable(self, "_edge_game")
+	bio_fn = Callable(self, "_bio_game")
+	grid_road_fn = Callable()
+	ed_set_area("world")
+	ed_hide_sync()
+	_merge_broken_keys()
+	_rebuild_clear_pts()
+	for k in chunks:
+		var nd := chunks[k]["node"] as Node3D
+		nd.visible = true
+		nd.process_mode = Node.PROCESS_MODE_INHERIT
+	pos = gm.player.position / 16.0
+	fade_a = 27.0
 	var sp := pos
 	pos = sp - world_off
-	_stream(true)
+	_stream_near()
 	pos = sp
 	_world_update()
+
+
+var mega_seed := -1
+
+
+## pianifica le grandi strutture del mondo: una zona di 5x5 blocchi su ~2.4 ne ha una, lontana da villaggi, ingressi, luoghi del gioco, strade, acqua e dal bordo.
+## Dentro ci sono guardiani e un tesoro (aggiunti una volta sola per partita).
+func _plan_megas() -> void:
+	megas.clear()
+	var ZC := 4
+	var zone := float(CHS * ZC)
+	var W := float(Game.MW)
+	var H := float(Game.MH)
+	var avoid: Array = []
+	for s in gm.SEEDS:
+		avoid.append([Vector2(s), 30.0])
+	for e in gm.ENTR.values():
+		avoid.append([Vector2(e), 14.0])
+	for po in gm.pois:
+		avoid.append([Vector2(po["cell"]), 16.0])
+	for a in gm.arenas:
+		avoid.append([(a["pos"] as Vector2) / 16.0, 16.0])
+	var add_ents: bool = mega_seed != int(gm.world_seed)
+	for zx in range(floori(-world_off.x / zone) - 1, ceili((W - world_off.x) / zone) + 1):
+		for zz in range(floori(-world_off.y / zone) - 1, ceili((H - world_off.y) / zone) + 1):
+			var zr := RandomNumberGenerator.new()
+			zr.seed = hash(Vector3i(zx, zz, seed_v + 4242))
+			if zr.randf() > 0.55:
+				continue
+			var mp := Vector2((zx + 0.15 + zr.randf() * 0.7) * zone, (zz + 0.15 + zr.randf() * 0.7) * zone)
+			var yaw := zr.randf() * TAU
+			var mg := mp + world_off
+			if mg.x < 20.0 or mg.y < 20.0 or mg.x > W - 20.0 or mg.y > H - 20.0:
+				continue
+			var kind := W3DStructs.pick_big(_bio_at(mp), zr)
+			if kind == "":
+				continue
+			var rad := W3DStructs.radius(kind)
+			var ok := true
+			for q in avoid:
+				if mg.distance_to(q[0]) < float(q[1]) + rad:
+					ok = false
+			if not ok:
+				continue
+			if float(_road_near(mp)["d"]) < rad * 0.45:
+				continue
+			var pts: Array = [Vector2.ZERO]
+			for ang in 8:
+				pts.append(Vector2.from_angle(ang * PI * 0.25) * rad * 0.7)
+			for pt in pts:
+				var c := Vector2i(floori(mg.x + pt.x), floori(mg.y + pt.y))
+				if not gm.inb(c) or bool(edge_fn.call(mp + pt)) or gm.water[gm.idx(c)] == 1:
+					ok = false
+			if not ok:
+				continue
+			megas.append([kind, mp, yaw])
+			clear_pts.append(Vector3(mp.x, mp.y, rad))
+			if add_ents:
+				_mega_guardians(kind, mg, yaw, zr)
+	mega_seed = int(gm.world_seed)
+
+
+func _mega_guardians(kind: String, mg: Vector2, yaw: float, r: RandomNumberGenerator) -> void:
+	var bi := int(gm.biome[gm.idx(Vector2i(floori(mg.x), floori(mg.y)))])
+	var pool: Array = Game.BIO[bi]["pool"]
+	var tint: Color = Game.BIO[bi]["tint"]
+	var rad := W3DStructs.radius(kind)
+	var n: int = {"castle_ruin": 12, "monastery_ruin": 5, "palisade_fort": 5, "arena_ruin": 6, "ghost_village": 5, "mine_entrance": 4, "ice_temple": 4, "bandit_camp": 6}.get(kind, 4)
+	var mult := (1.0 + int(Game.BIO[bi]["tier"]) * 0.2) * 1.15
+	for i in n:
+		var a := r.randf() * TAU
+		var c := Vector2i(floori(mg.x + cos(a) * rad * 0.45 * r.randf()), floori(mg.y + sin(a) * rad * 0.45 * r.randf()))
+		var cc: Vector2i = gm.free_near(c)
+		gm.spawns.append({"k": pool[r.randi() % pool.size()], "pos": gm.cell_pos(cc), "mult": mult, "elite": r.randf() < 0.15, "tint": tint})
+	for i in 1 + int(n >= 6) + int(n >= 12) * 2:
+		gm.add_champion(Vector2i(floori(mg.x), floori(mg.y)) + Vector2i(r.randi_range(-3, 3), r.randi_range(-3, 3)), 1.2)
+	var spot: Vector2 = W3DBig.loot_spot(kind)
+	var wl := Basis(Vector3.UP, yaw) * Vector3(spot.x, 0, spot.y)
+	var lc: Vector2i = gm.free_near(Vector2i(floori(mg.x + wl.x), floori(mg.y + wl.z)))
+	gm.add_prop("chest", lc)
+	gm.index_spawns()
 
 
 ## collisione del mondo aperto: i solidi sono quelli visibili in 3D
@@ -2378,6 +3071,8 @@ func _grid_road(p: Vector2) -> Dictionary:
 			var ci: int = gm.idx(c)
 			if gm.road[ci] != 1 and gm.cobble[ci] != 1:
 				continue
+			if gm.water[ci] == 1 or gm.bridge[ci] == 1:
+				continue       # sull'acqua e sui ponti non si disegna il sentiero (i ponti hanno le loro assi)
 			var ex := maxf(absf(gp.x - (c.x + 0.5)) - 0.5, 0.0)
 			var ez := maxf(absf(gp.y - (c.y + 0.5)) - 0.5, 0.0)
 			var d := sqrt(ex * ex + ez * ez)
@@ -2714,7 +3409,9 @@ func _process_inner(dt: float) -> void:
 	if not active:
 		return
 	if str(gm.area) == "world":
-		if not world_on or built_area != "world":
+		if not world_on and built_area != "world" and world_stashed and world_stash_seed == int(gm.world_seed) and not chunks.is_empty() and not OS.get_cmdline_user_args().has("--nocache"):
+			_world_unstash()
+		elif not world_on or built_area != "world":
 			_world_clear()
 			for k in dyn.keys():
 				_drop_dyn(k)
@@ -2731,12 +3428,15 @@ func _process_inner(dt: float) -> void:
 			_world_init()
 	elif built_area != str(gm.area) or built_grid_id != gm.grid.size() or world_on:
 		if world_on:
-			_world_clear()
-			for k in chunks:
-				(chunks[k]["node"] as Node3D).queue_free()
-			chunks.clear()
-			jobs.clear()
-			job_keys.clear()
+			if OS.get_cmdline_user_args().has("--nocache"):
+				_world_clear()
+				for k in chunks:
+					(chunks[k]["node"] as Node3D).queue_free()
+				chunks.clear()
+				jobs.clear()
+				job_keys.clear()
+			else:
+				_world_stash()
 		world_on = false
 		_elev_set(false)
 		gm.mm3d = null
@@ -2845,14 +3545,24 @@ func _process_inner(dt: float) -> void:
 			_drop_dyn(id)
 	shake = float(gm.shake_v) * 0.45
 	_booms_update(dt)
-	elev_y = lerpf(elev_y, elev_at(pos.x, pos.y), 0.2) if world_on else 0.0
+	if world_on:
+		# la camera sale un po' quando davanti c'e' un rilievo molto piu' alto, cosi' le montagne non ti finiscono addosso
+		var e0 := elev_at(pos.x, pos.y)
+		var ahead := e0
+		for q in 6:
+			ahead = maxf(ahead, elev_at(pos.x + cos(q * PI / 3.0) * 13.0, pos.y + sin(q * PI / 3.0) * 13.0))
+		elev_y = lerpf(elev_y, e0 + minf(ahead - e0, 22.0) * 0.7, 0.12)
+	else:
+		elev_y = 0.0
 	_update_cam()
+	if fpv:
+		_fpv_cam()
 	if OS.get_cmdline_user_args().has("--skintilt"):      # prova: camera inclinata per vedere il rilievo
 		cam.rotation_degrees = Vector3(-42, 0, 0)
 		cam.position.z += cam.position.y * 0.95
 	dust.position = Vector3(pos.x, 3.0 + elev_y, pos.y)
 	RenderingServer.global_shader_parameter_set("w3d_player", Vector3(pos.x, 0, pos.y))
-	fade_a = lerpf(fade_a, ed.fade if (ed != null and ed.on) else (27.0 if world_on else 48.0), 0.15)
+	fade_a = lerpf(fade_a, ed.fade if (ed != null and ed.on) else ((46.0 if fpv else 27.0) if world_on else 48.0), 0.15)
 	if not fixed_cam:
 		var target_cam_h := CAM_H_ROOM
 		if world_on:
@@ -2888,6 +3598,7 @@ func _process_inner(dt: float) -> void:
 		_mp("hero_glow", 0.0)
 	else:
 		_skin_lamps()
+	_cine_tick(dt)
 	_mp("curve", curve)
 	_mp("fade_a", fade_a)
 	_mp("fade_b", fade_a + 18.0)
@@ -3010,7 +3721,89 @@ func _shot(dt: float) -> void:
 		get_tree().quit()
 
 
+# ------------------------------------------------------------------ prima persona (prova): F7 nel mondo aperto
+var fpv := false
+var fpv_yaw := 0.0
+var fpv_pitch := -0.04
+var fpv_curve_saved := 0.017
+var fpv_char_saved := 0
+
+
+func fpv_set(on: bool) -> void:
+	if on == fpv:
+		return
+	if on and (not world_on or (ed != null and ed.on) or str(gm.state) != "play"):
+		return
+	fpv = on
+	if on:
+		var fc: Vector2 = gm.player.face
+		fpv_yaw = atan2(-fc.x, -fc.y)
+		fpv_pitch = -0.04
+		fpv_curve_saved = curve
+		fpv_char_saved = char_mode
+		char_mode = 1            # in prima persona i personaggi sono a blocchi (pixel dello sprite -> cubi), in piedi e di fronte
+		exact_chars = true
+		for k in dyn.keys():
+			_drop_dyn(k)
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		gm.say("PRIMA PERSONA (F7 PER TORNARE)")
+	else:
+		curve = fpv_curve_saved
+		char_mode = fpv_char_saved
+		exact_chars = char_mode < 2
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		cam.fov = 38.6
+		cam.near = 2.0
+		cam.far = 120.0
+		cam.rotation_degrees = Vector3(-90, 0, 0)
+		for k in dyn.keys():
+			_drop_dyn(k)
+
+
+## la camera diventa gli occhi dell'eroe: altezza 1.75, direzione dal mouse, niente curvatura del mondo
+func _fpv_cam() -> void:
+	if not world_on or str(gm.state) != "play" or (ed != null and ed.on):
+		fpv_set(false)
+		return
+	curve = 0.0
+	cam.fov = 78.0
+	cam.near = 0.12
+	cam.far = 260.0
+	cam.position = Vector3(pos.x, elev_at(pos.x, pos.y) + 1.75, pos.y)
+	cam.rotation = Vector3(fpv_pitch, fpv_yaw, 0.0)
+	env.fog_density = 0.011
+	env.fog_light_color = Color(0.07, 0.08, 0.12)
+
+
 func _unhandled_input(ev: InputEvent) -> void:
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F6:
+		if cine != null and cine.active:
+			if cine.edit:
+				cine.finish(false)
+		elif world_on and str(gm.state) == "play":
+			if cine == null:
+				cine = W3DCine.new()
+			cine.start(self, "ufo", true)       # editor delle cutscene
+		return
+	if cine != null and cine.active:
+		get_viewport().set_input_as_handled()
+		if cine.edit:
+			if cine.ed != null:
+				cine.ed.input(ev)
+		elif ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode in [KEY_ENTER, KEY_SPACE, KEY_ESCAPE]:
+			cine.skip()
+		return
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10 and world_on and str(gm.state) == "play":
+		start_cine()      # scorciatoia per rivedere la sequenza dell'ufo da qualunque partita (non serve rigiocare dall'inizio)
+		return
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F7:
+		fpv_set(not fpv)
+		return
+	if fpv and ev is InputEventMouseMotion:
+		var mm := ev as InputEventMouseMotion
+		fpv_yaw -= mm.relative.x * 0.0026
+		fpv_pitch = clampf(fpv_pitch - mm.relative.y * 0.0026, -1.2, 1.2)
+		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F8:
 		char_mode = (char_mode + 1) % 3
 		exact_chars = char_mode < 2
@@ -3248,3 +4041,102 @@ func _proj_mesh(n: Node) -> ArrayMesh:
 	var m := b.mesh()
 	fx_cache[key] = m
 	return m
+
+
+# ------------------------------------------------------------------ cinematica dell'ufo (w3d_cine.gd)
+var cine: W3DCine
+var job_boost := false
+var cine_t0 := 0.0
+var cine_test := 0
+
+
+func cine_prewarm() -> void:
+	if cine == null:
+		cine = W3DCine.new()
+	cine.prewarm(self)
+
+
+func start_cine() -> bool:
+	if cine == null:
+		cine = W3DCine.new()
+	return cine.start(self)
+
+
+func _cine_tick(dt: float) -> void:
+	if (cine == null or not cine.active) and str(gm.state) == "cine":
+		gm.state = "play"      # rete di sicurezza: mai restare bloccati nello stato della sequenza
+	if cine != null and not cine.active and world_on and Story.is_done(gm, W3DCine.FLAG) and not cine.wreck_alive():
+		cine.restore_wreck(self)      # i resti ricompaiono se il mondo viene ricostruito (morte, cambio zona, nuova partita)
+	if cine == null:
+		if world_on and Story.is_done(gm, W3DCine.FLAG):
+			cine = W3DCine.new()
+			cine.restore_wreck(self)
+		elif not (OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--cinereal") or OS.get_cmdline_user_args().has("--cineedit")):
+			return
+	var real := OS.get_cmdline_user_args().has("--cinereal")
+	var test := OS.get_cmdline_user_args().has("--cinetest") or real or OS.get_cmdline_user_args().has("--cineedit")
+	if test and (cine == null or not cine.active) and cine_test == 0 and lamp_t > 2.0:
+		# prova: porta l'eroe lontano dal villaggio, nel mondo, e lancia la sequenza
+		cine_test = 1
+		DirAccess.make_dir_recursive_absolute("user://cine")
+		if gm.area != "world":
+			gm.persist["bosses"]["boss_jailer"] = true
+			gm._do_change("world")
+		var v: Vector2i = gm.SEEDS[0]
+		gm.player.position = gm.cell_pos(gm.free_near(v + Vector2i(-100, 30)))
+		gm.state = "play"
+		cine = W3DCine.new()
+		cine_test = 2
+		return
+	if real and cine_test == 2 and world_on and lamp_t > 5.0:
+		# prova del trigger REALE: 70 s di cammino simulato verso il villaggio, attraverso Story.update
+		cine_test = 3
+		Story.flags(gm)[Story.ESCAPE_INTRO] = true
+		var vp2: Vector2 = gm.cell_pos(gm.SEEDS[0])
+		var steps := 0
+		while steps < 1200 and not (cine != null and cine.active):
+			gm.player.position += (vp2 - gm.player.position).normalized() * 4.0
+			Story.update(gm, 0.1)
+			steps += 1
+		print("CINE reale: partita dopo ", steps * 0.1, " s di cammino simulato; attiva=", cine != null and cine.active, " distanza dal villaggio=", int(gm.player.position.distance_to(vp2) / 16.0))
+	if test and cine_test == 2 and world_on and lamp_t > 5.0:
+		cine_test = 6
+		cine_prewarm()          # come nel gioco: il precarico parte ~30 s prima dell'ufo
+		cine_t0 = lamp_t + 30.0
+	if OS.get_cmdline_user_args().has("--cineedit") and cine_test == 6 and lamp_t > cine_t0 - 25.0:
+		cine_test = 7
+		cine.start(self, "ufo", true)
+		cine.seek(8.5)
+		cine_t0 = lamp_t + 5.0
+	if cine_test == 7 and lamp_t > cine_t0:
+		get_viewport().get_texture().get_image().save_png("user://cine_edit.png")
+		get_tree().quit()
+	if test and cine_test == 6 and lamp_t > cine_t0:
+		cine_test = 3
+		start_cine()
+	if cine != null and cine.active:
+		var step := 1.0 / 15.0 if test else dt
+		cine.update(step)
+		if test and not real and cine.active:
+			var img := get_viewport().get_texture().get_image()
+			img.resize(640, 360)
+			img.save_png("user://cine/f_%05d.png" % cine.frame_n)
+			cine.frame_n += 1
+	elif test and cine_test == 3:
+		print("CINE finita: frames=", cine.frame_n, " stato=", gm.state, " eroe=", gm.player.position / 16.0)
+		if real:
+			# senza apparecchio niente Cronotone; poi l'eroe lo raccoglie
+			gm.summon()
+			print("CINE senza apparecchio: ", gm.msg, " | obiettivo: ", gm.objective(), " | frecce: ", gm.obj_targets().map(func(q): return q["n"]))
+			var dv: Variant = Story.device_cell(gm)
+			gm.player.position = (dv as Vector2) * 16.0 + Vector2(40, 0)
+			Story.update(gm, 0.1)
+			print("CINE lontano (2.5 celle): chrono=", Story.is_done(gm, Story.CHRONO))
+			gm.player.position = (dv as Vector2) * 16.0 + Vector2(10, 0)
+			Story.update(gm, 0.1)
+			print("CINE vicino: chrono=", Story.is_done(gm, Story.CHRONO), " msg=", gm.msg, " obiettivo=", gm.objective().substr(0, 40))
+			cine_test = 4
+			gm.persist["chrono"] = {}
+			gm.summon()
+			print("CINE evocazione dopo il recupero: energia=", gm.player.chrono)
+		get_tree().quit()

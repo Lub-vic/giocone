@@ -18,6 +18,8 @@ const WOOD := Color(0.17, 0.115, 0.085)
 const STONE := Color(0.24, 0.235, 0.25)
 
 var seed_v := 1337
+var mega_cols: Dictionary = {}  # collisioni delle grandi strutture, per posizione
+var megas: Array = []           # grandi strutture pianificate: [tipo, posizione, rotazione] (le costruisce il blocco che contiene il centro)
 var clear_pts: Array = []        # Vector3(x, z, raggio): zone da tenere libere (falo', portali, oggetti di gioco)
 var no_base_fires := false
 var field_n := 0
@@ -353,6 +355,17 @@ func _road_dist_sub(p: Vector2, sub: Array) -> Vector2:
 
 
 # ------------------------------------------------------------------ blocchi (generati a fette di tempo)
+var pins: Array = []            # Vector2 (coordinate del generatore): zone da tenere caricate (percorso di una cutscene)
+const PIN_R := 40.0
+
+
+func _pinned(c: Vector2) -> bool:
+	for p in pins:
+		if c.distance_to(p) < PIN_R + CHS * 0.7:
+			return true
+	return false
+
+
 func _stream(all: bool) -> void:
 	if lineup:
 		return
@@ -366,19 +379,30 @@ func _stream(all: bool) -> void:
 			var d := ctr.distance_to(pos)
 			if d < fade_a + stream_margin and not chunks.has(k) and not job_keys.has(k):
 				want.append([d, k])
+	for pn in pins:
+		var pk := Vector2i(floori(pn.x / CHS), floori(pn.y / CHS))
+		var pr := int(ceil(PIN_R / CHS)) + 1
+		for dz in range(-pr, pr + 1):
+			for dx in range(-pr, pr + 1):
+				var k2 := pk + Vector2i(dx, dz)
+				var c2 := Vector2((k2.x + 0.5) * CHS, (k2.y + 0.5) * CHS)
+				if c2.distance_to(pn) < PIN_R and not chunks.has(k2) and not job_keys.has(k2):
+					want.append([1000.0 + c2.distance_to(pn), k2])
 	want.sort_custom(func(a, b): return a[0] < b[0])
 	for w in want:
-		_enqueue(w[1])
+		if not chunks.has(w[1]) and not job_keys.has(w[1]):
+			_enqueue(w[1])
 	if all:
 		_run_jobs(1e9)
 	for k in chunks.keys():
 		var ctr2 := Vector2((k.x + 0.5) * CHS, (k.y + 0.5) * CHS)
-		if ctr2.distance_to(pos) > fade_a + stream_drop:
+		if ctr2.distance_to(pos) > fade_a + stream_drop and not _pinned(ctr2):
 			(chunks[k]["node"] as Node3D).queue_free()
 			chunks.erase(k)
 	for i in range(jobs.size() - 1, -1, -1):
 		var jk: Vector2i = jobs[i]["k"]
-		if Vector2((jk.x + 0.5) * CHS, (jk.y + 0.5) * CHS).distance_to(pos) > fade_a + stream_drop:
+		var jc := Vector2((jk.x + 0.5) * CHS, (jk.y + 0.5) * CHS)
+		if jc.distance_to(pos) > fade_a + stream_drop and not _pinned(jc):
 			job_keys.erase(jk)
 			jobs.remove_at(i)
 
@@ -500,6 +524,12 @@ func _finalize(j: Dictionary) -> void:
 			for q in 5:
 				var a := TAU * q / 5.0
 				o.rock(Vector3(bv.x + cos(a) * 1.0, 0.18, bv.y + sin(a) * 1.0), Vector3(0.5, 0.36, 0.5), Color(0.22, 0.22, 0.24), 0.14, 0.4, a)
+	for mg in megas:
+		var mp: Vector2 = mg[1]
+		if mp.x >= x0 and mp.x < x0 + CHS and mp.y >= z0 and mp.y < z0 + CHS:
+			var c0 := cols.size()
+			_obj(str(mg[0]), o, mp, float(mg[2]), o.rn, cols, lamps)
+			mega_cols[str(mp)] = {"c": mp, "r": W3DStructs.radius(str(mg[0])), "cols": cols.slice(c0)}
 	_ed_apply(j)
 	_gmap_fill(j)
 	var node := Node3D.new()
@@ -533,6 +563,73 @@ func _bio_at(p: Vector2) -> int:
 	return int(bio_fn.call(p)) if bio_fn.is_valid() else 0
 
 
+## aspetto del suolo di ogni bioma: tinta di base + disegno (muschio, lettiera, fango, lastricato, neve, lava)
+func _bio_pattern(p: Vector2, bio: int, c: Color) -> Color:
+	var a := n_soil.get_noise_2d(p.x * 1.3, p.y * 1.3)
+	var v := n_veg.get_noise_2d(p.x, p.y)
+	var s := n_stain.get_noise_2d(p.x + 400.0, p.y - 300.0)
+	var out := c
+	match bio:
+		1:        # cimitero: terra grigio-blu, muschio e licheni pallidi
+			out = Color(0.10, 0.115, 0.15)
+			if v > 0.22:
+				out = out.lerp(Color(0.085, 0.15, 0.11), 0.7)
+			if a > 0.42:
+				out = out.lerp(Color(0.2, 0.22, 0.25), 0.6)
+		2:        # foresta: sottobosco scuro, lettiera di aghi e muschio
+			out = Color(0.055, 0.1, 0.05)
+			if a < -0.1:
+				out = out.lerp(Color(0.13, 0.09, 0.055), 0.8)
+			if v > 0.3:
+				out = out.lerp(Color(0.035, 0.15, 0.06), 0.7)
+		3:        # palude: fango verdastro e pozze scure
+			out = Color(0.055, 0.1, 0.085)
+			if a < -0.15:
+				out = out.lerp(Color(0.085, 0.065, 0.05), 0.8)
+			if s > 0.45 or n_veg2.get_noise_2d(p.x, p.y) > 0.5:
+				out = Color(0.03, 0.08, 0.1)
+		4:        # cattedrale: lastricato a scacchi di marmo, crepe, erba che avanza
+			var cx := floori(p.x / 1.7)
+			var cz := floori(p.y / 1.7)
+			out = Color(0.2, 0.185, 0.23) if (cx + cz) % 2 == 0 else Color(0.11, 0.1, 0.14)
+			var fx := fposmod(p.x / 1.7, 1.0)
+			var fz := fposmod(p.y / 1.7, 1.0)
+			if fx < 0.05 or fz < 0.05:
+				out = Color(0.04, 0.035, 0.05)
+			if v > 0.28:
+				out = out.lerp(Color(0.07, 0.11, 0.06), 0.75)
+		5:        # vetta: neve con ombre azzurre e chiazze di ghiaccio
+			out = Color(0.78, 0.84, 0.91)
+			if a < -0.2:
+				out = out.lerp(Color(0.6, 0.7, 0.84), 0.7)
+			if s > 0.42:
+				out = out.lerp(Color(0.5, 0.74, 0.9), 0.7)
+		6:        # fonderie: cenere nera, lastroni di roccia e crepe di lava
+			out = Color(0.065, 0.055, 0.06)
+			if a > 0.3:
+				out = out.lerp(Color(0.11, 0.09, 0.095), 0.8)
+			if absf(n_h.get_noise_2d(p.x * 1.6 + 70.0, p.y * 1.6)) < 0.045:
+				out = Color(0.95, 0.32, 0.06)
+	return c.lerp(out, 0.92)
+
+
+func _rock_col(bio: int) -> Color:
+	match bio:
+		1:
+			return Color(0.2, 0.21, 0.25)
+		2:
+			return Color(0.13, 0.17, 0.12)
+		3:
+			return Color(0.12, 0.16, 0.14)
+		4:
+			return Color(0.36, 0.34, 0.4)
+		5:
+			return Color(0.6, 0.7, 0.82)
+		6:
+			return Color(0.065, 0.055, 0.065)
+	return Color(0.19, 0.19, 0.21)
+
+
 const BIO_GROUND := [Color(0, 0, 0, 0), Color(0.10, 0.12, 0.17, 0.55), Color(0.05, 0.12, 0.06, 0.6), Color(0.06, 0.14, 0.12, 0.65),
 		Color(0.20, 0.18, 0.25, 0.5), Color(0.50, 0.58, 0.68, 0.75), Color(0.16, 0.06, 0.04, 0.6)]
 
@@ -555,9 +652,12 @@ func _ground_col(p: Vector2, rd: float, rw: float) -> Color:
 	if bio_fn.is_valid() and rd > rw * 0.5 + 0.6:
 		# il bioma cambia con un confine netto ma irregolare (deformato dal rumore): niente sfumature
 		var wp := Vector2(n_soil.get_noise_2d(p.x * 0.7 + 300.0, p.y * 0.7), n_soil.get_noise_2d(p.x * 0.7, p.y * 0.7 - 300.0)) * 2.2
-		var bg: Color = BIO_GROUND[clampi(_bio_at(p + wp), 0, 6)]
+		var bi2 := clampi(_bio_at(p + wp), 0, 6)
+		var bg: Color = BIO_GROUND[bi2]
 		if bg.a > 0.0:
 			c0 = c0.lerp(Color(bg.r, bg.g, bg.b), bg.a)
+		if bi2 > 0:
+			c0 = _bio_pattern(p, bi2, c0)
 	return c0
 
 
@@ -678,6 +778,7 @@ func _grass(j: Dictionary, half: int) -> void:
 			var vg := n_veg.get_noise_2d(p.x, p.y) * 0.5 + 0.5
 			var dens := smoothstep(0.32, 0.78, vg + n_veg2.get_noise_2d(p.x, p.y) * 0.12)
 			dens *= smoothstep(0.3, 2.2, rdd)
+			dens *= [1.0, 0.85, 1.25, 1.4, 0.15, 0.4, 0.1][clampi(_bio_at(p), 0, 6)]
 			if v.rn.randf() > dens:
 				continue
 			_tuft(v, Vector3(p.x, _height(p, 3.0), p.y), dens, n_veg2.get_noise_2d(p.x + 50.0, p.y) * 0.5 + 0.5)
@@ -766,7 +867,7 @@ func _big_things(j: Dictionary) -> void:
 			var rdv := _road_dist_sub(p, sub)
 			if rdv.x - rdv.y * 0.5 < 0.5:
 				continue
-			v.rock(Vector3(p.x, 0.07, p.y), Vector3(rr.randf_range(0.14, 0.4), rr.randf_range(0.1, 0.24), rr.randf_range(0.14, 0.4)), Color(0.21, 0.205, 0.215), 0.14, 0.4, rr.randf() * TAU)
+			v.rock(Vector3(p.x, 0.07, p.y), Vector3(rr.randf_range(0.14, 0.4), rr.randf_range(0.1, 0.24), rr.randf_range(0.14, 0.4)), _rock_col(_bio_at(p)).lerp(Color.WHITE, 0.05), 0.14, 0.4, rr.randf() * TAU)
 	st = 5.5
 	for jj in int(ceil(CHS / st)):
 		for ii in int(ceil(CHS / st)):
@@ -778,12 +879,13 @@ func _big_things(j: Dictionary) -> void:
 			if rdv2.x - rdv2.y * 0.5 < 2.2 or not _free(p2, 1.4, cols):
 				continue
 			var s := rr.randf_range(0.9, 2.1)
-			o.rock(Vector3(p2.x, s * 0.4, p2.y), Vector3(s * 1.3, s * 0.85, s * 1.1), Color(0.19, 0.19, 0.21), 0.14, 0.45, rr.randf() * TAU)
+			var rc2 := _rock_col(_bio_at(p2))
+			o.rock(Vector3(p2.x, s * 0.4, p2.y), Vector3(s * 1.3, s * 0.85, s * 1.1), rc2, 0.14, 0.45, rr.randf() * TAU)
 			cols.append(["c", p2, s * 0.62])
 			for q in rr.randi_range(3, 7):
 				var a := rr.randf() * TAU
 				var rad2 := s * rr.randf_range(0.8, 1.7)
-				o.rock(Vector3(p2.x + cos(a) * rad2, 0.1, p2.y + sin(a) * rad2), Vector3(rr.randf_range(0.18, 0.5), rr.randf_range(0.14, 0.3), rr.randf_range(0.18, 0.5)), Color(0.2, 0.2, 0.22), 0.14, 0.45, rr.randf() * TAU)
+				o.rock(Vector3(p2.x + cos(a) * rad2, 0.1, p2.y + sin(a) * rad2), Vector3(rr.randf_range(0.18, 0.5), rr.randf_range(0.14, 0.3), rr.randf_range(0.18, 0.5)), rc2.lerp(Color.WHITE, 0.04), 0.14, 0.45, rr.randf() * TAU)
 	st = 3.0
 	for jj in int(CHS / st):
 		for ii in int(CHS / st):
@@ -794,26 +896,75 @@ func _big_things(j: Dictionary) -> void:
 			var rdv3 := _road_dist_sub(p3, sub)
 			if rdv3.x - rdv3.y * 0.5 < 1.8 or not _free(p3, 0.9, cols):
 				continue
-			_bush(o, p3, rr, cols)
+			var bb := _bio_at(p3)
+			if bb == 3 and rr.randf() < 0.6:
+				_obj("reed_clump", o, p3, rr.randf() * TAU, rr, cols, [])
+			elif bb == 4 or bb == 6 or bb == 5:
+				continue
+			else:
+				_bush(o, p3, rr, cols)
 	st = 7.0
 	for jj in int(ceil(CHS / st)):
 		for ii in int(ceil(CHS / st)):
 			var p4 := Vector2(x0 + (ii + rr.randf()) * st, z0 + (jj + rr.randf()) * st)
 			var core := clampf(1.0 - p4.length() / 150.0, 0.0, 1.0)
 			var tf := n_tree.get_noise_2d(p4.x, p4.y) * 0.5 + 0.5
-			if rr.randf() > (0.15 + 0.7 * (1.0 - core)) * smoothstep(0.25, 0.6, tf):
+			var tb := _bio_at(p4)
+			var dmul: float = [1.0, 0.45, 2.3, 0.95, 0.12, 0.95, 0.3][clampi(tb, 0, 6)]
+			if rr.randf() > (0.15 + 0.7 * (1.0 - core)) * smoothstep(0.25, 0.6, tf) * dmul:
 				continue
 			var rdv4 := _road_dist_sub(p4, sub)
 			if rdv4.x - rdv4.y * 0.5 < 2.4 or not _free(p4, 1.0, cols):
 				continue
-			_obj("tree", o, p4, 0.0, rr, cols, [])
-			for q in rr.randi_range(0, 2):
-				var a2 := rr.randf() * TAU
-				var q2 := p4 + Vector2.from_angle(a2) * rr.randf_range(1.3, 2.6)
-				if _free(q2, 0.6, cols):
-					_bush(o, q2, rr, cols)
-			if rr.randf() < 0.4:
-				_fallen_log(o, p4 + Vector2.from_angle(rr.randf() * TAU) * rr.randf_range(2.0, 3.4), rr)
+			var tkind := "tree"
+			var tr := rr.randf()
+			match tb:
+				2:      # foresta fitta e rigogliosa: querce dalla chioma larga, pini appuntiti, cipressi, qualche albero morto
+					tkind = "oak" if tr < 0.42 else ("pine" if tr < 0.78 else ("cypress" if tr < 0.9 else "tree"))
+				3:      # palude: salici, mangrovie, alberi spogli
+					tkind = "willow" if tr < 0.4 else ("mangrove" if tr < 0.72 else "tree")
+				4:      # cattedrale: solo qualche cipresso, come in un giardino abbandonato
+					tkind = "cypress"
+				5:      # vetta: pini innevati, ogni tanto un albero spoglio
+					tkind = "snow_pine" if tr < 0.85 else "tree"
+				6:      # fonderie: tronchi carbonizzati
+					tkind = "charred_tree"
+			_obj(tkind, o, p4, rr.randf() * TAU, rr, cols, [])
+			if tb <= 3:
+				for q in rr.randi_range(0, 2):
+					var a2 := rr.randf() * TAU
+					var q2 := p4 + Vector2.from_angle(a2) * rr.randf_range(1.3, 2.6)
+					if _free(q2, 0.6, cols):
+						_bush(o, q2, rr, cols)
+				if rr.randf() < 0.4:
+					_fallen_log(o, p4 + Vector2.from_angle(rr.randf() * TAU) * rr.randf_range(2.0, 3.4), rr)
+	# elementi tipici dove gli alberi mancano: rovine di marmo, guglie di basalto, blocchi di ghiaccio, pozze di fango
+	st = 9.0
+	for jj in int(ceil(CHS / st)):
+		for ii in int(ceil(CHS / st)):
+			var pf := Vector2(x0 + (ii + rr.randf()) * st, z0 + (jj + rr.randf()) * st)
+			var fb := _bio_at(pf)
+			var fkind := ""
+			var fch := 0.0
+			match fb:
+				3:
+					fkind = "mud_pool"
+					fch = 0.35
+				4:
+					fkind = "marble_rubble"
+					fch = 0.45
+				5:
+					fkind = "ice_boulder"
+					fch = 0.3
+				6:
+					fkind = "basalt_spire" if rr.randf() < 0.6 else "ash_mound"
+					fch = 0.5
+			if fkind == "" or rr.randf() > fch:
+				continue
+			var rdv5 := _road_dist_sub(pf, sub)
+			if rdv5.x - rdv5.y * 0.5 < 2.6 or not _free(pf, 1.8, cols):
+				continue
+			_obj(fkind, o, pf, rr.randf() * TAU, rr, cols, [])
 	for q in 6:
 		var pb := Vector2(x0 + rr.randf() * CHS, z0 + rr.randf() * CHS)
 		if n_stain.get_noise_2d(pb.x + 400.0, pb.y - 300.0) > 0.42:
@@ -928,6 +1079,14 @@ func _lot(j: Dictionary, ix: int, iz: int) -> void:
 		"grave":
 			_grave_lot(o, ix, iz, r, cols, lamps)
 		"wild":
+			# strutture e meraviglie naturali del bioma, isolate: sempre qualcosa di nuovo da scoprire
+			var sr := RandomNumberGenerator.new()
+			sr.seed = hash(Vector3i(ix, iz, seed_v + 99))
+			if sr.randf() < 0.045 and float(pl["d"]) > 10.0:
+				var nk := W3DStructs.pick(_bio_at(cp), sr)
+				if nk != "" and _free(cp, W3DStructs.radius(nk), cols):
+					_obj(nk, o, cp, sr.randf() * TAU, r, cols, lamps)
+					return
 			var roll := r.randf()
 			if roll > 0.985:
 				_obj("gallows", o, cp, 0.0, r, cols, lamps)
@@ -1537,6 +1696,8 @@ func _fence_run(o: W3DBuilder, a: Vector2, b: Vector2, r: RandomNumberGenerator,
 		var rn2 := _road_near(a + (b - a) * float(si) / 4.0)
 		if float(rn2["d"]) - float(rn2["w"]) * 0.5 < 0.9:
 			return   # una staccionata non attraversa mai la strada
+		if edge_fn.is_valid() and bool(edge_fn.call(a + (b - a) * float(si) / 4.0)):
+			return   # niente recinti nel vuoto fuori dall'isola
 	var center := (a + b) * 0.5
 	var hide_key := Vector2i(roundi(center.x * 100.0), roundi(center.y * 100.0))
 	if ed_hide_keys.has(hide_key):
@@ -2254,6 +2415,21 @@ func _build_sheet() -> void:
 
 
 # ------------------------------------------------------------------ gioco
+func _col_hit(cl: Array, p: Vector2, rr: float) -> bool:
+	if cl[0] == "c":
+		return p.distance_to(cl[1]) < cl[2] + rr
+	var c: Vector2 = cl[1]
+	var half: Vector2 = cl[2]
+	var yw: float = cl[3]
+	var dx2 := p.x - c.x
+	var dz2 := p.y - c.y
+	var lx := dx2 * cos(yw) - dz2 * sin(yw)
+	var lz := dx2 * sin(yw) + dz2 * cos(yw)
+	var qx := clampf(lx, -half.x, half.x)
+	var qz := clampf(lz, -half.y, half.y)
+	return Vector2(lx - qx, lz - qz).length() < rr
+
+
 func _blocked(p: Vector2, rr: float) -> bool:
 	var pc := Vector2i(floori(p.x / CHS), floori(p.y / CHS))
 	for dz in range(-1, 2):
@@ -2262,21 +2438,15 @@ func _blocked(p: Vector2, rr: float) -> bool:
 			if not chunks.has(k):
 				continue
 			for cl in chunks[k]["cols"]:
-				if cl[0] == "c":
-					if p.distance_to(cl[1]) < cl[2] + rr:
-						return true
-				else:
-					var c: Vector2 = cl[1]
-					var half: Vector2 = cl[2]
-					var yw: float = cl[3]
-					var dx2 := p.x - c.x
-					var dz2 := p.y - c.y
-					var lx := dx2 * cos(yw) - dz2 * sin(yw)
-					var lz := dx2 * sin(yw) + dz2 * cos(yw)
-					var qx := clampf(lx, -half.x, half.x)
-					var qz := clampf(lz, -half.y, half.y)
-					if Vector2(lx - qx, lz - qz).length() < rr:
-						return true
+				if _col_hit(cl, p, rr):
+					return true
+	# grandi strutture: le collisioni stanno in una lista a parte, perche' si estendono oltre i blocchi vicini
+	for mc in mega_cols.values():
+		if p.distance_to(mc["c"]) > float(mc["r"]) + 4.0:
+			continue
+		for cl in mc["cols"]:
+			if _col_hit(cl, p, rr):
+				return true
 	return false
 
 
@@ -2434,16 +2604,17 @@ var ed_adds: Array = []      # {k, x, z, yaw, s}
 var ed_erase: Array = []     # [x, z, raggio]
 var ed_hide: Array = []      # oggetti del gioco nascosti: [x*100, z*100] arrotondati
 var ed_hide_keys: Dictionary = {}
+var ed_props: Array = []     # oggetti-nodo dei dungeon/case: {t:"mv",k,ox,oy,dx,dy} sposta, {t:"del",k,ox,oy} nasconde, {t:"add",k,cx,cy} aggiunge
 var ed_loaded := false
+var ed_areas: Dictionary = {}
+var ed_area_key := ""
 
 
 func ed_load() -> void:
 	if ed_loaded:
 		return
 	ed_loaded = true
-	ed_adds = []
-	ed_erase = []
-	ed_hide = []
+	ed_areas.clear()
 	var paths: Array = ["res://data/w3d_edits.json"]
 	if not OS.has_feature("editor"):
 		paths.append("user://w3d_edits.json")
@@ -2451,10 +2622,34 @@ func ed_load() -> void:
 		if FileAccess.file_exists(path):
 			var d = JSON.parse_string(FileAccess.get_file_as_string(path))
 			if d is Dictionary:
-				ed_adds = d.get("add", [])
-				ed_erase = d.get("erase", [])
-				ed_hide = d.get("hide", [])
-				ed_hide_sync()
+				if d.get("areas") is Dictionary:
+					for key in d["areas"]:
+						if d["areas"][key] is Dictionary:
+							ed_areas[key] = d["areas"][key]
+				elif d.has("add") or d.has("erase") or d.has("hide"):
+					ed_areas["world"] = d
+
+
+func ed_set_area(area_key: String) -> void:
+	if not ed_loaded:
+		ed_load()
+	if ed_area_key == area_key:
+		return
+	ed_area_key = area_key
+	var d: Dictionary = ed_areas.get(area_key, {})
+	ed_adds = (d.get("add", []) as Array).duplicate(true)
+	ed_erase = (d.get("erase", []) as Array).duplicate(true)
+	ed_hide = (d.get("hide", []) as Array).duplicate(true)
+	ed_props = (d.get("props", []) as Array).duplicate(true)
+	ed_hide_sync()
+
+
+## tutte le modifiche (anche delle altre aree) come testo JSON
+func ed_json() -> String:
+	if ed_area_key == "":
+		ed_area_key = "world"
+	ed_areas[ed_area_key] = {"add": ed_adds, "erase": ed_erase, "hide": ed_hide, "props": ed_props}
+	return JSON.stringify({"areas": ed_areas}, "	")
 
 
 ## dal gioco lanciato dall'editor Godot scrive in godot/data (finisce nel progetto), dall'exe in user://
@@ -2462,17 +2657,70 @@ func ed_save() -> String:
 	var path := "user://w3d_edits.json"
 	if OS.has_feature("editor"):
 		path = ProjectSettings.globalize_path("res://data/w3d_edits.json")
+	if ed_area_key == "":
+		ed_area_key = "world"
+	ed_areas[ed_area_key] = {"add": ed_adds, "erase": ed_erase, "hide": ed_hide, "props": ed_props}
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return ""
-	f.store_string(JSON.stringify({"add": ed_adds, "erase": ed_erase, "hide": ed_hide}, "	"))
+	var txt := JSON.stringify({"areas": ed_areas}, "	")
+	f.store_string(txt)
 	f.close()
+	# dall'exe (build/CryptOfEmbers.exe) scrive anche nel progetto (godot/data), cosi' le prossime compilazioni includono le modifiche
+	if not OS.has_feature("editor"):
+		var pd := OS.get_executable_path().get_base_dir().path_join("../godot/data").simplify_path()
+		if DirAccess.dir_exists_absolute(pd):
+			var f2 := FileAccess.open(pd.path_join("w3d_edits.json"), FileAccess.WRITE)
+			if f2 != null:
+				f2.store_string(txt)
+				f2.close()
+				return pd.path_join("w3d_edits.json")
 	return path
+
+
+const ED_NATIVE_YAW := ["house", "chapel", "mausoleum", "woodpile", "cart", "bench", "sign", "field", "veg", "dec:sarc", "dec:coffin", "dec:altar", "dec:rack",
+		"dec:chest", "dec:statue", "dec:barrels", "dec:beam", "dec:w_pillar", "dec:w_skulls", "dec:w_niche", "dec:w_banner", "dec:w_chains", "dec:w_web"]
+const ED_NATIVE_SC := ["dec:sarc", "dec:coffin", "dec:altar", "dec:rack", "dec:chest", "dec:statue", "dec:barrels", "dec:brazier", "dec:cage", "house", "chapel", "mausoleum"]
+
+
+## costruisce un oggetto piazzato/adottato: rotazione e scala valgono per qualsiasi tipo (quelli che non le gestiscono da soli vengono trasformati dopo la costruzione)
+## y0 = rotazione con cui il gioco aveva generato l'oggetto (per gli oggetti adottati dall'editor)
+func _ed_place(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array, sc := 1.0, y0 := 0.0) -> void:
+	if k.begins_with("model:"):
+		_ed_make(k, o, p, yaw, r, cols, lamps, sc)
+		return
+	var native := ED_NATIVE_YAW.has(k) or W3DStructs.KINDS.has(k)
+	var extra := 0.0 if native else yaw - y0
+	var post_sc := 1.0 if ED_NATIVE_SC.has(k) else sc
+	if absf(extra) < 0.0001 and absf(post_sc - 1.0) < 0.0001:
+		_ed_make(k, o, p, yaw if native else y0, r, cols, lamps, sc if ED_NATIVE_SC.has(k) else 1.0)
+		return
+	var n0 := o.v.size()
+	var c0 := cols.size()
+	_ed_make(k, o, p, yaw if native else y0, r, cols, lamps, sc if ED_NATIVE_SC.has(k) else 1.0)
+	var rot := Basis(Vector3.UP, extra)
+	for i in range(n0, o.v.size()):
+		var q: Vector3 = o.v[i]
+		var rel: Vector3 = (rot * Vector3(q.x - p.x, q.y, q.z - p.y)) * post_sc
+		o.v[i] = Vector3(p.x + rel.x, rel.y, p.y + rel.z)
+	for i in range(c0, cols.size()):
+		var cc: Array = cols[i]
+		var cp: Vector2 = cc[1]
+		var rp: Vector3 = (rot * Vector3(cp.x - p.x, 0.0, cp.y - p.y)) * post_sc
+		cc[1] = Vector2(p.x + rp.x, p.y + rp.z)
+		if str(cc[0]) == "c":
+			cc[2] = float(cc[2]) * post_sc
+		elif str(cc[0]) == "b":
+			cc[2] = (cc[2] as Vector2) * post_sc
+			cc[3] = float(cc[3]) + extra
 
 
 func _ed_make(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array, sc := 1.0) -> void:
 	if k.begins_with("model:"):
 		_ed_make_model(k.substr(6), o, p, yaw, sc, cols)
+		return
+	if k.begins_with("dec:"):
+		_ed_decor(k.substr(4), o, p, yaw, r, sc, lamps)
 		return
 	match k:
 		"house":
@@ -2522,6 +2770,8 @@ func _ed_make(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberG
 			_wheat_field(o, p, yaw, r, cols)
 		"veg":
 			_veg_patch(o, p, yaw, r, cols)
+		_:
+			W3DStructs.build(k, o, p, yaw, r, cols, lamps)
 
 
 func _ed_cut(b: W3DBuilder, ex: float, ez: float, er: float) -> void:
@@ -2603,26 +2853,60 @@ func _ed_apply(j: Dictionary) -> void:
 			continue
 		if added_kind in ["barrel", "crate", "hay"]:
 			o.breakables.append({"kind": added_kind, "pos": added_pos})
-		_ed_make(added_kind, o, added_pos, float(a["yaw"]), r, cols, lamps, float(a.get("sc", 1.0)))
+		_ed_place(added_kind, o, added_pos, float(a["yaw"]), r, cols, lamps, float(a.get("sc", 1.0)), float(a.get("y0", float(a["yaw"]) if a.has("st") else 0.0)))
 	fence_rule = true
+
+
+## editor degli interni: le geometrie statiche vengono ricostruite quando si salva o si cambia oggetto
+func _ed_decor(_item: String, _o: W3DBuilder, _p: Vector2, _yaw: float, _r: RandomNumberGenerator, _sc: float, _lamps: Array) -> void:
+	pass
+
+
+func _ed_apply_static(builders: Array, target: W3DBuilder, lamps := []) -> void:
+	if ed_adds.is_empty() and ed_erase.is_empty():
+		return
+	for e in ed_erase:
+		for b in builders:
+			_ed_cut(b, float(e[0]), float(e[1]), float(e[2]))
+	var saved_house_doors := house_doors.duplicate(true)
+	var saved_fence_rule := fence_rule
+	fence_rule = false
+	for a in ed_adds:
+		var added := W3DBuilder.new()
+		added.sat = 1.55
+		added.con = 1.45
+		var r := RandomNumberGenerator.new()
+		if a.has("st"):
+			r.state = int(str(a["st"]))
+			added.rn.state = int(str(a["os"]))
+		else:
+			r.seed = int(a["s"])
+			added.rn.seed = r.randi()
+		_ed_place(str(a["k"]), added, Vector2(float(a["x"]), float(a["z"])), float(a["yaw"]), r, [], lamps, float(a.get("sc", 1.0)), float(a.get("y0", float(a["yaw"]) if a.has("st") else 0.0)))
+		target.v.append_array(added.v)
+		target.c.append_array(added.c)
+	fence_rule = saved_fence_rule
+	house_doors = saved_house_doors
 
 
 # ------------------------------------------------------------------ modelli 3D importati (.glb / .gltf in res://assets/models)
 ## Ogni triangolo prende un solo colore (colore del materiale x colore dei vertici x texture nel centro del triangolo),
 ## cosi' il modello si comporta come gli altri oggetti del mondo: luci finte, ombre, nebbia e bolla di visibilita'.
 const ED_MODEL_DIR := "res://assets/models"
+const ED_USER_MODELS := "user://models"       # modelli importati dall'editor: funzionano anche dall'exe, senza reimportare il progetto
 var ed_model_cache: Dictionary = {}
 
 
 func ed_model_names() -> Array:
 	var out: Array = []
 	var seen := {}
-	for f in DirAccess.get_files_at(ED_MODEL_DIR):
-		var n := f.trim_suffix(".import").trim_suffix(".remap")
-		var ext := n.get_extension().to_lower()
-		if (ext == "glb" or ext == "gltf") and not seen.has(n):
-			seen[n] = true
-			out.append(n)
+	for dir in [ED_MODEL_DIR, ED_USER_MODELS]:
+		for f in DirAccess.get_files_at(dir):
+			var n := f.trim_suffix(".import").trim_suffix(".remap")
+			var ext := n.get_extension().to_lower()
+			if (ext == "glb" or ext == "gltf") and not seen.has(n):
+				seen[n] = true
+				out.append(n)
 	out.sort()
 	return out
 
@@ -2633,7 +2917,27 @@ func ed_model(name: String) -> Dictionary:
 	var res := {}
 	var path := ED_MODEL_DIR + "/" + name
 	var ps = load(path) if ResourceLoader.exists(path) else null
-	if ps is PackedScene:
+	var user_path := ED_USER_MODELS + "/" + name
+	if ps == null and FileAccess.file_exists(user_path):
+		# file .glb/.gltf copiato in user://models: si legge a runtime, senza passare dall'importazione di Godot
+		var doc := GLTFDocument.new()
+		var gst := GLTFState.new()
+		if doc.append_from_file(ProjectSettings.globalize_path(user_path), gst) == OK:
+			ps = doc.generate_scene(gst)
+	if ps is Node:
+		var rn: Node = ps
+		var vs0 := PackedVector3Array()
+		var cs0 := PackedColorArray()
+		_ed_collect(rn, Transform3D.IDENTITY, vs0, cs0)
+		rn.free()
+		if vs0.size() >= 3:
+			var miny0 := 1e9
+			for q0 in vs0:
+				miny0 = minf(miny0, q0.y)
+			for i0 in vs0.size():
+				vs0[i0] = Vector3(vs0[i0].x, vs0[i0].y - miny0, vs0[i0].z)
+			res = {"v": vs0, "c": cs0}
+	elif ps is PackedScene:
 		var root: Node = (ps as PackedScene).instantiate()
 		var vs := PackedVector3Array()
 		var cs := PackedColorArray()
@@ -2707,6 +3011,30 @@ func _ed_collect(n: Node, parent_t: Transform3D, vs: PackedVector3Array, cs: Pac
 				cs.append(c)
 	for ch in n.get_children():
 		_ed_collect(ch, t, vs, cs)
+
+
+## copia un modello (.glb/.gltf) scelto dall'utente tra quelli dell'editor: in user://models (subito utilizzabile) e, se trova il progetto
+## accanto all'exe, anche in godot/assets/models (cosi' finisce nelle prossime compilazioni). Ritorna il nome o "" se non riesce.
+func ed_import_model(src: String) -> String:
+	var ext := src.get_extension().to_lower()
+	if ext != "glb" and ext != "gltf":
+		return ""
+	var name := src.get_file()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(ED_USER_MODELS))
+	if DirAccess.copy_absolute(src, ProjectSettings.globalize_path(ED_USER_MODELS) + "/" + name) != OK:
+		return ""
+	if ext == "gltf":      # i .gltf hanno file accanto (.bin e texture): si copiano anche quelli
+		for f in DirAccess.get_files_at(src.get_base_dir()):
+			if f.get_basename() == name.get_basename() and f != name:
+				DirAccess.copy_absolute(src.get_base_dir() + "/" + f, ProjectSettings.globalize_path(ED_USER_MODELS) + "/" + f)
+	if not OS.has_feature("editor"):
+		var pd := OS.get_executable_path().get_base_dir().path_join("../godot/assets/models").simplify_path()
+		if DirAccess.dir_exists_absolute(pd):
+			DirAccess.copy_absolute(src, pd + "/" + name)
+	else:
+		DirAccess.copy_absolute(src, ProjectSettings.globalize_path(ED_MODEL_DIR) + "/" + name)
+	ed_model_cache.erase(name)
+	return name
 
 
 ## ingombro per la collisione: scatola orientata sulla parte bassa del modello (sotto 1 unita'), cosi' la chioma di un albero non blocca ma il tronco si'
