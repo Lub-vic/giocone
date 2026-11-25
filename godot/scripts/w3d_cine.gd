@@ -37,6 +37,7 @@ var edit_pos := Vector2.ZERO
 var frame_n := 0
 var cam_xz := Vector2.ZERO
 var waited: Array = []
+var mus: AudioStreamPlayer
 var loadlab: Label
 var end_spot := Vector2.ZERO
 var hold := 0.0
@@ -75,6 +76,9 @@ func _tracks() -> Dictionary:
 		o[n] = cut["act"][n]
 	o["env"] = cut["env"]
 	o["ev"] = cut["ev"]
+	if not cut.has("mus"):
+		cut["mus"] = []
+	o["musica"] = cut["mus"]
 	return o
 
 
@@ -198,6 +202,7 @@ func finish(apply_end := true) -> void:
 	if apply_end:
 		_eval(float(cut["dur"]), false)
 	active = false
+	_music_stop(2.0)
 	Engine.time_scale = 1.0
 	gm.state = "play"
 	if apply_end and en.has("at"):
@@ -659,6 +664,36 @@ func _apply_cam(c: Dictionary) -> void:
 
 
 # ------------------------------------------------------------------ eventi
+## musica di sottofondo della cutscene (file in godot/audio, indicato nell'evento "music": f = percorso, v = volume in dB, fade = secondi)
+func _music_play(path: String, vol: float, fade: float) -> void:
+	_music_stop(0.2)
+	var st: AudioStream = null
+	if ResourceLoader.exists(path):
+		st = load(path)
+	if st == null and FileAccess.file_exists(path):
+		st = AudioStreamMP3.load_from_file(path)
+	if st == null:
+		print("CINE musica non trovata: ", path)
+		return
+	mus = AudioStreamPlayer.new()
+	mus.stream = st
+	mus.volume_db = -60.0
+	gm.add_child(mus)
+	mus.play()
+	mus.create_tween().tween_property(mus, "volume_db", vol, maxf(fade, 0.05))
+	print("CINE musica: ", path, " durata ", snappedf(st.get_length(), 0.1), " s")
+
+
+func _music_stop(fade: float) -> void:
+	if mus == null or not is_instance_valid(mus):
+		return
+	var m := mus
+	mus = null
+	var tw := m.create_tween()
+	tw.tween_property(m, "volume_db", -60.0, maxf(fade, 0.05))
+	tw.tween_callback(m.queue_free)
+
+
 func _fire(ev: Dictionary) -> void:
 	match str(ev.get("k", "")):
 		"flash":
@@ -669,6 +704,10 @@ func _fire(ev: Dictionary) -> void:
 			shk = maxf(shk, float(ev.get("v", 1.0)))
 		"snd":
 			gm.snd(str(ev.get("n", "hit")))
+		"music":
+			_music_play(str(ev.get("f", "")), float(ev.get("v", -4.0)), float(ev.get("fade", 1.5)))
+		"musicstop":
+			_music_stop(float(ev.get("fade", 1.5)))
 		"say":
 			gm.say(str(ev.get("x", "")))
 		"burst":
@@ -708,7 +747,7 @@ func update(dt: float) -> void:
 			else:
 				finish()
 				return
-		for ev in cut["ev"]:
+		for ev in cut["ev"] + cut.get("mus", []):
 			if float(ev["t"]) > tp and float(ev["t"]) <= t:
 				_fire(ev)
 	tp = t

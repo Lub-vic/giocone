@@ -76,6 +76,7 @@ const RELIC_MAX := 3
 var brews := {}          # ricette delle pozioni create: id -> {n, fx}
 var items := {}         # consumabili creati, da usare a piacere: id -> quantita'
 var item_sel := 0
+var boost := false      # singolarita': statistiche al massimo finche' il villaggio non e' libero
 var chrono := 60.0       # Cronotone: carica per evocare con la bolla spazio-temporale
 var pity := 0            # oggetti inutili evocati di fila
 var veh := {}            # mezzo evocato in uso: id, hp, max, t (tempo residuo), cd, crush
@@ -182,10 +183,18 @@ func apply_stats() -> void:
 	max_mana = c["mana"] + 12.0 * r("mente") + 4.0 * a("int") + arm("mn")
 	max_flasks = 3 + r("fiale") + a("fed") / 8
 	speed = (c["spd"] + 2.0) * (1.0 + 0.04 * rl("lanterna") + arm("mv"))
+	if boost:
+		max_hp = max_hp * 4.0 + 400.0
+		max_st = max_st * 3.0 + 200.0
+		max_mana = max_mana * 3.0 + 200.0
+		speed *= 1.35
 	refresh_weapon()
 
 
 func refresh_weapon() -> void:
+	if boost:
+		crit = 0.6
+		return
 	crit = 0.05 + 0.04 * r("crit") + 0.004 * a("des") + 0.005 * a("fort") + arm("cr") + Rpg.crit_bonus(weapon())
 
 
@@ -210,10 +219,14 @@ func bd() -> float:
 
 
 func dmg() -> float:
-	return bd() * (1.0 + 0.12 * r("forza")) * (1.0 + Stats.PER_POINT * wscale()) * (1.0 + float(weapon()["b"])) * (1.25 if buffs.has("forza") else 1.0) * (1.0 + bv("b_dm"))
+	return (6.0 if boost else 1.0) * bd() * (1.0 + 0.12 * r("forza")) * (1.0 + Stats.PER_POINT * wscale()) * (1.0 + float(weapon()["b"])) * (1.25 if buffs.has("forza") else 1.0) * (1.0 + bv("b_dm"))
 
 
 func spell_pow() -> float:
+	return _spell_pow() * (5.0 if boost else 1.0)
+
+
+func _spell_pow() -> float:
 	var p := 1.0 + 0.12 * r("incanto") + 0.10 * r("mente") + 0.035 * a("int")
 	if str(weapon()["f"]) == "staff":
 		p *= 1.2
@@ -998,6 +1011,8 @@ func hurt(d: float, dir: Vector2, slow := 0.0) -> void:
 	if slow > 0.0:
 		slow_t = max(slow_t, slow)
 	main.chain_break()
+	if boost:
+		d *= 0.08
 	d *= max(0.3, 1.0 - 0.05 * r("armor") - 0.006 * a("fed") - 0.025 * rl("pietra") - (0.2 if buffs.has("pelle") else 0.0) - arm("df") - bv("b_df"))
 	if veh_absorb(d):
 		inv = 0.3

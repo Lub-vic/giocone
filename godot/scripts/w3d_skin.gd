@@ -1820,6 +1820,8 @@ func _td_name(n: Node, is_player: bool) -> String:
 			nm = k
 	elif n is Prop and str((n as Prop).kind) == "elder":
 		nm = "necro"
+	elif n is Prop and str((n as Prop).kind) == "npc" and gm.NPCS.has((n as Prop).npc_id):
+		nm = str(gm.NPCS[(n as Prop).npc_id]["spr"])        # il fuggiasco e gli altri personaggi fissi: modello visto dall'alto
 	elif n is Ally:
 		nm = "skeleton"
 		if str((n as Ally).kind) != "":
@@ -1958,7 +1960,7 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 			var ek := str((n as Enemy).kind)
 			if KNOWN.has(ek) and (n as Enemy).scl <= 1.01:
 				kind = ek
-		var chr := n is Enemy or n is Villager or n is Ally or n is Critter or is_player or (n is Prop and str((n as Prop).kind) == "elder")
+		var chr := n is Enemy or n is Villager or n is Ally or n is Critter or is_player or (n is Prop and str((n as Prop).kind) in ["elder", "npc"])
 		var tdn := ""
 		if char_mode == 0 and chr:
 			tdn = _td_name(n, is_player)
@@ -4050,6 +4052,55 @@ var cine_t0 := 0.0
 var cine_test := 0
 
 
+var sing_stage := 0
+
+
+func _sing_test() -> void:
+	if cine_test != 2 or not world_on or lamp_t < 5.0:
+		if sing_stage == 0:
+			return
+	var f: Dictionary = Story.flags(gm)
+	match sing_stage:
+		0:
+			sing_stage = 1
+			f[W3DCine.FLAG] = true
+			gm.player.position = gm.cell_pos(gm.free_near(Vector2i(gm.SEEDS[0]) + Vector2i(8, 0)))
+			f["dev_x"] = gm.player.position.x / 16.0
+			f["dev_y"] = gm.player.position.y / 16.0
+			gm.add_npc("fuggiasco", Vector2i(gm.player.position / 16.0) + Vector2i(3, 1))
+			cine_t0 = lamp_t + 3.0
+			print("SING: flag ufo ok, eroe al villaggio, hp max prima=", gm.player.max_hp)
+		1:
+			if lamp_t > cine_t0:
+				sing_stage = 2
+				Story.update(gm, 0.1)
+				print("SING dopo il recupero: sing=", Story.sing(gm), " chrono=", Story.is_done(gm, Story.CHRONO), " glitch=", snappedf(Story.glitch_level(gm), 0.01))
+				cine_t0 = lamp_t + 3.0
+		2:
+			if lamp_t > cine_t0:
+				sing_stage = 3
+				Story.update(gm, 0.1)
+				get_viewport().get_texture().get_image().save_png("user://sing_title.png")
+				gm.summon()
+				print("SING dopo il tasto: sing=", Story.sing(gm))
+				Story.update(gm, 0.1)
+				print("SING potenziato: boost=", gm.player.boost, " hp max=", gm.player.max_hp, " danno=", snappedf(gm.player.dmg(), 0.1), " vel=", snappedf(gm.player.speed, 0.1))
+				cine_t0 = lamp_t + 12.0
+		3:
+			if lamp_t > cine_t0:
+				sing_stage = 4
+				print("SING oggetti nel villaggio: ", fut.props.get(W3DFuture.SK, []).size(), " glitch=", snappedf(Story.glitch_level(gm), 0.01))
+				get_viewport().get_texture().get_image().save_png("user://sing_power.png")
+				Story.complete_invasion(gm)
+				Story.update(gm, 0.1)
+				cine_t0 = lamp_t + 2.0
+		4:
+			if lamp_t > cine_t0:
+				get_viewport().get_texture().get_image().save_png("user://sing_end.png")
+				print("SING dopo la liberazione: sing=", Story.sing(gm), " boost=", gm.player.boost, " hp max=", gm.player.max_hp, " oggetti=", fut.props.get(W3DFuture.SK, []).size(), " glitch=", snappedf(Story.glitch_level(gm), 0.01))
+				get_tree().quit()
+
+
 func cine_prewarm() -> void:
 	if cine == null:
 		cine = W3DCine.new()
@@ -4071,10 +4122,10 @@ func _cine_tick(dt: float) -> void:
 		if world_on and Story.is_done(gm, W3DCine.FLAG):
 			cine = W3DCine.new()
 			cine.restore_wreck(self)
-		elif not (OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--cinereal") or OS.get_cmdline_user_args().has("--cineedit")):
+		elif not (OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--cinereal") or OS.get_cmdline_user_args().has("--cineedit") or OS.get_cmdline_user_args().has("--singtest")):
 			return
 	var real := OS.get_cmdline_user_args().has("--cinereal")
-	var test := OS.get_cmdline_user_args().has("--cinetest") or real or OS.get_cmdline_user_args().has("--cineedit")
+	var test := OS.get_cmdline_user_args().has("--cinetest") or OS.get_cmdline_user_args().has("--singtest") or real or OS.get_cmdline_user_args().has("--cineedit")
 	if test and (cine == null or not cine.active) and cine_test == 0 and lamp_t > 2.0:
 		# prova: porta l'eroe lontano dal villaggio, nel mondo, e lancia la sequenza
 		cine_test = 1
@@ -4099,6 +4150,9 @@ func _cine_tick(dt: float) -> void:
 			Story.update(gm, 0.1)
 			steps += 1
 		print("CINE reale: partita dopo ", steps * 0.1, " s di cammino simulato; attiva=", cine != null and cine.active, " distanza dal villaggio=", int(gm.player.position.distance_to(vp2) / 16.0))
+	if OS.get_cmdline_user_args().has("--singtest"):
+		_sing_test()
+		return
 	if test and cine_test == 2 and world_on and lamp_t > 5.0:
 		cine_test = 6
 		cine_prewarm()          # come nel gioco: il precarico parte ~30 s prima dell'ufo

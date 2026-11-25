@@ -111,12 +111,14 @@ func fields() -> Array:
 		if v is Array:
 			for i in (v as Array).size():
 				out.append([n, i])
-		elif v is float or v is int or n == "a":
+		elif v is float or v is int or n == "a" or (n == "f" and v is String):
 			out.append([n, -1])
 	return out
 
 
 func _label(n: String, i: int) -> String:
+	if names()[tr] == "musica":
+		return {"f": "FILE AUDIO", "v": "VOLUME (dB)", "fade": "DISSOLVENZA (s)"}.get(n, LBL.get(n, n))
 	if i >= 0 and L3.has(n):
 		return L3[n][i]
 	if n == "e" and names()[tr] == "env":
@@ -132,13 +134,23 @@ func _adjust(dir: float, mult: float) -> void:
 	var k: Dictionary = cur()
 	var n: String = fl[fi][0]
 	var i: int = fl[fi][1]
-	if n == "a":
+	if n == "f" and k[n] is String:
+		var opts2: Array = []
+		for fn in DirAccess.get_files_at("res://audio"):
+			if fn.get_extension() in ["mp3", "ogg", "wav"]:
+				opts2.append("res://audio/" + fn)
+		if not opts2.is_empty():
+			var j2: int = opts2.find(str(k["f"]))
+			k["f"] = opts2[(j2 + int(dir) + opts2.size()) % opts2.size()]
+	elif n == "a":
 		var opts: Array = c.anchors.keys() + c.acts.keys()
 		var j: int = opts.find(str(k["a"]))
 		k["a"] = opts[(j + int(dir) + opts.size()) % opts.size()]
 	else:
 		var stp := 0.1
-		if n in ["m", "v", "e", "cut", "on"] and not (n == "e" and names()[tr] == "env"):
+		if names()[tr] == "musica" and n == "v":
+			stp = 1.0
+		elif n in ["m", "v", "e", "cut", "on"] and not (n == "e" and names()[tr] == "env"):
 			stp = 1.0
 		elif n == "o":
 			stp = 0.5
@@ -252,6 +264,11 @@ func _add_key() -> void:
 		k = {"t": snappedf(c.t, 0.01), "m": int(ev["m"]), "a": src.get("a", "P0"), "o": [off.x, off.y, off.z], "r": [rr.x, rr.y - float(rf["yaw"]), rr.z], "f": float(ev["f"])}
 	elif nm == "env":
 		k = {"t": snappedf(c.t, 0.01), "w": 1.0, "c": [0.5, 0.5, 0.7], "e": 0.2}
+	elif nm == "musica":
+		k = {"t": snappedf(c.t, 0.01), "k": "music", "f": "res://audio/Midnight_Landing.mp3", "v": -3.0, "fade": 2.0}
+		if cur() != null:
+			k = (cur() as Dictionary).duplicate(true)
+			k["t"] = snappedf(c.t, 0.01)
 	elif nm == "ev":
 		k = {"t": snappedf(c.t, 0.01), "k": "shake", "v": 2.0}
 		if cur() != null:
@@ -391,7 +408,7 @@ func _draw_tl() -> void:
 			var sel := i == tr and j == ki
 			tl.draw_rect(Rect2(x2 - 2, y, 5 if sel else 4, rh - 2), Color.RED if sel else col)
 			if sel:
-				tl.draw_string(f, Vector2(x2 + 4, y + rh - 2), "%.2fs" % float(arr[j]["t"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(1, 0.7, 0.7))
+				tl.draw_string(f, Vector2(maxf(x2 + 4, 44.0), y + rh - 2), "%.2fs" % float(arr[j]["t"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(1, 0.7, 0.7))
 		tl.draw_string(f, Vector2(2, y + rh - 2), str(nms[i]), HORIZONTAL_ALIGNMENT_LEFT, -1, 7, Color(1, 1, 1, 0.7))
 	var px := w * c.t / dur
 	tl.draw_line(Vector2(px, 0), Vector2(px, tl.size.y), Color(1, 0.2, 0.2), 2.0)

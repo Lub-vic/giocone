@@ -152,6 +152,74 @@ static func on_kill(m, sref: Dictionary) -> void:
 
 
 ## il Cronotone esiste solo dopo aver raccolto l'apparecchio caduto dall'ufo
+# --- SINGOLARITA': dal recupero dell'apparecchio alla liberazione del villaggio. 1 = aperta, si attende il tasto; 2 = potere attivo
+const SING := "sing"
+static var fx = null
+
+
+static func sing(m) -> int:
+	return int(flags(m).get(SING, 0))
+
+
+static func sing_wait(m) -> bool:
+	return sing(m) == 1 and m.state == "play"
+
+
+## intensita' del glitch dello schermo (0 = nessuno)
+static func glitch_level(m) -> float:
+	var s := sing(m)
+	var t := Time.get_ticks_msec() / 1000.0
+	if s == 1:
+		return 0.5 + 0.15 * absf(sin(t * 5.3))
+	if s == 2:
+		return 0.2 + 0.3 * absf(sin(t * 2.1)) * (0.6 + 0.4 * sin(t * 13.0))
+	return 0.0
+
+
+static func start_sing(m) -> void:
+	flags(m)[SING] = 1
+	m.snd("roar")
+	m.shake(6.0)
+
+
+static func power_up(m) -> void:
+	flags(m)[SING] = 2
+	m.snd("level")
+	m.shake(8.0)
+	m.burst(m.player.position, Color(1.0, 0.4, 1.0), 60, 140.0, 1.0)
+	m.burst(m.player.position, Color(0.4, 1.0, 1.0), 40, 100.0, 0.8)
+	m.say("POTERE ASSOLUTO! LIBERA IL VILLAGGIO PRIMA CHE LA SINGOLARITA' SI CHIUDA")
+	m.save_game()
+
+
+static func _sing_update(m, dt: float) -> void:
+	var s := sing(m)
+	if s == 1:
+		if fx == null or not is_instance_valid(fx):
+			fx = SingFx.new()
+			m.add_child(fx)
+		fx.key = Keybinds.key_text("summon")
+	elif fx != null:
+		if is_instance_valid(fx):
+			fx.queue_free()
+		fx = null
+	var boost := s == 2
+	if m.player.boost != boost:
+		m.player.boost = boost
+		m.player.apply_stats()
+		if boost:
+			m.player.hp = m.player.max_hp
+		else:
+			m.player.hp = minf(m.player.hp, m.player.max_hp)
+			m.player.st = minf(m.player.st, m.player.max_st)
+			m.player.mana = minf(m.player.mana, m.player.max_mana)
+	if boost and m.state == "play":
+		m.player.st = m.player.max_st
+		m.player.mana = m.player.max_mana
+		m.player.chrono = Chrono.MAX_E
+		m.player.hp = minf(m.player.max_hp, m.player.hp + m.player.max_hp * 0.08 * dt)
+
+
 static func has_chrono(m) -> bool:
 	return m.run_mode or is_done(m, CHRONO)
 
@@ -177,13 +245,17 @@ static func _device(m) -> void:
 	m.player.chrono = Chrono.MAX_E
 	m.snd("level")
 	m.shake(3.0)
-	var key: String = Keybinds.key_text("summon")
-	m.dlg = {"head": "UNA VOCE NEL METALLO", "text": "L'OGGETTO PULSA TRA LE TUE MANI. SENTI IL TEMPO INCRINARSI: IERI E DOMANI TI SUSSURRANO, E CIO' CHE NON E' ANCORA, O NON E' PIU', PUO' ESSERE CHIAMATO. PREMI %s PER EVOCARE OGGETTI DA ALTRE EPOCHE. OGNI NEMICO CADUTO LO RICARICA" % key, "opts": ["..."], "sel": 0, "qs": "story", "qid": ""}
-	m.state = "dialog"
+	if village_free(m):
+		var key: String = Keybinds.key_text("summon")
+		m.dlg = {"head": "UNA VOCE NEL METALLO", "text": "L'OGGETTO PULSA TRA LE TUE MANI. PREMI %s PER EVOCARE OGGETTI DA ALTRE EPOCHE. OGNI NEMICO CADUTO LO RICARICA" % key, "opts": ["..."], "sel": 0, "qs": "story", "qid": ""}
+		m.state = "dialog"
+	else:
+		start_sing(m)
 	m.save_game()
 
 
 static func update(m, dt: float) -> void:
+	_sing_update(m, dt)
 	_device(m)
 	if village_free(m) or m.area != "world":
 		return
@@ -217,6 +289,10 @@ static func update(m, dt: float) -> void:
 
 static func complete_invasion(m) -> void:
 	flags(m)[INV] = true
+	if sing(m) > 0:
+		flags(m)[SING] = 0
+		m.popup(m.player.position + Vector2(0, -34), "LA SINGOLARITA' SI CHIUDE", Color(1.0, 0.5, 1.0))
+		m.shake(6.0)
 	var fire_cell: Vector2i = m.SEEDS[0] + FIRE_OFF
 	for p in m.props:
 		if is_instance_valid(p) and p.kind == "bonfire" and Vector2(p.cell).distance_to(Vector2(fire_cell)) < 3.0:

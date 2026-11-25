@@ -13,14 +13,22 @@ void fragment() {
 	vec2 o = 1.0 / px;
 	// intrusioni del futuro: bande che slittano e colori che si separano, a scatti
 	float tk = floor(TIME * 7.0);
-	float band = step(0.99 - glitch * 0.04, fract(sin(floor(uv.y * 48.0) * 12.9898 + tk * 78.233) * 43758.5453));
-	uv.x += band * glitch * 0.03 * (fract(sin(tk * 91.7) * 437.58) - 0.5);
+	float band = step(0.95 - glitch * 0.09, fract(sin(floor(uv.y * 48.0) * 12.9898 + tk * 78.233) * 43758.5453));
+	uv.x += band * glitch * 0.08 * (fract(sin(tk * 91.7 + floor(uv.y * 48.0)) * 437.58) - 0.5);
+	// blocchi larghi che si strappano di lato
+	float blk = step(0.92 - glitch * 0.14, fract(sin(floor(uv.y * 11.0) * 41.3 + tk * 17.9) * 9371.7));
+	uv.x += blk * glitch * 0.1 * (fract(sin(tk * 5.7 + floor(uv.y * 11.0) * 3.1) * 733.1) - 0.5);
+	uv.x += (fract(sin(tk * 33.1) * 4375.8) - 0.5) * 0.012 * glitch;
 	vec3 c = texture(TEXTURE, uv).rgb;
 	if (glitch > 0.001) {
-		float ca = glitch * 1.6;
-		c.r = texture(TEXTURE, uv + vec2(o.x * ca, 0.0)).r;
-		c.b = texture(TEXTURE, uv - vec2(o.x * ca, 0.0)).b;
+		// aberrazione cromatica marcata: i tre canali si separano in orizzontale e un po' in verticale
+		float ca = glitch * 5.0;
+		c.r = texture(TEXTURE, uv + vec2(o.x * ca, -o.y * ca * 0.3)).r;
+		c.g = texture(TEXTURE, uv + vec2(0.0, o.y * ca * 0.5)).g;
+		c.b = texture(TEXTURE, uv - vec2(o.x * ca * 1.2, 0.0)).b;
 		c = mix(c, c * vec3(0.82, 1.04, 1.18), clamp(glitch, 0.0, 1.0) * 0.35);
+		c += vec3(0.5, 0.0, 0.6) * band * glitch * 0.35;
+		c += glitch * 0.06 * step(0.985, fract(sin(floor(uv.y * 270.0) * 7.77 + tk * 13.1) * 311.7));
 	}
 	float l = luma(c);
 	float e = 0.0;

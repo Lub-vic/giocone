@@ -1192,6 +1192,15 @@
      "H"
     ]
    }
+  ],
+  "mus": [
+   {
+    "t": 2.0,
+    "k": "music",
+    "f": "res://audio/Midnight_Landing.mp3",
+    "v": -3.0,
+    "fade": 2.0
+   }
   ]
  }
 }

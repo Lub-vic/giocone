@@ -17,7 +17,10 @@ var spawn_near := false
 var cur_mat := 0.0
 var rare_t := 90.0
 var t := 0.0
+var sing_n := 0
+var sing_t := 0.0
 
+const SK := Vector2i(-99999, -1)           # blocco speciale: gli oggetti della singolarita'
 const BLK := 20.0                       # lato di un blocco (unita' di gioco)
 
 
@@ -25,7 +28,7 @@ func _process(dt: float) -> void:
 	t += dt
 	var tech: float = Chrono.tech
 	if sk == null or not sk.active or not sk.world_on or str(sk.gm.area) != "world":
-		_clear_all()
+		_clear_all(false)
 		sk.post_mat.set_shader_parameter("glitch", 0.0)
 		last_tech = tech
 		return
@@ -48,12 +51,13 @@ func _process(dt: float) -> void:
 		if rare_t <= 0.0:
 			rare_t = randf_range(0.6, 1.0) * lerpf(220.0, 45.0, mat)
 			pulse = maxf(pulse, 0.2 + 0.6 * mat)
-	var gl := clampf(pulse * 0.95, 0.0, 1.0)     # il glitch c'e' solo all'apertura della bolla, poi svanisce
+	var gl := maxf(clampf(pulse * 0.95, 0.0, 1.0), Story.glitch_level(sk.gm))     # il glitch c'e' all'apertura della bolla e per tutta la singolarita'
 	sk.post_mat.set_shader_parameter("glitch", gl)
+	_sing_items(dt)
 	var step := int(floor(tech)) * 100 + int(mat * 10.0)
 	if step != last_step:
 		last_step = step
-		_clear_all()
+		_clear_all(true)
 	if tech <= 0.0:
 		return
 	if spawn_near:       # ogni evocazione lascia un segno vicino a te, subito visibile
@@ -77,9 +81,43 @@ func _process(dt: float) -> void:
 				a.rotation.y += dt * 0.6 * float(a.get_meta("dir"))
 
 
-func _clear_all() -> void:
+func _clear_all(keep_sing := false) -> void:
 	for k in props.keys():
+		if keep_sing and k == SK:
+			continue
 		_free_block(k)
+	if not keep_sing:
+		sing_n = 0
+
+
+## durante la singolarita' nel villaggio compaiono oggetti da ogni epoca; spariscono quando la missione finisce
+func _sing_items(dt: float) -> void:
+	var m = sk.gm
+	if Story.sing(m) != 2:
+		if props.has(SK):
+			_free_block(SK)
+			sing_n = 0
+		return
+	if not props.has(SK):
+		props[SK] = []
+		colls[SK] = []
+	if sing_n >= 30:
+		return
+	sing_t -= dt
+	if sing_t > 0.0:
+		return
+	sing_t = 0.35
+	var c := Vector2(m.SEEDS[0]) + Vector2(3.5, 0.5)
+	if m.player.position.distance_to(c * 16.0) > 45.0 * 16.0:
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var p := c + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(5.0, 22.0)
+	if not sk.world_free(p * 16.0, 26.0):
+		return
+	_place(SK, _kind_for(rng.randi() % 4, rng.randf()), p, rng)
+	sk.burst3d(p * 16.0, Color(0.6, 1.0, 1.0), 12, 70.0, 0.6)
+	sing_n += 1
 
 
 func _free_block(k: Vector2i) -> void:

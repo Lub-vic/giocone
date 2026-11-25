@@ -3885,6 +3885,9 @@ func stock_chrono(cid: String, nm: String) -> bool:
 func summon() -> void:
 	if state != "play" or player == null:
 		return
+	if Story.sing_wait(self):
+		Story.power_up(self)       # il primo tasto dopo il recupero dell'apparecchio: POWER UP!
+		return
 	if not Story.has_chrono(self):
 		say("NON HAI NESSUN APPARECCHIO PER EVOCARE")
 		return
