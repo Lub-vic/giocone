@@ -505,7 +505,7 @@ func _process(dt: float) -> void:
 	var in_fpv: bool = fsk is W3DSkin and (fsk as W3DSkin).fpv
 	if in_fpv:
 		dir = dir.rotated(-(fsk as W3DSkin).fpv_yaw)       # prima persona: avanti e' dove guardi
-	if bool(main.settings["aim_manual"]):
+	if bool(main.settings["aim_manual"]) or in_fpv:
 		if act("lock"):
 			cycle_lock()
 		if lock != null and (not is_instance_valid(lock) or lock.dying or lock.position.distance_to(position) > 280.0):

@@ -3593,6 +3593,7 @@ func _process_inner(dt: float) -> void:
 		elev_y = 0.0
 	_update_cam()
 	if fpv:
+		_fpv_look(dt)
 		_fpv_cam()
 	if OS.get_cmdline_user_args().has("--skintilt"):      # prova: camera inclinata per vedere il rilievo
 		cam.rotation_degrees = Vector3(-42, 0, 0)
@@ -3810,6 +3811,27 @@ func _fpv_cam() -> void:
 	cam.rotation = Vector3(fpv_pitch, fpv_yaw, 0.0)
 	env.fog_density = 0.011
 	env.fog_light_color = Color(0.07, 0.08, 0.12)
+
+
+func _fpv_look(dt: float) -> void:
+	var aim := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down")
+	var target: Enemy = gm.player.lock
+	if target != null and is_instance_valid(target) and not target.dying and aim.length() <= 0.25:
+		var delta: Vector2 = target.position - gm.player.position
+		var target_yaw := atan2(-delta.x, -delta.y)
+		fpv_yaw += clampf(angle_difference(fpv_yaw, target_yaw), -5.0 * dt, 5.0 * dt)
+		var target_pos := target.position / Game.TS
+		var target_height := elev_at(target_pos.x, target_pos.y) + 0.9
+		var eye_height := elev_at(pos.x, pos.y) + 1.75
+		var target_pitch := atan2(target_height - eye_height, delta.length() / Game.TS)
+		fpv_pitch = move_toward(fpv_pitch, clampf(target_pitch, -1.2, 1.2), 5.0 * dt)
+		return
+	if target != null and aim.length() > 0.25:
+		gm.player.lock = null
+	if aim.length() <= 0.25:
+		return
+	fpv_yaw -= aim.x * 2.4 * dt
+	fpv_pitch = clampf(fpv_pitch - aim.y * 1.8 * dt, -1.2, 1.2)
 
 
 func _unhandled_input(ev: InputEvent) -> void:

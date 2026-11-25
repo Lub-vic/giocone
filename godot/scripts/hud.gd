@@ -133,6 +133,66 @@ func _crosshair(p: Player) -> void:
 	draw_line(cp + Vector2(0, 3), cp + Vector2(0, 9), col, 1.0)
 
 
+func _fpv_crosshair(p: Player, sk: W3DSkin) -> void:
+	var center := size * 0.5
+	var color := Color(0.55, 1.0, 0.78) if p.lock != null and is_instance_valid(p.lock) else Color(1.0, 0.82, 0.42, 0.95)
+	var shadow := Color(0.03, 0.01, 0.04, 0.9)
+	draw_arc(center, 5.0, 0.0, TAU, 16, shadow, 3.0)
+	draw_arc(center, 5.0, 0.0, TAU, 16, color, 1.0)
+	for direction in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
+		draw_line(center + direction * 7.0, center + direction * 11.0, shadow, 3.0)
+		draw_line(center + direction * 7.0, center + direction * 11.0, color, 1.0)
+	if p.lock == null or not is_instance_valid(p.lock) or p.lock.dying or sk.cam == null:
+		return
+	var target_pos: Vector2 = p.lock.position / Game.TS
+	var target_world := Vector3(target_pos.x, sk.elev_at(target_pos.x, target_pos.y) + 0.9, target_pos.y)
+	if sk.cam.is_position_behind(target_world):
+		return
+	var marker: Vector2 = sk.cam.unproject_position(target_world) * Vector2(size.x / sk.vp.size.x, size.y / sk.vp.size.y)
+	var radius := 10.0 + p.lock.radius / Game.TS * 0.6
+	var lock_color := Color(1.0, 0.3, 0.25)
+	for sx in [-1.0, 1.0]:
+		for sy in [-1.0, 1.0]:
+			var corner := marker + Vector2(sx, sy) * radius
+			draw_line(corner, corner - Vector2(sx * 4.0, 0.0), shadow, 3.0)
+			draw_line(corner, corner - Vector2(0.0, sy * 4.0), shadow, 3.0)
+			draw_line(corner, corner - Vector2(sx * 4.0, 0.0), lock_color, 1.0)
+			draw_line(corner, corner - Vector2(0.0, sy * 4.0), lock_color, 1.0)
+
+
+func _fpv_weapon(p: Player) -> void:
+	if p.wspr == null or p.wspr.texture == null:
+		return
+	var weapon_texture: Texture2D = p.wspr.texture
+	var family := str(p.weapon()["f"])
+	var ranged: bool = bool(Rpg.FAM[family]["ranged"])
+	var angle := 0.18
+	var horizontal_offset := 0.0
+	var vertical_offset := 0.0
+	if ranged and p.atk_t > 0.0 and p.atk_dur > 0.0:
+		var progress := clampf(1.0 - p.atk_t / p.atk_dur, 0.0, 1.0)
+		angle -= 0.35 * sin(progress * PI)
+		vertical_offset = 4.0 * sin(progress * PI)
+	elif not ranged and p.heavy_t > 0.0:
+		angle = -0.9
+	elif not ranged and p.atk_t > 0.0 and p.atk_dur > 0.0:
+		var progress := clampf(1.0 - p.atk_t / p.atk_dur, 0.0, 1.0)
+		angle = lerpf(-1.3, 2.0, progress)
+		horizontal_offset = 5.0 * sin(progress * PI)
+	var scale_factor := 3.0
+	var origin := Vector2(size.x * 0.82 + horizontal_offset, size.y + 3.0 - vertical_offset)
+	draw_set_transform(origin, angle, Vector2(scale_factor, scale_factor))
+	draw_rect(Rect2(-3.0, -11.0, 6.0, 18.0), Color(0.24, 0.12, 0.09))
+	draw_rect(Rect2(-2.0, -12.0, 4.0, 14.0), Color(0.68, 0.39, 0.25))
+	draw_rect(Rect2(-3.0, -18.0, 6.0, 7.0), Color(0.78, 0.52, 0.34))
+	draw_texture(weapon_texture, Vector2(-weapon_texture.get_width() * 0.5, -weapon_texture.get_height()))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if ranged and p.atk_t > 0.0:
+		var flash := Vector2(size.x * 0.82 + horizontal_offset, size.y - weapon_texture.get_height() * scale_factor - 2.0 - vertical_offset)
+		draw_circle(flash, 4.0, Color(1.0, 0.78, 0.3, 0.85))
+		draw_circle(flash, 2.0, Color(1.0, 0.98, 0.72, 0.95))
+
+
 # ---------------------------------------------------------------- schermata principale
 func _draw() -> void:
 	if main == null or main.player == null:
@@ -239,7 +299,10 @@ func _draw() -> void:
 		_minimap()
 		_clock()
 		_edge_markers()
-		if bool(main.settings["aim_manual"]) and main.state == "play":
+		if main.state == "play" and main.skin is W3DSkin and (main.skin as W3DSkin).fpv:
+			_fpv_weapon(p)
+			_fpv_crosshair(p, main.skin as W3DSkin)
+		elif bool(main.settings["aim_manual"]) and main.state == "play":
 			_crosshair(p)
 	if main.chain >= 2:
 		_txt("SERIE x%d   ANIME x%.1f" % [main.chain, main.chain_mult()], Vector2(0, 78), Color(1, 0.78, 0.3), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
