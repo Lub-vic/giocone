@@ -255,6 +255,7 @@ var opt_sel := 0
 var pause_sel := 0
 var debug_sel := 0
 var debug_list: Array = []
+var debug_return_state := "play"
 var mm3d: Texture2D = null      # minimappa del mondo 3D (la riempie la skin)
 var beast_sel := 0            # bestiario: scheda selezionata
 var map_zoom := 0              # mappa del mondo: 0 intera, 1 ingrandita attorno al giocatore
@@ -322,6 +323,13 @@ var picks: Array = []
 var near_obj = null
 var quest_defs := {}
 var quest_items := {}
+var mission_test_entries: Array = []
+var mission_test_sel := 0
+var mission_test_active := false
+var mission_test_return_state := "play"
+var mission_test_pending: Dictionary = {}
+var mission_test_entry: Dictionary = {}
+var mission_test_snapshot: Dictionary = {}
 var critters: Array = []
 var villagers: Array = []
 var day_t := 0.3
@@ -452,7 +460,7 @@ func load_save() -> Dictionary:
 
 
 func save_game() -> void:
-	if run_mode or testing or area == "" or player == null or last_fire.is_empty():
+	if run_mode or testing or mission_test_active or area == "" or player == null or last_fire.is_empty():
 		return
 	var lc: Vector2i = last_fire["cell"]
 	var d := {"v": 3, "seed": world_seed, "pop": pop_salt, "cycle": cycle, "guardians": guardians, "pages": pages_found, "elder": elder_i,
@@ -3016,6 +3024,28 @@ func world_event_update(dt: float) -> void:
 
 ## IL CAMMINO: catena di tappe guidate dopo le Celle (parlare, scoprire, liberare, crescere, raggiungere un luogo)
 const JOURNEY_N := 5
+const MISSION_TEST_STORY := [
+	{"id": "story:invasion", "label": "STORIA - LIBERA IL VILLAGGIO"},
+	{"id": "journey:0", "label": "STORIA - PARLA CON L'ANZIANO"},
+	{"id": "journey:1", "label": "STORIA - CERCA UNA PAGINA"},
+	{"id": "story:barn", "label": "STORIA - ASSALTO AL FIENILE"},
+	{"id": "journey:3", "label": "STORIA - RAGGIUNGI IL LIVELLO 3"},
+	{"id": "journey:4", "label": "STORIA - RAGGIUNGI LA CAMPANA"},
+]
+const DEBUG_FUNCTION_ACTIONS := [
+	["close_debug", "F2 - CHIUDI MENU DEBUG"],
+	["fps", "F3 - MOSTRA/NASCONDI FPS"],
+	["skip_prison", "F5 - SALTA LE CELLE"],
+	["cine_edit", "F6 - EDITOR CUTSCENE"],
+	["cine_edit_next", "MAIUSC+F6 - EDITOR CUTSCENE SUCCESSIVA"],
+	["fpv", "F7 - ATTIVA/DISATTIVA PRIMA PERSONA"],
+	["char_mode", "F8 - CAMBIA STILE PERSONAGGI"],
+	["mission_list", "F9 - ELENCO MISSIONI"],
+	["cine_ufo", "F10 - RIVEDI CUTSCENE UFO"],
+	["cine_liberazione", "MAIUSC+F10 - RIVEDI LIBERAZIONE"],
+	["fullscreen", "F11 - SCHERMO INTERO"],
+	["world_editor", "F12 - EDITOR DEL MONDO"],
+]
 
 
 func journey_step() -> int:
@@ -3209,6 +3239,276 @@ func quest_lines() -> Array:
 			var ready := quest_complete(qid)
 			out.append(("FATTO - TORNA DA %s" % quest_defs[qid]["giver"]) if ready else quest_progress_text(qid))
 	return out
+
+
+func _mission_test_build_entries() -> void:
+	mission_test_entries.clear()
+	for mission in MISSION_TEST_STORY:
+		mission_test_entries.append({"kind": "story", "id": mission["id"], "label": mission["label"]})
+	var qids: Array = quest_defs.keys()
+	qids.sort()
+	for qid in qids:
+		var definition: Dictionary = quest_defs[qid]
+		mission_test_entries.append({
+			"kind": "quest",
+			"id": str(qid),
+			"label": "PAESANO - %s: %s" % [str(definition.get("giver", "PAESANO")).to_upper(), str(definition.get("txt", qid))],
+		})
+	mission_test_sel = clampi(mission_test_sel, 0, maxi(0, mission_test_entries.size() - 1))
+
+
+func _debug_build_list() -> void:
+	_mission_test_build_entries()
+	debug_list = [["world", "MONDO APERTO"]]
+	for area_id in DUNS:
+		debug_list.append([area_id, str(DUNS[area_id]["n"])])
+	for action in DEBUG_FUNCTION_ACTIONS:
+		debug_list.append(["debug_action:" + str(action[0]), str(action[1])])
+	for i in mission_test_entries.size():
+		debug_list.append(["mission_test:%d" % i, str(mission_test_entries[i]["label"])])
+	debug_sel = 0
+
+
+func _debug_activate_function(action: String) -> void:
+	match action:
+		"close_debug":
+			state = debug_return_state
+		"fps":
+			show_fps = not show_fps
+			settings["fps"] = show_fps
+			save_settings()
+			say("CONTATORE FPS " + ("ATTIVO" if show_fps else "DISATTIVO"))
+		"skip_prison":
+			if area != "d0" or persist["bosses"].has("boss_jailer"):
+				say("SALTO DISPONIBILE SOLO NELLE CELLE")
+				return
+			state = "play"
+			skip_d0()
+		"cine_edit", "cine_edit_next":
+			if not skin is W3DSkin:
+				say("EDITOR CUTSCENE NON DISPONIBILE")
+				return
+			state = "play"
+			if not (skin as W3DSkin).open_cine_editor(action == "cine_edit_next"):
+				state = "debug"
+				say("EDITOR CUTSCENE NON DISPONIBILE IN QUESTA SCENA")
+		"fpv":
+			if not skin is W3DSkin or not (skin as W3DSkin).world_on or ((skin as W3DSkin).ed != null and (skin as W3DSkin).ed.on):
+				say("PRIMA PERSONA DISPONIBILE SOLO NEL MONDO APERTO")
+				return
+			state = "play"
+			var sk := skin as W3DSkin
+			sk.fpv_set(not sk.fpv)
+		"char_mode":
+			if not skin is W3DSkin:
+				say("STILE PERSONAGGI NON DISPONIBILE")
+				return
+			(skin as W3DSkin).cycle_char_mode()
+		"mission_list":
+			_mission_test_build_entries()
+			mission_test_return_state = "debug"
+			mission_test_sel = 0
+			state = "mission_test"
+		"cine_ufo", "cine_liberazione":
+			if not skin is W3DSkin or not (skin as W3DSkin).world_on:
+				say("CUTSCENE DISPONIBILE SOLO NEL MONDO APERTO")
+				return
+			state = "play"
+			var cine_id := "ufo" if action == "cine_ufo" else "liberazione"
+			if not (skin as W3DSkin).start_cine(cine_id):
+				state = "debug"
+				say("IMPOSSIBILE AVVIARE LA CUTSCENE")
+		"fullscreen":
+			var is_fullscreen := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+			set_fullscreen(not is_fullscreen)
+		"world_editor":
+			if not skin is W3DSkin or not (skin as W3DSkin).world_on:
+				say("EDITOR DEL MONDO NON DISPONIBILE")
+				return
+			state = "play"
+			(skin as W3DSkin).ed.toggle()
+		_:
+			push_error("Azione debug funzione sconosciuta: %s" % action)
+
+
+func mission_test_first() -> int:
+	return clampi(mission_test_sel - 7, 0, maxi(0, mission_test_entries.size() - 9))
+
+
+func _mission_test_copy(value: Variant) -> Variant:
+	if value is Dictionary or value is Array:
+		return value.duplicate(true)
+	return value
+
+
+func _mission_test_capture() -> Dictionary:
+	var player_state := {}
+	for property in ["lv", "souls", "rk", "attr", "kills", "wslots", "wcur", "spells", "known", "relics", "mats", "items", "armor", "brews", "bag", "belt", "relic_eq", "hp", "st", "mana", "focus", "position", "chrono", "pity"]:
+		player_state[property] = _mission_test_copy(player.get(property))
+	return {
+		"persist": persist.duplicate(true),
+		"area": area,
+		"position": player.position,
+		"pages_found": pages_found,
+		"elder_i": elder_i,
+		"player": player_state,
+		"zmode": player.zmode,
+		"story_runner": Story.runner,
+		"story_runner_done": Story.runner_done,
+		"barn_runner": Story.barn_runner,
+		"barn_final": Story.barn_final,
+		"barn_t": Story.barn_t,
+		"barn_wait": Story.barn_wait,
+		"barn_runtime": Story.barn_runtime,
+		"barn_prev_mode": Story.barn_prev_mode,
+		"barn_prev_focus": Story.barn_prev_focus,
+		"barn_prev_horde_age": Story.barn_prev_horde_age,
+		"barn_prev_horde_t": Story.barn_prev_horde_t,
+	}
+
+
+func _mission_test_restore() -> void:
+	if not mission_test_active or mission_test_snapshot.is_empty():
+		mission_test_pending.clear()
+		return
+	var snapshot := mission_test_snapshot
+	var previous_refs := [snapshot["story_runner"], snapshot["barn_runner"], snapshot["barn_final"]]
+	for current in [Story.runner, Story.barn_runner, Story.barn_final]:
+		if current != null and is_instance_valid(current) and not previous_refs.has(current):
+			current.queue_free()
+	if str(mission_test_entry.get("id", "")) == "story:barn":
+		clear_horde()
+	persist = snapshot["persist"].duplicate(true)
+	pages_found = int(snapshot["pages_found"])
+	elder_i = int(snapshot["elder_i"])
+	if area != str(snapshot["area"]):
+		_do_change(str(snapshot["area"]))
+	player.position = snapshot["position"]
+	for property in snapshot["player"]:
+		player.set(property, _mission_test_copy(snapshot["player"][property]))
+	player.apply_stats()
+	player.hp = minf(float(snapshot["player"]["hp"]), player.max_hp)
+	player.st = minf(float(snapshot["player"]["st"]), player.max_st)
+	player.mana = minf(float(snapshot["player"]["mana"]), player.max_mana)
+	player.set_zmode(int(snapshot["zmode"]))
+	player.update_wspr()
+	player.cam.reset_smoothing()
+	Story.runner = snapshot["story_runner"]
+	Story.runner_done = bool(snapshot["story_runner_done"])
+	Story.barn_runner = snapshot["barn_runner"]
+	Story.barn_final = snapshot["barn_final"]
+	Story.barn_t = float(snapshot["barn_t"])
+	Story.barn_wait = float(snapshot["barn_wait"])
+	Story.barn_runtime = bool(snapshot["barn_runtime"])
+	Story.barn_prev_mode = int(snapshot["barn_prev_mode"])
+	Story.barn_prev_focus = float(snapshot["barn_prev_focus"])
+	Story.barn_prev_horde_age = float(snapshot["barn_prev_horde_age"])
+	Story.barn_prev_horde_t = float(snapshot["barn_prev_horde_t"])
+	mission_test_active = false
+	mission_test_pending.clear()
+	mission_test_entry.clear()
+	mission_test_snapshot.clear()
+
+
+func _mission_test_start_story(id: String) -> void:
+	var story_flags := Story.flags(self)
+	persist["bosses"]["boss_jailer"] = true
+	if id == "story:invasion":
+		persist["journey"] = 0
+		story_flags.erase(Story.INV)
+		Story.on_prison_exit(self)
+		return
+	story_flags[Story.INV] = true
+	persist["journey"] = int(id.get_slice(":", 1))
+	match id:
+		"journey:0":
+			for prop in props:
+				if prop.kind == "elder":
+					player.position = prop.position + Vector2(0, 20)
+					break
+		"journey:1":
+			pages_found = 0
+			var page: Prop = null
+			for prop in props:
+				if prop.kind == "page":
+					page = prop
+					break
+			if page == null:
+				var page_cell := free_near(SEEDS[0] + Vector2i(5, 5))
+				if page_cell.x >= 0:
+					page = add_prop("page", page_cell)
+			if page != null:
+				player.position = page.position + Vector2(24, 0)
+		"story:barn":
+			persist["journey"] = 2
+			story_flags.erase(Story.BARN_ASSAULT)
+			Story.barn_runner = null
+			Story.barn_final = null
+			Story.barn_t = 0.0
+			Story.barn_wait = Story.BARN_DELAY
+			Story.barn_runtime = false
+			Story.update(self, 0.05)
+		"journey:3":
+			if player.lv >= 3:
+				player.lv = 2
+				player.apply_stats()
+			player.souls = maxi(player.souls, Upgrades.cost(player.lv))
+			for prop in props:
+				if prop.kind == "bonfire":
+					player.position = prop.position + Vector2(0, 20)
+					break
+		"journey:4":
+			for arena in arenas:
+				if arena["def"]["id"] == "a_vil":
+					player.position = arena["pos"]
+					break
+
+
+func _mission_test_begin_pending() -> void:
+	if mission_test_pending.is_empty():
+		return
+	var entry := mission_test_pending
+	mission_test_pending = {}
+	if str(entry["kind"]) == "story":
+		_mission_test_start_story(str(entry["id"]))
+		say("TEST MISSIONE: " + str(entry["label"]))
+	else:
+		var qid := str(entry["id"])
+		if not quest_defs.has(qid):
+			say("MISSIONE NON DISPONIBILE NEL MONDO ATTUALE")
+			_mission_test_restore()
+			return
+		var definition: Dictionary = quest_defs[qid]
+		persist["journey"] = JOURNEY_N
+		Story.flags(self)[Story.INV] = true
+		Story.flags(self).erase(Story.BARN_ASSAULT)
+		qp().erase(qid)
+		var giver: Villager = null
+		for villager in villagers:
+			if villager.qid == qid:
+				giver = villager
+				break
+		if giver != null:
+			player.position = giver.position + Vector2(0, 20)
+		elif definition.get("center") is Vector2i:
+			player.position = cell_pos(definition["center"])
+		say("TEST MISSIONE: PARLA CON %s" % str(definition.get("giver", "IL PAESANO")))
+	player.cam.reset_smoothing()
+
+
+func _mission_test_launch_selected() -> void:
+	if mission_test_entries.is_empty():
+		return
+	mission_test_snapshot = _mission_test_capture()
+	mission_test_active = true
+	var index := clampi(mission_test_sel, 0, mission_test_entries.size() - 1)
+	mission_test_pending = mission_test_entries[index].duplicate(true)
+	mission_test_entry = mission_test_pending.duplicate(true)
+	state = "play"
+	if area == "world":
+		_mission_test_begin_pending()
+	else:
+		change_area("world")
 
 
 func spawn_quest_item(qid: String, force := false) -> void:
@@ -7334,12 +7634,10 @@ func toggle_skin() -> void:
 	skin.gm = self
 	skin.process_priority = 100
 	add_child(skin)
-	say("GRAFICA 3D (F9 PER TORNARE ALLA 2D)")
+	say("GRAFICA 3D")
 
 
 func _input(ev: InputEvent) -> void:
-	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F9:
-		return     # la grafica 2D non esiste piu': il gioco e' solo 3D
 	if ev is InputEventKey and ev.pressed and not ev.echo:
 		var fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
 		if ev.keycode == KEY_F11 or (ev.keycode == KEY_ENTER and ev.alt_pressed):
@@ -7374,6 +7672,10 @@ func _activate_pause_selection() -> void:
 			ctrl_from = "pause"
 			state = "controls"
 		5:
+			_debug_build_list()
+			debug_return_state = "pause"
+			state = "debug"
+		6:
 			save_game()
 			Engine.time_scale = 1.0
 			get_tree().reload_current_scene()
@@ -7454,6 +7756,16 @@ func _remap_input(ev: InputEvent) -> void:
 
 
 func _handle_menu_click(pos: Vector2) -> bool:
+	if state == "mission_test":
+		if pos.x < 18.0 or pos.x > 462.0 or pos.y < 47.0 or pos.y >= 200.0:
+			return false
+		var row := floori((pos.y - 47.0) / 17.0)
+		var index := mission_test_first() + row
+		if index < 0 or index >= mission_test_entries.size():
+			return false
+		mission_test_sel = index
+		_mission_test_launch_selected()
+		return true
 	if state == "options":
 		if pos.x < 80.0 or pos.x > 400.0:
 			return false
@@ -7477,7 +7789,7 @@ func _handle_menu_click(pos: Vector2) -> bool:
 		return true
 	if state == "pause":
 		var row := floori((pos.y - 106.0) / 14.0)
-		if pos.x < 130.0 or pos.x > 350.0 or row < 0 or row >= 7 or pos.y >= 122.0 + row * 14.0:
+		if pos.x < 130.0 or pos.x > 350.0 or row < 0 or row >= 8 or pos.y >= 122.0 + row * 14.0:
 			return false
 		pause_sel = row
 		_activate_pause_selection()
@@ -7600,14 +7912,38 @@ func launch_editor() -> void:
 
 
 func _unhandled_input(ev: InputEvent) -> void:
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F9 and state in ["play", "pause", "mission_test"]:
+		if state == "mission_test":
+			state = mission_test_return_state
+		else:
+			if mission_test_active:
+				_mission_test_restore()
+			mission_test_return_state = state
+			_mission_test_build_entries()
+			mission_test_sel = 0
+			state = "mission_test"
+		return
+	if state == "mission_test":
+		if ev.is_action_pressed("ui_down"):
+			mission_test_sel = (mission_test_sel + 1) % mission_test_entries.size()
+		elif ev.is_action_pressed("ui_up"):
+			mission_test_sel = (mission_test_sel + mission_test_entries.size() - 1) % mission_test_entries.size()
+		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
+			_mission_test_launch_selected()
+			return
+		elif ev.is_action_pressed("ui_cancel"):
+			state = mission_test_return_state
+			return
+		if ev is InputEventKey or ev is InputEventJoypadButton:
+			return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F2 and state in ["play", "pause", "debug"]:
 		if state == "debug":
-			state = "play"
+			state = debug_return_state
 		else:
-			debug_list = [["world", "MONDO APERTO"]]
-			for dk in DUNS.keys():
-				debug_list.append([dk, str(DUNS[dk]["n"])])
-			debug_sel = 0
+			if mission_test_active:
+				_mission_test_restore()
+			_debug_build_list()
+			debug_return_state = state
 			state = "debug"
 		return
 	if state == "debug":
@@ -7616,10 +7952,17 @@ func _unhandled_input(ev: InputEvent) -> void:
 		elif ev.is_action_pressed("ui_up"):
 			debug_sel = (debug_sel + debug_list.size() - 1) % debug_list.size()
 		elif ev.is_action_pressed("ui_cancel"):
-			state = "play"
+			state = debug_return_state
 		elif ev.is_action_pressed("ui_accept"):
-			state = "play"
-			change_area(str(debug_list[debug_sel][0]))
+			var selected: String = str(debug_list[debug_sel][0])
+			if selected.begins_with("debug_action:"):
+				_debug_activate_function(selected.trim_prefix("debug_action:"))
+			elif selected.begins_with("mission_test:"):
+				mission_test_sel = int(selected.trim_prefix("mission_test:"))
+				_mission_test_launch_selected()
+			else:
+				state = "play"
+				change_area(selected)
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F5 and state == "play" and area == "d0" and not persist["bosses"].has("boss_jailer"):
 		skip_d0()
@@ -7716,9 +8059,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 		return
 	if state == "pause":
 		if ev.is_action_pressed("ui_down"):
-			pause_sel = (pause_sel + 1) % 7
+			pause_sel = (pause_sel + 1) % 8
 		elif ev.is_action_pressed("ui_up"):
-			pause_sel = (pause_sel + 6) % 7
+			pause_sel = (pause_sel + 7) % 8
 		elif ev.is_action_pressed("ui_cancel") or (ev is InputEventJoypadButton and ev.pressed and ev.button_index == JOY_BUTTON_START):
 			state = "play"
 		elif ev.is_action_pressed("ui_accept") and not (ev is InputEventMouseButton):
@@ -7873,6 +8216,40 @@ func _selftest() -> void:
 	match tf:
 		30:
 			print("T world props=", props.size(), " spawns=", spawns.size(), " enemies=", enemies.size())
+			_debug_build_list()
+			assert(debug_list.size() == 1 + DUNS.size() + DEBUG_FUNCTION_ACTIONS.size() + MISSION_TEST_STORY.size() + quest_defs.size(), "Il menu debug non include tutte le voci")
+			var mission_rows := debug_list.filter(func(row): return str(row[0]).begins_with("mission_test:"))
+			assert(mission_rows.size() == MISSION_TEST_STORY.size() + quest_defs.size(), "Il menu debug non include tutte le missioni generate")
+			var function_rows := debug_list.filter(func(row): return str(row[0]).begins_with("debug_action:"))
+			assert(function_rows.size() == DEBUG_FUNCTION_ACTIONS.size(), "Il menu debug non include tutte le funzioni dei tasti")
+			var debug_key := InputEventKey.new()
+			debug_key.keycode = KEY_F2
+			debug_key.pressed = true
+			_unhandled_input(debug_key)
+			assert(state == "debug", "F2 non apre il menu debug")
+			_unhandled_input(debug_key)
+			assert(state == "play", "F2 non chiude il menu debug")
+			state = "pause"
+			pause_sel = 5
+			_activate_pause_selection()
+			assert(state == "debug", "Il menu pausa non apre il menu debug")
+			var close_debug := InputEventAction.new()
+			close_debug.action = "ui_cancel"
+			close_debug.pressed = true
+			_unhandled_input(close_debug)
+			assert(state == "pause", "Il menu debug non ritorna alla pausa")
+			state = "play"
+			var return_state := state
+			var open_menu := InputEventKey.new()
+			open_menu.keycode = KEY_F9
+			open_menu.pressed = true
+			_unhandled_input(open_menu)
+			assert(state == "mission_test", "F9 non apre il menu test missioni")
+			var close_menu := InputEventAction.new()
+			close_menu.action = "ui_cancel"
+			close_menu.pressed = true
+			_unhandled_input(close_menu)
+			assert(state == return_state, "ESC non chiude il menu test missioni")
 			player.position = cell_pos(SEEDS[1] + Vector2i(0, 3))
 		60:
 			player.position = cell_pos(SEEDS[2] + Vector2i(-3, 1))
@@ -8705,6 +9082,8 @@ var run_test_base := Vector2.ZERO
 
 
 func _process(_dt: float) -> void:
+	if mission_test_active and not mission_test_pending.is_empty() and state == "play" and area == "world":
+		_mission_test_begin_pending()
 	if state == "map":   # la mappa si scorre con il movimento (stick, croce, WASD)
 		map_pan += Input.get_vector("move_left", "move_right", "move_up", "move_down") * _dt * (260.0 if map_zoom == 1 else 120.0)
 	if OS.get_cmdline_user_args().has("--gateshot"):

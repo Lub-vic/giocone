@@ -3,7 +3,7 @@ extends W3D
 ## "Pelle 3D" del gioco vero: la logica, i nemici, le collisioni, i colpi, la vita, le missioni restano quelli del gioco 2D.
 ## Questo nodo legge lo stato del gioco ogni fotogramma e lo disegna con il motore 3D (muri e pavimenti dal reticolo del dungeon,
 ## oggetti e personaggi dai loro sprite, piu' i modelli a schegge per eroe e nemici noti).
-## F9 attiva/disattiva.  1 unita' 3D = 16 pixel del gioco 2D.
+## 1 unita' 3D = 16 pixel del gioco 2D.
 
 const FLOOR_COL := [Color(0.20, 0.19, 0.20), Color(0.17, 0.19, 0.14), Color(0.14, 0.17, 0.14), Color(0.14, 0.17, 0.15), Color(0.23, 0.22, 0.24), Color(0.40, 0.45, 0.52), Color(0.20, 0.10, 0.09)]
 const WALL_COL := [Color(0.20, 0.19, 0.22), Color(0.17, 0.19, 0.15), Color(0.14, 0.17, 0.14), Color(0.14, 0.18, 0.16), Color(0.22, 0.21, 0.25), Color(0.38, 0.42, 0.50), Color(0.22, 0.11, 0.10)]
@@ -3836,11 +3836,7 @@ func _fpv_look(dt: float) -> void:
 
 func _unhandled_input(ev: InputEvent) -> void:
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F6:
-		if cine != null and cine.active:
-			if cine.edit:
-				cine.finish(false)
-		elif world_on and str(gm.state) == "play":
-			start_cine(_edit_next(ev.shift_pressed), true)       # editor delle cutscene (Shift+F6 = passa alla cutscene successiva)
+		open_cine_editor(ev.shift_pressed)
 		return
 	if cine != null and cine.active:
 		get_viewport().set_input_as_handled()
@@ -3862,11 +3858,15 @@ func _unhandled_input(ev: InputEvent) -> void:
 		fpv_pitch = clampf(fpv_pitch - mm.relative.y * 0.0026, -1.2, 1.2)
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F8:
-		char_mode = (char_mode + 1) % 3
-		exact_chars = char_mode < 2
-		for k in dyn.keys():
-			_drop_dyn(k)
-		gm.say(["CUBETTI DALL'ALTO", "CUBETTI PIATTI (SPRITE ESATTI)", "PERSONAGGI STILIZZATI"][char_mode])
+		cycle_char_mode()
+
+
+func cycle_char_mode() -> void:
+	char_mode = (char_mode + 1) % 3
+	exact_chars = char_mode < 2
+	for k in dyn.keys():
+		_drop_dyn(k)
+	gm.say(["CUBETTI DALL'ALTO", "CUBETTI PIATTI (SPRITE ESATTI)", "PERSONAGGI STILIZZATI"][char_mode])
 
 
 ## anime e monete a terra: prismi luminosi che ruotano e ondeggiano (colore dal tipo, emissivi: non dipendono dalle luci)
@@ -4168,6 +4168,17 @@ func _edit_next(shift: bool) -> String:
 	if shift or not ids.has(edit_id):
 		edit_id = ids[(ids.find(edit_id) + 1) % ids.size()]
 	return edit_id
+
+
+func open_cine_editor(next := false) -> bool:
+	if cine != null and cine.active:
+		if cine.edit:
+			cine.finish(false)
+			return true
+		return false
+	if not world_on or str(gm.state) != "play":
+		return false
+	return start_cine(_edit_next(next), true)
 
 
 func cine_prewarm() -> void:

@@ -1,6 +1,7 @@
 # Crypt of Embers (Godot 4.7) - soulslike
 Avvio: apri `godot/` con Godot 4, F5.
 Comandi: WASD muovi · SPAZIO/J/click colpo leggero (3 in combo) · L/tasto destro colpo pesante · SHIFT/K rotolata · Q fiala · E falo' · 1/2/3 sceglie potenziamento · T (al falo') viaggio rapido.
+Menu sviluppo: dal menu pausa (ESC) scegli DEBUG / TEST MISSIONI per selezionare aree, tutte le missioni e tutte le funzioni assegnate ai tasti funzione (F2, F3, F5-F12, incluse MAIUSC+F6/F10); F2 apre lo stesso menu direttamente. Le azioni non richiedono i relativi tasti funzione. F1 e F4 non hanno azioni assegnate. I test missione non salvano i progressi.
 Asset: `py ../tools/gothic.py assets`. Autotest: `Godot_console --headless --quit-after 300 -- --selftest`.
 
 ### Build Windows

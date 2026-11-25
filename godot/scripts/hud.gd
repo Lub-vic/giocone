@@ -289,7 +289,7 @@ func _draw() -> void:
 			_txt("...", Vector2(5 + 6.0 * minf(30.0, str(qs[0]).length()), oy + 9.0), Color(0.7, 0.92, 0.85, oa * 0.9))
 	if p.zmode > 0:
 		_txt("MODALITA ORDA" if p.zmode == 1 else "MODALITA TATTICA", Vector2(0, 20), Color(1.0, 0.6, 0.9) if p.zmode == 1 else Color(0.6, 0.9, 1.0), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "remap", "dialog", "craft", "map", "bestiary", "debug"]
+	var overlay: bool = main.inv_open or main.state in ["menu", "pick", "travel", "pause", "options", "controls", "remap", "dialog", "craft", "map", "bestiary", "debug", "mission_test"]
 	if not overlay:
 		_equip_panel(p)
 		_item_line(p)
@@ -351,6 +351,8 @@ func _draw() -> void:
 			_pause()
 		"debug":
 			_debug()
+		"mission_test":
+			_mission_test()
 		"options":
 			_options()
 		"controls":
@@ -390,8 +392,8 @@ func _ui_tex(name: String) -> Texture2D:
 func _debug() -> void:
 	var r := Rect2(110, 20, size.x - 220, size.y - 40)
 	_frame(r, true, 0.95)
-	_txt("DEBUG - SALTA A UN'AREA", Vector2(0, 28), GOLD_L, 11, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-	_txt("SU/GIU SCEGLI   INVIO VAI   F2 CHIUDI", Vector2(0, size.y - 34), Color(0.7, 0.7, 0.8), 8, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	_txt("DEBUG - AREE, TASTI FUNZIONE E MISSIONI", Vector2(0, 28), GOLD_L, 11, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	_txt("SU/GIU SCEGLI   INVIO AVVIA   F2 CHIUDI", Vector2(0, size.y - 34), Color(0.7, 0.7, 0.8), 8, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 	var n: int = main.debug_list.size()
 	var first := clampi(main.debug_sel - 6, 0, maxi(0, n - 13))
 	for i in range(first, mini(n, first + 13)):
@@ -401,6 +403,28 @@ func _debug() -> void:
 			draw_rect(Rect2(r.position.x + 8, y - 12, r.size.x - 16, 14), Color(0.4, 0.28, 0.1, 0.8))
 		_txt(str(main.debug_list[i][1]), Vector2(r.position.x + 14, y), GOLD_L if sel else Color(0.75, 0.73, 0.85), 9)
 		_txt(str(main.debug_list[i][0]).to_upper(), Vector2(r.end.x - 60, y), Color(0.55, 0.55, 0.7), 8)
+
+
+func _mission_test() -> void:
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.01, 0.0, 0.03, 0.9))
+	var r := Rect2(18, 12, size.x - 36, size.y - 24)
+	_frame(r, true, 0.97)
+	_txt("TEST MISSIONI", Vector2(0, 28), GOLD_L, 11, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	_txt("%d DISPONIBILI  |  F9 / ESC CHIUDE" % main.mission_test_entries.size(), Vector2(0, 41), Color(0.72, 0.68, 0.82), 8, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	var first: int = main.mission_test_first()
+	for i in range(first, mini(main.mission_test_entries.size(), first + 9)):
+		var row := i - first
+		var y := 49.0 + row * 17.0
+		var selected: bool = i == main.mission_test_sel
+		if selected:
+			draw_rect(Rect2(r.position.x + 5, y - 11, r.size.x - 10, 15), Color(0.4, 0.28, 0.1, 0.85))
+		var label := str(main.mission_test_entries[i]["label"])
+		if label.length() > 68:
+			label = label.substr(0, 65) + "..."
+		_txt(label, Vector2(r.position.x + 10, y), GOLD_L if selected else Color(0.79, 0.77, 0.88), 8)
+	if main.mission_test_entries.is_empty():
+		_txt("NESSUNA MISSIONE DISPONIBILE", Vector2(0, 130), Color(0.75, 0.72, 0.82), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	_txt("SU/GIU' + INVIO AVVIA  |  CLIC PER AVVIARE", Vector2(0, size.y - 25), Color(0.8, 0.78, 0.9), 8, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 
 
 func _menu(p: Player) -> void:
@@ -1295,7 +1319,7 @@ func _pause() -> void:
 	var r := Rect2(size.x / 2 - 100, 58, 200, 178)
 	_panel(r)
 	_txt("PAUSA", Vector2(r.position.x, r.position.y + 30), Color(1, 0.8, 0.4), 18, HORIZONTAL_ALIGNMENT_CENTER, r.size.x)
-	var items := ["RIPRENDI", "MAPPA", "BESTIARIO", "IMPOSTAZIONI", "CONTROLLI", "TORNA AL TITOLO", "ESCI DAL GIOCO"]
+	var items := ["RIPRENDI", "MAPPA", "BESTIARIO", "IMPOSTAZIONI", "CONTROLLI", "DEBUG / TEST MISSIONI", "TORNA AL TITOLO", "ESCI DAL GIOCO"]
 	for i in items.size():
 		var sel: bool = i == main.pause_sel
 		_txt(("> " if sel else "  ") + items[i], Vector2(r.position.x + 28, r.position.y + 54 + i * 14),
