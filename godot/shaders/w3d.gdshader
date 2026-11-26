@@ -5,6 +5,8 @@ render_mode cull_disabled, world_vertex_coords, specular_disabled, diffuse_lambe
 global uniform vec3 w3d_player;
 global uniform sampler2D w3d_elev : filter_linear;
 global uniform vec4 w3d_elev_info;   // xy = 1 / dimensioni della mappa (celle), z = scala delle quote (0 = spente: interni)
+global uniform vec4 w3d_side_cut;    // x/y = punto del piano, z = attivo, w = tolleranza
+uniform float side_cut_exempt = 0.0;
 
 float elev(vec2 p) {
 	if (w3d_elev_info.z <= 0.0) {
@@ -47,6 +49,10 @@ float hsh(float n) {
 }
 
 void fragment() {
+	vec2 side_depth = vec2(wpos.y - w3d_side_cut.x, wpos.z - w3d_side_cut.y);
+	if (w3d_side_cut.z > 0.5 && side_cut_exempt < 0.5 && dot(side_depth, vec2(-0.208, -0.978)) < -w3d_side_cut.w) {
+		discard;
+	}
 	vec3 fn = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
 	if (dot(fn, VIEW) < 0.0) {
 		fn = -fn;

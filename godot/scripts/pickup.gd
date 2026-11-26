@@ -27,6 +27,13 @@ func _process(dt: float) -> void:
 	age += dt
 	var p: Player = main.player
 	var d := p.position.distance_to(position)
+	if has_meta("side_powerup"):
+		spr.position.y = -4.0 + sin(age * 6.0) * 1.5
+		if main.side_scroll_active and absf(p.position.x - position.x) < 18.0:
+			main.side_scroll_collect(str(get_meta("side_powerup")))
+			main.pickups.erase(self)
+			queue_free()
+		return
 	if age > 0.35 and d < 48.0:
 		position += (p.position - position).normalized() * 150.0 * dt
 	else:

@@ -36,6 +36,8 @@ var hero_light: OmniLight3D
 var room_lamps: Array = []
 var decor_lights: Array = []
 var dust: CPUParticles3D
+var side_scroll_prop_changes: Dictionary = {}
+var side_scroll_dirty_chunks: Dictionary = {}
 
 
 func _ready() -> void:
@@ -1748,9 +1750,9 @@ func _sprite_center(n: Node2D, spr: Sprite2D) -> Vector2:
 	return n.position + off + sz * 0.5
 
 
-func _make_generic(n: Node2D, spr: Sprite2D) -> Node3D:
+func _make_generic(n: Node2D, spr: Sprite2D, is_player := false) -> Node3D:
 	var pk := str(n.get("kind")) if n.get("kind") != null else ""
-	if pk != "" and not (n is Enemy or n is Villager or n is Ally or n is Critter) and W3DProps.ok(pk):
+	if pk != "" and not is_player and not (n is Enemy or n is Villager or n is Ally or n is Critter) and W3DProps.ok(pk):
 		var tw := float(spr.texture.get_width()) / 16.0
 		var th := float(spr.texture.get_height()) / 16.0
 		var mkey := "p3_%s_%d" % [pk, n.get_instance_id() % 3]
@@ -1796,7 +1798,7 @@ func _make_generic(n: Node2D, spr: Sprite2D) -> Node3D:
 	var root := Node3D.new()
 	var mi := MeshInstance3D.new()
 	mi.mesh = _tex_mesh(spr.texture, 0.12)
-	mi.material_override = mat_chr if (n is Enemy or n is Villager or n is Ally or n is Critter) else mat
+	mi.material_override = mat_chr if (is_player or n is Enemy or n is Villager or n is Ally or n is Critter) else mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	root.add_child(mi)
 	vp.add_child(root)
@@ -1924,6 +1926,10 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 	if not (n is Node2D) or not is_instance_valid(n) or not (n as Node2D).visible:
 		return
 	var id := n.get_instance_id()
+	if gm.side_scroll_active and not is_player and not gm.side_scroll_enemies.has(n) and not gm.side_scroll_pickups.has(n):
+		if dyn.has(id):
+			_drop_dyn(id)
+		return
 	var spr: Sprite2D = null
 	if n.get("spr") != null:
 		spr = n.get("spr")
@@ -1977,7 +1983,7 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 		elif world_on and n is Prop and not W3DProps.ok(str((n as Prop).kind)):
 			node = _make_exact(spr)
 		else:
-			node = _make_generic(n2, spr)
+			node = _make_generic(n2, spr, is_player)
 		var okey := ""
 		if is_player:
 			okey = "hero"
@@ -2683,6 +2689,41 @@ func _world_prop_key(p: Vector2) -> String:
 	return "w3d:%d,%d" % [roundi(p.x * 100.0), roundi(p.y * 100.0)]
 
 
+func side_scroll_props_begin() -> void:
+	side_scroll_prop_changes.clear()
+	side_scroll_dirty_chunks.clear()
+
+
+func side_scroll_props_restore() -> void:
+	if side_scroll_prop_changes.is_empty():
+		return
+	var broken: Dictionary = gm.persist.get("broken", {})
+	var hp_map: Dictionary = gm.persist.get("w3d_hp", {})
+	for key in side_scroll_prop_changes:
+		var saved: Dictionary = side_scroll_prop_changes[key]
+		if bool(saved["broken"]):
+			broken[key] = true
+		else:
+			broken.erase(key)
+		if bool(saved["has_hp"]):
+			hp_map[key] = saved["hp"]
+		else:
+			hp_map.erase(key)
+		var hidden_key: Vector2i = saved["hidden_key"]
+		if bool(saved["hidden"]):
+			ed_hide_keys[hidden_key] = true
+		else:
+			ed_hide_keys.erase(hidden_key)
+	gm.persist["broken"] = broken
+	gm.persist["w3d_hp"] = hp_map
+	for ck in side_scroll_dirty_chunks:
+		_rebuild_world_chunk(ck)
+	if not side_scroll_dirty_chunks.is_empty():
+		_run_jobs(3.0)
+	side_scroll_prop_changes.clear()
+	side_scroll_dirty_chunks.clear()
+
+
 func _rebuild_world_chunk(k: Vector2i) -> void:
 	if not chunks.has(k):
 		return
@@ -2733,6 +2774,15 @@ func hit_world_prop(hit_pos: Vector2, face: Vector2, reach: float, arc: float, m
 		return false
 	var key := _world_prop_key(target_key_pos)
 	var hp_map: Dictionary = gm.persist.get("w3d_hp", {})
+	var hide_key := Vector2i(roundi(target_key_pos.x * 100.0), roundi(target_key_pos.y * 100.0))
+	if gm.side_scroll_active and not side_scroll_prop_changes.has(key):
+		side_scroll_prop_changes[key] = {
+			"broken": broken.has(key),
+			"has_hp": hp_map.has(key),
+			"hp": hp_map.get(key, 0.0),
+			"hidden_key": hide_key,
+			"hidden": ed_hide_keys.has(hide_key),
+		}
 	var left := float(hp_map.get(key, 16.0))
 	if rolling:
 		left = 0.0
@@ -2746,7 +2796,9 @@ func hit_world_prop(hit_pos: Vector2, face: Vector2, reach: float, arc: float, m
 		gm.persist["broken"][key] = true
 		hp_map.erase(key)
 		gm.persist["w3d_hp"] = hp_map
-		ed_hide_keys[Vector2i(roundi(target_key_pos.x * 100.0), roundi(target_key_pos.y * 100.0))] = true
+		ed_hide_keys[hide_key] = true
+		if gm.side_scroll_active:
+			side_scroll_dirty_chunks[target_chunk] = true
 		_rebuild_world_chunk(target_chunk)
 		gm.burst(cp, Destruct.COL["molle"], 18, 70.0, 0.55)
 		gm.snd("kill")
@@ -2758,6 +2810,28 @@ func hit_world_prop(hit_pos: Vector2, face: Vector2, reach: float, arc: float, m
 		gm.persist["w3d_hp"] = hp_map
 		gm.popup(cp + Vector2(0, -14), "%d%%" % int(ceil(100.0 * left / 16.0)), Color(1.0, 0.9, 0.7))
 	return true
+
+
+func side_scroll_breakable_at(point: Vector2, radius: float) -> bool:
+	var local := point / Game.TS - world_off
+	var reach := radius / Game.TS
+	var broken: Dictionary = gm.persist.get("broken", {})
+	for ck in chunks:
+		for item in chunks[ck].get("breakables", []):
+			var kind := str(item["kind"])
+			var key_pos: Vector2 = item["pos"]
+			if broken.has(_world_prop_key(key_pos)):
+				continue
+			if kind == "fence":
+				var a: Vector2 = item["a"]
+				var b: Vector2 = item["b"]
+				var ab := b - a
+				var t := clampf((local - a).dot(ab) / maxf(ab.length_squared(), 0.001), 0.0, 1.0)
+				if local.distance_to(a + ab * t) <= reach + 0.25:
+					return true
+			elif kind in ["barrel", "crate", "hay"] and local.distance_to(key_pos) <= reach + 0.8:
+				return true
+	return false
 
 
 func _world_init() -> void:
@@ -3131,6 +3205,8 @@ var world_light_k := 30.0
 
 ## i nemici nati dentro un edificio 3D vengono spostati sul punto libero piu' vicino
 func _unstick(dt: float) -> void:
+	if gm.side_scroll_active:
+		return
 	unstick_t -= dt
 	if unstick_t > 0.0:
 		return
@@ -3591,7 +3667,26 @@ func _process_inner(dt: float) -> void:
 		elev_y = lerpf(elev_y, e0 + minf(ahead - e0, 22.0) * 0.7, 0.12)
 	else:
 		elev_y = 0.0
-	_update_cam()
+	if gm.side_scroll_active:
+		if fpv:
+			fpv_set(false)
+		curve = 0.0
+		cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+		cam.size = 10.0
+		cam.near = 0.1
+		cam.far = 120.0
+		var side_ground := elev_at(pos.x, pos.y)
+		RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4(side_ground + 0.9, pos.y, 1.0, 0.12))
+		cam.position = Vector3(pos.x, side_ground + 6.0, pos.y + 24.0)
+		cam.look_at(Vector3(pos.x, side_ground + 0.9, pos.y), Vector3.UP)
+	else:
+		RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4.ZERO)
+		if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+			cam.projection = Camera3D.PROJECTION_PERSPECTIVE
+			cam.rotation_degrees = Vector3(-90, 0, 0)
+			cam.near = 2.0
+			cam.far = 120.0
+		_update_cam()
 	if fpv:
 		_fpv_look(dt)
 		_fpv_cam()

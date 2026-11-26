@@ -501,6 +501,8 @@ func _process(dt: float) -> void:
 		regen_t -= dt
 		hp = min(max_hp, hp + regen_rate * dt)
 	var dir := Vector2.ZERO if main.inv_open else Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	if main.side_scroll_active:
+		dir.y = 0.0
 	var fsk = main.skin
 	var in_fpv: bool = fsk is W3DSkin and (fsk as W3DSkin).fpv
 	if in_fpv:
@@ -537,11 +539,17 @@ func _process(dt: float) -> void:
 		var fy: float = (fsk as W3DSkin).fpv_yaw
 		face = Vector2(-sin(fy), -cos(fy))       # si colpisce dove si guarda
 		aim_world = position + face * 80.0
+	if main.side_scroll_active:
+		if absf(dir.x) > 0.1:
+			face = Vector2(signf(dir.x), 0.0)
+		else:
+			face = Vector2.LEFT if face.x < 0.0 else Vector2.RIGHT
+		aim_world = position + face * 80.0
 	var barn_horde := Story.barn_assault_active(main)
 	# V / croce destra cambia Orda/Tattica; U / croce giu' cambia zoom. Il movimento usa lo stick sinistro.
-	if act("zoom"):
+	if act("zoom") and not main.side_scroll_active:
 		cycle_zoom()
-	if act("camera_zoom") and main.state == "play" and main.area == "world" and main.skin is W3DSkin:
+	if act("camera_zoom") and not main.side_scroll_active and main.state == "play" and main.area == "world" and main.skin is W3DSkin:
 		(main.skin as W3DSkin).toggle_world_zoom()
 	if zmode > 0 and main.area.begins_with("int|"):
 		set_zmode(0)
@@ -594,7 +602,7 @@ func _process(dt: float) -> void:
 		main.item_use()
 	# bolla spazio-temporale: un tasto, un oggetto a caso
 	chrono = minf(Chrono.MAX_E, chrono + 0.6 * dt)
-	if act("summon") and idle():
+	if act("summon") and idle() and not main.side_scroll_active:
 		main.summon()
 	if not veh.is_empty():
 		veh_tick(dt)

@@ -110,6 +110,7 @@ static func add_globals() -> void:
 	RenderingServer.global_shader_parameter_add("w3d_elev", RenderingServer.GLOBAL_VAR_TYPE_SAMPLER2D, ImageTexture.create_from_image(img))
 	RenderingServer.global_shader_parameter_add("w3d_elev_info", RenderingServer.GLOBAL_VAR_TYPE_VEC4, Vector4(0, 0, 0, 0))
 	RenderingServer.global_shader_parameter_add("w3d_curve", RenderingServer.GLOBAL_VAR_TYPE_VEC3, Vector3(0.014, 27.0, 45.0))
+	RenderingServer.global_shader_parameter_add("w3d_side_cut", RenderingServer.GLOBAL_VAR_TYPE_VEC4, Vector4.ZERO)
 	gp_added = true
 
 
@@ -211,11 +212,13 @@ func _build_view() -> void:
 	mat_chr.set_shader_parameter("gamma_in", 2.0 if sheet else 1.0)
 	mat_chr.set_shader_parameter("boost", 1.35 if sheet else 1.9)
 	mat_chr.set_shader_parameter("sat_k", 1.3 if sheet else 1.7)
+	mat_chr.set_shader_parameter("side_cut_exempt", 1.0)
 	mat_prop = ShaderMaterial.new()
 	mat_prop.shader = mat.shader
 	mat_prop.set_shader_parameter("gamma_in", 1.0)
 	mat_prop.set_shader_parameter("boost", 1.7)
 	mat_prop.set_shader_parameter("sat_k", 1.35)
+	mat_prop.set_shader_parameter("side_cut_exempt", 1.0)
 	var cl := CanvasLayer.new()
 	cl.layer = 1
 	add_child(cl)

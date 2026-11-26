@@ -330,6 +330,18 @@ var mission_test_return_state := "play"
 var mission_test_pending: Dictionary = {}
 var mission_test_entry: Dictionary = {}
 var mission_test_snapshot: Dictionary = {}
+var side_scroll_active := false
+var side_scroll_lane_y := 0.0
+var side_scroll_lane_base_y := 0.0
+var side_scroll_lane_target_y := 0.0
+var side_scroll_route_t := 0.0
+var side_scroll_start_x := 0.0
+var side_scroll_goal_x := 0.0
+var side_scroll_spawn_t := 0.0
+var side_scroll_spawn_count := 0
+var side_scroll_enemies: Array = []
+var side_scroll_pickups: Array = []
+var side_scroll_suspended_nodes: Array = []
 var critters: Array = []
 var villagers: Array = []
 var day_t := 0.3
@@ -1908,7 +1920,7 @@ func mm_mark_poi(cell: Vector2i) -> void:
 
 
 func poi_tick() -> void:
-	if area != "world" or player == null:
+	if side_scroll_active or area != "world" or player == null:
 		return
 	var pc := Vector2i(floori(player.position.x / (CH * Game.TS)), floori(player.position.y / (CH * Game.TS)))
 	for dy in range(-2, 3):
@@ -2495,7 +2507,7 @@ func index_spawns() -> void:
 
 
 func spawn_tick() -> void:
-	if area != "world" or player == null:
+	if side_scroll_active or area != "world" or player == null:
 		return
 	var pc := Vector2i(floori(player.position.x / (CH * Game.TS)), floori(player.position.y / (CH * Game.TS)))
 	for dy in range(-3, 4):
@@ -2759,6 +2771,8 @@ func build_cloister(c: Vector2i) -> void:
 
 
 func objective() -> String:
+	if side_scroll_active:
+		return "RAGGIUNGI LA CATTEDRALE IN ROVINA  (%d M)" % int(maxf(0.0, side_scroll_goal_x - player.position.x) / Game.TS)
 	if run_mode:
 		if run_boss_alive:
 			return "SCONFIGGI IL CUSTODE!"
@@ -3004,6 +3018,8 @@ func event_treasure(pc: Vector2i) -> void:
 
 
 func world_event_update(dt: float) -> void:
+	if side_scroll_active:
+		return
 	if ev_chest != null and (not is_instance_valid(ev_chest) or ev_chest.opened or ev_chest.position.distance_to(player.position) > 1100.0):
 		ev_chest = null
 	ev_t -= dt
@@ -3116,6 +3132,8 @@ func journey_advance(msg: String, souls: int, relics: int, weapon: int) -> void:
 
 
 func journey_update() -> void:
+	if side_scroll_active:
+		return
 	if persist["bosses"].has("boss_jailer"):
 		Story.update(self, get_process_delta_time())
 	if journey_step() >= JOURNEY_N or area != "world" or not persist["bosses"].has("boss_jailer"):
@@ -3243,6 +3261,11 @@ func quest_lines() -> Array:
 
 func _mission_test_build_entries() -> void:
 	mission_test_entries.clear()
+	mission_test_entries.append({
+		"kind": "mode",
+		"id": "side_scroll",
+		"label": "MODALITA - SIDE SCROLLING: VIAGGIA VERSO LA CATTEDRALE IN ROVINA",
+	})
 	for mission in MISSION_TEST_STORY:
 		mission_test_entries.append({"kind": "story", "id": mission["id"], "label": mission["label"]})
 	var qids: Array = quest_defs.keys()
@@ -3377,6 +3400,7 @@ func _mission_test_restore() -> void:
 	if not mission_test_active or mission_test_snapshot.is_empty():
 		mission_test_pending.clear()
 		return
+	_side_scroll_stop()
 	var snapshot := mission_test_snapshot
 	var previous_refs := [snapshot["story_runner"], snapshot["barn_runner"]]
 	for current in [Story.runner, Story.barn_runner]:
@@ -3486,6 +3510,8 @@ func _mission_test_begin_pending() -> void:
 	if str(entry["kind"]) == "story":
 		_mission_test_start_story(str(entry["id"]))
 		say("TEST MISSIONE: " + str(entry["label"]))
+	elif str(entry["kind"]) == "mode" and str(entry["id"]) == "side_scroll":
+		_side_scroll_start()
 	else:
 		var qid := str(entry["id"])
 		if not quest_defs.has(qid):
@@ -3508,6 +3534,201 @@ func _mission_test_begin_pending() -> void:
 			player.position = cell_pos(definition["center"])
 		say("TEST MISSIONE: PARLA CON %s" % str(definition.get("giver", "IL PAESANO")))
 	player.cam.reset_smoothing()
+
+
+func _side_scroll_start() -> void:
+	_side_scroll_stop()
+	if skin is W3DSkin and (skin as W3DSkin).fpv:
+		(skin as W3DSkin).fpv_set(false)
+	if not player.veh.is_empty():
+		player.veh_exit(false)
+	run_mode = false
+	side_scroll_active = true
+	side_scroll_lane_y = clampf(player.position.y, 40.0 * Game.TS, (Game.MH - 40.0) * Game.TS)
+	side_scroll_lane_base_y = side_scroll_lane_y
+	side_scroll_lane_target_y = side_scroll_lane_y
+	side_scroll_route_t = 0.0
+	side_scroll_start_x = 15.0 * Game.TS
+	side_scroll_goal_x = (Game.MW - 15.0) * Game.TS
+	player.position = Vector2(30.0 * Game.TS, side_scroll_lane_y)
+	player.face = Vector2.RIGHT
+	player.aim_world = player.position + Vector2.RIGHT * 80.0
+	player.lock = null
+	inv_open = false
+	player.set_zmode(0)
+	if skin is W3DSkin:
+		(skin as W3DSkin).side_scroll_props_begin()
+	side_scroll_spawn_t = 1.0
+	side_scroll_spawn_count = 0
+	side_scroll_enemies.clear()
+	side_scroll_pickups.clear()
+	side_scroll_suspended_nodes.clear()
+	var suspended_ids := {}
+	for list in [enemies, villagers, allies, critters, pickups, props]:
+		for node in list:
+			if not is_instance_valid(node):
+				continue
+			var node_id: int = node.get_instance_id()
+			if suspended_ids.has(node_id):
+				continue
+			suspended_ids[node_id] = true
+			side_scroll_suspended_nodes.append({
+				"node": node,
+				"process": node.is_processing(),
+				"physics": node.is_physics_processing(),
+				"awake": bool(node.awake) if node is Enemy else false,
+			})
+			node.set_process(false)
+			node.set_physics_process(false)
+			if node is Enemy:
+				node.awake = false
+	for i in 3:
+		var pickup := Pickup.new()
+		pickup.setup(self, "soul", 0)
+		pickup.position = Vector2(lerpf(side_scroll_start_x, side_scroll_goal_x, 0.25 + float(i) * 0.25), side_scroll_lane_y)
+		pickup.vel = Vector2.ZERO
+		pickup.age = 1.0
+		pickup.set_meta("side_powerup", ["speed", "damage", "shield"][i])
+		pickup.spr.modulate = [Color(0.35, 1.0, 0.7), Color(1.0, 0.45, 0.3), Color(0.45, 0.75, 1.0)][i]
+		ents.add_child(pickup)
+		pickups.append(pickup)
+		side_scroll_pickups.append(pickup)
+	player.cam.reset_smoothing()
+	say("SIDE SCROLLING: USA FRECCE SINISTRA/DESTRA O A/D PER MUOVERTI. RAGGIUNGI LA CATTEDRALE IN ROVINA")
+
+
+func _side_scroll_spawn_enemy() -> void:
+	var living := 0
+	for enemy in side_scroll_enemies:
+		if is_instance_valid(enemy) and not enemy.dying:
+			living += 1
+	if living >= 8:
+		return
+	var direction := -1.0 if side_scroll_spawn_count % 2 == 0 else 1.0
+	var spawn_distance := randf_range(92.0, 138.0)
+	var spawn_x := clampf(player.position.x + direction * spawn_distance, side_scroll_start_x + 12.0, side_scroll_goal_x - 12.0)
+	if absf(spawn_x - player.position.x) < 72.0:
+		spawn_x = clampf(player.position.x - direction * spawn_distance, side_scroll_start_x + 12.0, side_scroll_goal_x - 12.0)
+	var roster := ["rat", "goblin", "kobold", "skeleton", "wolf"]
+	var enemy := spawn_enemy(roster[side_scroll_spawn_count % roster.size()], Vector2(spawn_x, side_scroll_lane_y), 0.65)
+	enemy.awake = true
+	enemy.horde = true
+	enemy.set_meta("side_scroll_enemy", true)
+	enemy.speed *= 0.82
+	enemy.set_process(true)
+	side_scroll_enemies.append(enemy)
+	side_scroll_spawn_count += 1
+
+
+func _side_scroll_scan_lane(y: float) -> Dictionary:
+	var skin3d := skin as W3DSkin
+	for step in range(1, 13):
+		var x := minf(player.position.x + float(step) * 16.0, side_scroll_goal_x)
+		var point := Vector2(x, y)
+		if not skin3d.world_free(point, player.radius):
+			return {
+				"clear": false,
+				"breakable": skin3d.side_scroll_breakable_at(point, player.radius),
+			}
+	return {"clear": true, "breakable": false}
+
+
+func _side_scroll_transition_clear(target_y: float) -> bool:
+	var skin3d := skin as W3DSkin
+	var current_y := player.position.y
+	for step in range(1, 6):
+		var y := lerpf(current_y, target_y, float(step) / 5.0)
+		if not skin3d.world_free(Vector2(player.position.x, y), player.radius):
+			return false
+	return true
+
+
+func _side_scroll_update_route(dt: float) -> void:
+	side_scroll_lane_y = move_toward(side_scroll_lane_y, side_scroll_lane_target_y, 180.0 * dt)
+	side_scroll_route_t -= dt
+	if side_scroll_route_t > 0.0 or not (skin is W3DSkin):
+		return
+	side_scroll_route_t = 0.12
+	var skin3d := skin as W3DSkin
+	var current_scan := _side_scroll_scan_lane(side_scroll_lane_y)
+	var base_scan := _side_scroll_scan_lane(side_scroll_lane_base_y)
+	if bool(base_scan["clear"]) and _side_scroll_transition_clear(side_scroll_lane_base_y):
+		side_scroll_lane_target_y = side_scroll_lane_base_y
+		return
+	if bool(current_scan["clear"]):
+		return
+	if bool(current_scan["breakable"]):
+		return
+	for offset in range(1, 17):
+		for side in [-1.0, 1.0]:
+			var candidate := side_scroll_lane_base_y + float(side) * float(offset) * 16.0
+			if candidate < 40.0 * Game.TS or candidate > (Game.MH - 40.0) * Game.TS:
+				continue
+			if not _side_scroll_transition_clear(candidate):
+				continue
+			if bool(_side_scroll_scan_lane(candidate)["clear"]):
+				side_scroll_lane_target_y = candidate
+				return
+
+
+func _side_scroll_update(dt: float) -> void:
+	if not side_scroll_active or state != "play":
+		return
+	_side_scroll_update_route(dt)
+	side_scroll_spawn_t -= dt
+	if side_scroll_spawn_t <= 0.0:
+		_side_scroll_spawn_enemy()
+		side_scroll_spawn_t = randf_range(0.85, 1.15)
+	if player.position.x >= side_scroll_goal_x:
+		_side_scroll_stop()
+		_mission_test_restore()
+		say("TEST SIDE SCROLLING COMPLETATO: CATTEDRALE IN ROVINA")
+
+
+func side_scroll_collect(kind: String) -> void:
+	if not side_scroll_active:
+		return
+	var duration := 8.0
+	match kind:
+		"speed":
+			player.buffs["b_mv"] = duration
+			player.bval["b_mv"] = 0.55
+			say("BONUS VELOCITA: +55% PER 8 SECONDI")
+		"damage":
+			player.buffs["b_dm"] = duration
+			player.bval["b_dm"] = 0.5
+			say("BONUS DANNO: +50% PER 8 SECONDI")
+		"shield":
+			player.shield = 60.0
+			player.shield_t = duration
+			say("BONUS SCUDO: 8 SECONDI")
+
+
+func _side_scroll_stop() -> void:
+	if side_scroll_active:
+		side_scroll_active = false
+	if skin is W3DSkin:
+		(skin as W3DSkin).side_scroll_props_restore()
+		RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4.ZERO)
+	for enemy in side_scroll_enemies:
+		if is_instance_valid(enemy):
+			enemies.erase(enemy)
+			enemy.queue_free()
+	side_scroll_enemies.clear()
+	for pickup in side_scroll_pickups:
+		if is_instance_valid(pickup):
+			pickups.erase(pickup)
+			pickup.queue_free()
+	side_scroll_pickups.clear()
+	for saved in side_scroll_suspended_nodes:
+		var node = saved.get("node")
+		if node == null or not is_instance_valid(node):
+			continue
+		node.set_process(bool(saved["process"]))
+		node.set_physics_process(bool(saved["physics"]))
+		if node is Enemy:
+			node.awake = bool(saved["awake"])
+	side_scroll_suspended_nodes.clear()
 
 
 func _mission_test_launch_selected() -> void:
@@ -4856,6 +5077,8 @@ func arena_finish(a: Dictionary) -> void:
 
 
 func arena_update(real: float) -> void:
+	if side_scroll_active:
+		return
 	for a in arenas:
 		if a["done"]:
 			continue
@@ -6641,6 +6864,8 @@ func solid_at(p: Vector2) -> bool:
 
 
 func free_at(p: Vector2, r: float) -> bool:
+	if side_scroll_active:
+		return skin is W3DSkin and (skin as W3DSkin).world_free(p, r)
 	if skin != null and is_instance_valid(skin) and skin.world_on:
 		return skin.world_free(p, r)
 	return not (solid_at(p + Vector2(-r, -r + 3)) or solid_at(p + Vector2(r, -r + 3))
@@ -6648,6 +6873,18 @@ func free_at(p: Vector2, r: float) -> bool:
 
 
 func move_body(o: Node2D, d: Vector2, r: float) -> void:
+	if side_scroll_active:
+		var target_x := clampf(o.position.x + d.x, side_scroll_start_x, side_scroll_goal_x)
+		var travel := target_x - o.position.x
+		var steps := maxi(1, ceili(absf(travel) / maxf(r, 6.0)))
+		for i in steps:
+			var next_x := o.position.x + travel / float(steps)
+			var next_pos := Vector2(next_x, side_scroll_lane_y)
+			if skin is W3DSkin and not (skin as W3DSkin).world_free(next_pos, r):
+				break
+			o.position.x = next_x
+		o.position.y = side_scroll_lane_y
+		return
 	if free_at(o.position + Vector2(d.x, 0), r):
 		o.position.x += d.x
 	if free_at(o.position + Vector2(0, d.y), r):
@@ -6806,6 +7043,12 @@ func break_prop(p: Prop) -> void:
 
 func enemy_died(e: Enemy) -> void:
 	enemies.erase(e)
+	if side_scroll_active:
+		side_scroll_enemies.erase(e)
+		burst(e.position, Color(0.9, 0.85, 0.75), 12, 55.0, 0.4)
+		snd("kill")
+		e.queue_free()
+		return
 	beast_note(e.kind, true)
 	if not (e.is_boss and e.kind == "vampire"):
 		mat_drops(str(e.kind), e.champ)
@@ -6903,6 +7146,12 @@ func enemy_died(e: Enemy) -> void:
 
 func game_over(_win: bool) -> void:
 	if state == "dying":
+		return
+	if side_scroll_active:
+		state = "play"
+		_side_scroll_stop()
+		_mission_test_restore()
+		say("TEST SIDE SCROLLING INTERROTTO")
 		return
 	state = "dying"
 	death_area = area
@@ -7343,6 +7592,8 @@ func clear_horde() -> void:
 
 
 func horde_update(real: float) -> void:
+	if side_scroll_active:
+		return
 	if player.zmode != 1:
 		return
 	horde_age += real
@@ -7524,6 +7775,8 @@ func interact(p) -> void:
 
 
 func change_area(dest: String) -> void:
+	if side_scroll_active:
+		return
 	if state != "play":
 		return
 	state = "fade"
@@ -7969,6 +8222,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			debug_return_state = state
 			state = "debug"
 		return
+	if side_scroll_active and (ev is InputEventKey or ev is InputEventJoypadButton or ev is InputEventMouseButton):
+		return
 	if state == "debug":
 		if ev.is_action_pressed("ui_down"):
 			debug_sel = (debug_sel + 1) % debug_list.size()
@@ -8240,9 +8495,9 @@ func _selftest() -> void:
 		30:
 			print("T world props=", props.size(), " spawns=", spawns.size(), " enemies=", enemies.size())
 			_debug_build_list()
-			assert(debug_list.size() == 1 + DUNS.size() + DEBUG_FUNCTION_ACTIONS.size() + MISSION_TEST_STORY.size() + quest_defs.size(), "Il menu debug non include tutte le voci")
+			assert(debug_list.size() == 1 + DUNS.size() + DEBUG_FUNCTION_ACTIONS.size() + MISSION_TEST_STORY.size() + quest_defs.size() + 1, "Il menu debug non include tutte le voci")
 			var mission_rows := debug_list.filter(func(row): return str(row[0]).begins_with("mission_test:"))
-			assert(mission_rows.size() == MISSION_TEST_STORY.size() + quest_defs.size(), "Il menu debug non include tutte le missioni generate")
+			assert(mission_rows.size() == MISSION_TEST_STORY.size() + quest_defs.size() + 1, "Il menu debug non include tutte le missioni e modalita' generate")
 			var function_rows := debug_list.filter(func(row): return str(row[0]).begins_with("debug_action:"))
 			assert(function_rows.size() == DEBUG_FUNCTION_ACTIONS.size(), "Il menu debug non include tutte le funzioni dei tasti")
 			var debug_key := InputEventKey.new()
@@ -9102,11 +9357,17 @@ var ai_stats := {}
 var ai_hp := 0.0
 var ai_base := Vector2.ZERO
 var run_test_base := Vector2.ZERO
+var side_scroll_test_run_mode := false
 
 
 func _process(_dt: float) -> void:
 	if mission_test_active and not mission_test_pending.is_empty() and state == "play" and area == "world":
 		_mission_test_begin_pending()
+	if side_scroll_active and state == "dying":
+		_side_scroll_stop()
+		state = "play"
+		_mission_test_restore()
+		say("TEST SIDE SCROLLING INTERROTTO")
 	if state == "map":   # la mappa si scorre con il movimento (stick, croce, WASD)
 		map_pan += Input.get_vector("move_left", "move_right", "move_up", "move_down") * _dt * (260.0 if map_zoom == 1 else 120.0)
 	if OS.get_cmdline_user_args().has("--gateshot"):
@@ -10756,8 +11017,154 @@ func _process(_dt: float) -> void:
 			var automatic_fire_restored := bool(settings["auto_fire"])
 			journey_update()
 			var advanced := journey_step() == 3 and int(player.items.get("arrosto", 0)) == 2
+			var limited_waves := horde_count > 0 and horde_count <= 3
+			var few_casters := early_mages == 1
 			print("BARN richiesta=", started, " auto_fire_off=", automatic_fire_disabled, " nemici_onda=", horde_count, " visibili=", horde_within_view, " deboli_iniziali=", horde_early_weak and early_roster_weak, " incantatori_su_20=", early_mages, " difficolta_progressiva=", staged_difficulty, " anime_ridotte=", reduced_souls, " camera=", camera_height_reasonable, " conto_alla_rovescia=", countdown_active, " conclusa=", completed, " auto_fire_ripristinato=", automatic_fire_restored, " progresso=", advanced, " avvicinamento=", steps, " obiettivo=", objective())
 			assert(started and automatic_fire_disabled and limited_waves and horde_within_view and horde_early_weak and early_roster_weak and few_casters and staged_difficulty and reduced_souls and camera_height_reasonable and countdown_active and completed and automatic_fire_restored and advanced, "Assalto al fienile non completato correttamente")
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--sidescrolltest"):
+		tgs += 1
+		if tgs == 5:
+			if area != "world":
+				_do_change("world")
+			state = "play"
+			_mission_test_build_entries()
+			assert(mission_test_entries.filter(func(entry): return entry["kind"] == "mode" and entry["id"] == "side_scroll").size() == 1, "Side Scrolling assente dal menu test")
+			mission_test_snapshot = _mission_test_capture()
+			mission_test_active = true
+			mission_test_entry = {"kind": "mode", "id": "side_scroll"}
+			side_scroll_test_run_mode = run_mode
+			_side_scroll_start()
+			var lane_y := side_scroll_lane_y
+			var skin3d := skin as W3DSkin
+			var obstacle_detoured := false
+			var obstacle_blocks_track := false
+			var detour_clears_track := false
+			var original_position := player.position
+			for ck in skin3d.chunks:
+				for collider in skin3d.chunks[ck].get("cols", []):
+					var local_center: Vector2 = collider[1]
+					var center := (local_center + skin3d.world_off) * Game.TS
+					var half_width := float(collider[2]) if str(collider[0]) == "c" else (collider[2] as Vector2).length()
+					if half_width > 4.0:
+						continue
+					var test_start_x := center.x - (half_width + 2.0) * Game.TS
+					if test_start_x < side_scroll_start_x or test_start_x + 224.0 >= side_scroll_goal_x:
+						continue
+					if center.y < 40.0 * Game.TS or center.y > (Game.MH - 40.0) * Game.TS:
+						continue
+					if skin3d.side_scroll_breakable_at(center, player.radius) or skin3d.world_free(center, player.radius):
+						continue
+					if not skin3d.world_free(Vector2(test_start_x, center.y), player.radius):
+						continue
+					side_scroll_lane_y = center.y
+					side_scroll_lane_base_y = center.y
+					side_scroll_lane_target_y = center.y
+					side_scroll_route_t = 0.0
+					player.position = Vector2(test_start_x, center.y)
+					_side_scroll_update_route(0.13)
+					var detour_y := side_scroll_lane_target_y
+					if not is_equal_approx(detour_y, center.y):
+						obstacle_detoured = true
+						var travel := center.x + (half_width + 2.0) * Game.TS - test_start_x
+						move_body(player, Vector2(travel, 0.0), player.radius)
+						obstacle_blocks_track = player.position.x < center.x
+						player.position = Vector2(test_start_x, center.y)
+						side_scroll_lane_y = detour_y
+						side_scroll_lane_target_y = detour_y
+						move_body(player, Vector2(travel, 0.0), player.radius)
+						detour_clears_track = player.position.x > center.x + half_width * Game.TS
+						break
+				if obstacle_detoured:
+					break
+			player.position = original_position
+			side_scroll_lane_y = lane_y
+			side_scroll_lane_base_y = lane_y
+			side_scroll_lane_target_y = lane_y
+			side_scroll_route_t = 0.0
+			var temporary_props_restored := false
+			var test_prop_found := false
+			for ck in skin3d.chunks:
+				for item in skin3d.chunks[ck].get("breakables", []):
+					var kind := str(item["kind"])
+					if kind not in ["barrel", "crate", "hay"]:
+						continue
+					var key_pos: Vector2 = item["pos"]
+					var key := skin3d._world_prop_key(key_pos)
+					if persist["broken"].has(key):
+						continue
+					test_prop_found = true
+					var hit_pos := (key_pos + skin3d.world_off) * Game.TS - Vector2(16.0, 0.0)
+					skin3d.hit_world_prop(hit_pos, Vector2.RIGHT, 32.0, 1.0, 1.0, "sword", false)
+					var changed_key := ""
+					for changed in skin3d.side_scroll_prop_changes:
+						if persist["broken"].has(changed):
+							changed_key = str(changed)
+							break
+					if changed_key != "":
+						skin3d._run_jobs(1e9)
+						var removed := true
+						for changed_chunk in skin3d.chunks:
+							for changed_item in skin3d.chunks[changed_chunk].get("breakables", []):
+								if skin3d._world_prop_key(changed_item["pos"]) == changed_key:
+									removed = false
+						skin3d.side_scroll_props_restore()
+						skin3d._run_jobs(1e9)
+						var restored := false
+						for changed_chunk in skin3d.chunks:
+							for changed_item in skin3d.chunks[changed_chunk].get("breakables", []):
+								if skin3d._world_prop_key(changed_item["pos"]) == changed_key:
+									restored = true
+						temporary_props_restored = removed and restored and not persist["broken"].has(changed_key)
+					skin3d.side_scroll_props_begin()
+					break
+				if test_prop_found:
+					break
+			var movement_start := -1.0
+			for offset in range(0, 128):
+				var candidate_x := player.position.x + float(offset) * 16.0
+				if candidate_x + 32.0 >= side_scroll_goal_x:
+					break
+				var clear_path := true
+				for step in range(1, 5):
+					if not skin3d.world_free(Vector2(candidate_x + float(step) * 8.0, lane_y), player.radius):
+						clear_path = false
+						break
+				if clear_path:
+					movement_start = candidate_x
+					break
+			if movement_start >= 0.0:
+				player.position.x = movement_start
+			var initial_x := player.position.x
+			move_body(player, Vector2(32.0, 60.0), player.radius)
+			var axis_only := is_equal_approx(player.position.y, lane_y) and is_equal_approx(player.position.x, initial_x + 32.0)
+			_side_scroll_spawn_enemy()
+			_side_scroll_spawn_enemy()
+			var enemies_both_sides: bool = side_scroll_enemies.size() == 2 and side_scroll_enemies[0].position.x < player.position.x and side_scroll_enemies[1].position.x > player.position.x
+			var enemies_in_view := side_scroll_enemies.all(func(enemy): return absf(enemy.position.x - player.position.x) < 150.0)
+			var souls_before_kill := player.souls
+			var props_before_kill := props.size()
+			enemy_died(side_scroll_enemies[0])
+			var kills_isolated := player.souls == souls_before_kill and props.size() == props_before_kill
+			var test_pickup: Pickup = side_scroll_pickups[0]
+			player.position.x = test_pickup.position.x
+			test_pickup._process(0.1)
+			var powerup_collected := player.buffs.has("b_mv") and is_equal_approx(float(player.buffs["b_mv"]), 8.0)
+			player._process(9.0)
+			var powerup_expired := not player.buffs.has("b_mv") and not player.bval.has("b_mv")
+			print("SIDESCROLL ostacolo_blocca_binario=", obstacle_blocks_track, " devia_ostacoli_pesanti=", obstacle_detoured, " devia_libera_binario=", detour_clears_track, " ripristina_oggetti_leggeri=", temporary_props_restored, " movimento_solo_asse=", axis_only, " nemici_su_entrambi_i_lati=", enemies_both_sides, " nemici_inquadrati=", enemies_in_view, " ricompense_isolate=", kills_isolated, " bonus_temporaneo=", powerup_collected and powerup_expired)
+			assert(obstacle_blocks_track and obstacle_detoured and detour_clears_track and test_prop_found and temporary_props_restored and axis_only and enemies_both_sides and enemies_in_view and kills_isolated and powerup_collected and powerup_expired, "Test Side Scrolling non valido")
+		if tgs == 6:
+			var camera_side := skin is W3DSkin and (skin as W3DSkin).cam.projection == Camera3D.PROJECTION_ORTHOGONAL and is_equal_approx((skin as W3DSkin).cam.near, 0.1) and is_equal_approx((skin as W3DSkin).cam.far, 120.0)
+			player.position.x = side_scroll_goal_x
+			_side_scroll_update(0.016)
+			var state_restored := not mission_test_active and not side_scroll_active and run_mode == side_scroll_test_run_mode
+			print("SIDESCROLL camera_laterale=", camera_side, " arrivo_ripristina_stato=", state_restored)
+			assert(camera_side and state_restored, "Ripristino Side Scrolling non riuscito")
+		if tgs == 7:
+			var camera_restored := skin is W3DSkin and (skin as W3DSkin).cam.projection == Camera3D.PROJECTION_PERSPECTIVE
+			print("SIDESCROLL camera_ripristinata=", camera_restored)
+			assert(camera_restored, "La camera normale non e' stata ripristinata")
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--storytest"):
 		tgs += 1
@@ -10915,7 +11322,7 @@ func _process(_dt: float) -> void:
 				cur_bio = bi
 				sfx_node.ambient(str(bi))
 				amb_target = Game.BIO[bi]["amb"]
-				if state == "play":
+				if state == "play" and not side_scroll_active:
 					say(Game.BIO[bi]["n"])
 	if player != null and state == "play" and area != "":
 		if not free_at(player.position, player.radius):
@@ -10957,7 +11364,7 @@ func _process(_dt: float) -> void:
 	cm.color = cm.color.lerp(tgt, 1.0 - exp(-real * 1.6))
 	if wr_node != null and is_instance_valid(wr_node):
 		wr_node.set_boost(cm.color)
-	if player != null and state == "play":
+	if player != null and state == "play" and not side_scroll_active:
 		prompt = ""
 		prompt2 = ""
 		near_obj = null
@@ -11083,33 +11490,35 @@ func _process(_dt: float) -> void:
 		var cam_snap: Vector2 = cam_base.round() - cam_base
 		var cam_shk := (Vector2(randf_range(-1, 1), randf_range(-1, 1)) * shake_v).round() if shake_v > 0.4 else Vector2.ZERO
 		player.cam.offset = cam_snap + cam_shk
-		for p in props.duplicate():
-			if p.kind == "loot" and p.item.get("k", "") == "shard" and p.position.distance_to(player.position) < 34.0:
-				take_item(p)
-				continue
-			if p.kind == "chest" and not p.opened and p.position.distance_to(player.position) < 14.0:
-				p.opened = true
-				persist["opened"][key(p.cell)] = true
-				if p.has_meta("poi") and str(p.get_meta("poi")) != "":
-					poi_bonus(str(p.get_meta("poi")), p.position)
-				p.spr.modulate = Color(0.5, 0.45, 0.55)
-				burst(p.position, Color(1, 0.8, 0.3), 20, 60.0, 0.6)
-				chest_loot(p)
+		if not side_scroll_active:
+			for p in props.duplicate():
+				if p.kind == "loot" and p.item.get("k", "") == "shard" and p.position.distance_to(player.position) < 34.0:
+					take_item(p)
+					continue
+				if p.kind == "chest" and not p.opened and p.position.distance_to(player.position) < 14.0:
+					p.opened = true
+					persist["opened"][key(p.cell)] = true
+					if p.has_meta("poi") and str(p.get_meta("poi")) != "":
+						poi_bonus(str(p.get_meta("poi")), p.position)
+					p.spr.modulate = Color(0.5, 0.45, 0.55)
+					burst(p.position, Color(1, 0.8, 0.3), 20, 60.0, 0.6)
+					chest_loot(p)
 	if player != null and state == "play" and area == "world":
 		stream_update()
-		spawn_t -= real
-		if spawn_t <= 0.0:
-			spawn_t = 0.5
-			spawn_tick()
-			poi_tick()
-			world_event_update(0.5)
-	if player != null and state == "play":
+		if not side_scroll_active:
+			spawn_t -= real
+			if spawn_t <= 0.0:
+				spawn_t = 0.5
+				spawn_tick()
+				poi_tick()
+				world_event_update(0.5)
+	if player != null and state == "play" and not side_scroll_active:
 		quest_update()
 		journey_update()
 		respawn_fix_update(get_process_delta_time())
-	if player != null and state == "play" and area == "world":
+	if player != null and state == "play" and area == "world" and not side_scroll_active:
 		arena_update(real)
-	if player != null and state == "play":
+	if player != null and state == "play" and not side_scroll_active:
 		wake_t -= real
 		if wake_t <= 0.0:
 			wake_t = 0.15
@@ -11123,6 +11532,8 @@ func _process(_dt: float) -> void:
 		update_minimap(real)
 		horde_update(real)
 		inv_pad_update(real)
+	if side_scroll_active:
+		_side_scroll_update(real)
 	if Engine.get_process_frames() % 2 == 0:
 		if Engine.get_process_frames() % 120 == 0:
 			flick = flick.filter(func(fe): return is_instance_valid(fe[0]))       # luci di oggetti rimossi
