@@ -3343,7 +3343,7 @@ func _mission_test_copy(value: Variant) -> Variant:
 
 func _mission_test_capture() -> Dictionary:
 	var player_state := {}
-	for property in ["lv", "souls", "rk", "attr", "kills", "wslots", "wcur", "spells", "known", "relics", "mats", "items", "armor", "brews", "bag", "belt", "relic_eq", "hp", "st", "mana", "focus", "position", "chrono", "pity"]:
+	for property in ["lv", "souls", "rk", "attr", "kills", "wslots", "wcur", "spells", "known", "relics", "mats", "items", "armor", "brews", "bag", "belt", "relic_eq", "hp", "st", "mana", "focus", "position", "chrono", "pity", "buffs", "bval", "shield", "shield_t", "face", "aim_world", "flasks", "drink_t", "heavy_t", "atk_t", "atk_dur", "atk_cd", "combo", "combo_t", "dash_t", "dash_cd", "dash_dir", "inv", "spell_cd", "regen_t", "cast_t", "riposta_cd", "parry_t", "parry_cd", "veh", "z_index"]:
 		player_state[property] = _mission_test_copy(player.get(property))
 	return {
 		"persist": persist.duplicate(true),
@@ -3356,14 +3356,20 @@ func _mission_test_capture() -> Dictionary:
 		"story_runner": Story.runner,
 		"story_runner_done": Story.runner_done,
 		"barn_runner": Story.barn_runner,
-		"barn_final": Story.barn_final,
 		"barn_t": Story.barn_t,
+		"barn_horde_kills": Story.barn_horde_kills,
+		"barn_horde_spawns": Story.barn_horde_spawns,
 		"barn_wait": Story.barn_wait,
 		"barn_runtime": Story.barn_runtime,
 		"barn_prev_mode": Story.barn_prev_mode,
 		"barn_prev_focus": Story.barn_prev_focus,
+		"barn_prev_auto_fire": Story.barn_prev_auto_fire,
 		"barn_prev_horde_age": Story.barn_prev_horde_age,
 		"barn_prev_horde_t": Story.barn_prev_horde_t,
+		"settings_auto_fire": bool(settings.get("auto_fire", false)),
+		"run_mode": run_mode,
+		"skin_fpv": bool((skin as W3DSkin).fpv) if skin is W3DSkin else false,
+		"inv_open": inv_open,
 	}
 
 
@@ -3372,8 +3378,8 @@ func _mission_test_restore() -> void:
 		mission_test_pending.clear()
 		return
 	var snapshot := mission_test_snapshot
-	var previous_refs := [snapshot["story_runner"], snapshot["barn_runner"], snapshot["barn_final"]]
-	for current in [Story.runner, Story.barn_runner, Story.barn_final]:
+	var previous_refs := [snapshot["story_runner"], snapshot["barn_runner"]]
+	for current in [Story.runner, Story.barn_runner]:
 		if current != null and is_instance_valid(current) and not previous_refs.has(current):
 			current.queue_free()
 	if str(mission_test_entry.get("id", "")) == "story:barn":
@@ -3396,14 +3402,21 @@ func _mission_test_restore() -> void:
 	Story.runner = snapshot["story_runner"]
 	Story.runner_done = bool(snapshot["story_runner_done"])
 	Story.barn_runner = snapshot["barn_runner"]
-	Story.barn_final = snapshot["barn_final"]
 	Story.barn_t = float(snapshot["barn_t"])
+	Story.barn_horde_kills = int(snapshot["barn_horde_kills"])
+	Story.barn_horde_spawns = int(snapshot["barn_horde_spawns"])
 	Story.barn_wait = float(snapshot["barn_wait"])
 	Story.barn_runtime = bool(snapshot["barn_runtime"])
 	Story.barn_prev_mode = int(snapshot["barn_prev_mode"])
 	Story.barn_prev_focus = float(snapshot["barn_prev_focus"])
+	Story.barn_prev_auto_fire = bool(snapshot["barn_prev_auto_fire"])
 	Story.barn_prev_horde_age = float(snapshot["barn_prev_horde_age"])
 	Story.barn_prev_horde_t = float(snapshot["barn_prev_horde_t"])
+	settings["auto_fire"] = bool(snapshot["settings_auto_fire"])
+	run_mode = bool(snapshot["run_mode"])
+	inv_open = bool(snapshot["inv_open"])
+	if skin is W3DSkin and area == "world" and (skin as W3DSkin).world_on and bool(snapshot["skin_fpv"]) and not (skin as W3DSkin).fpv:
+		(skin as W3DSkin).fpv_set(true)
 	mission_test_active = false
 	mission_test_pending.clear()
 	mission_test_entry.clear()
@@ -3443,8 +3456,9 @@ func _mission_test_start_story(id: String) -> void:
 			persist["journey"] = 2
 			story_flags.erase(Story.BARN_ASSAULT)
 			Story.barn_runner = null
-			Story.barn_final = null
 			Story.barn_t = 0.0
+			Story.barn_horde_kills = 0
+			Story.barn_horde_spawns = 0
 			Story.barn_wait = Story.BARN_DELAY
 			Story.barn_runtime = false
 			Story.update(self, 0.05)
@@ -6804,6 +6818,7 @@ func enemy_died(e: Enemy) -> void:
 	if e.kind == "ooze" and not e.is_boss:
 		for i in 2:
 			var sp := spawn_enemy("ooze_small", e.position + Vector2(randf_range(-9, 9), randf_range(-6, 6)), 1.0, false, Color.WHITE)
+			sp.horde = e.horde
 			sp.awake = true
 			sp.set_process(true)
 	player.kills += 1
@@ -6820,8 +6835,11 @@ func enemy_died(e: Enemy) -> void:
 		burst(player.position, Color(1.0, 0.75, 0.3), 24, 60.0, 0.6)
 		snd("level")
 	var gain0 := int(round(e.xp * e.souls_mult * (1.0 + 0.1 * player.r("fortuna") + 0.02 * player.a("fort") + 0.06 * player.rl("moneta")) * chain_mult() * (2.0 if player.zmode == 1 else 1.0)))
+	if e.horde and Story.barn_assault_active(self):
+		gain0 = Story.barn_horde_soul_reward(gain0)
 	run_souls_total += gain0
-	drop(e.position, "soul", gain0)
+	if gain0 > 0:
+		drop(e.position, "soul", gain0)
 	if true:
 		if e.is_boss:
 			drop_shard(e.position, e.kind)
@@ -7327,19 +7345,18 @@ func clear_horde() -> void:
 func horde_update(real: float) -> void:
 	if player.zmode != 1:
 		return
-	if Story.barn_final_active(self):
-		return
 	horde_age += real
 	horde_t -= real
 	if horde_t > 0.0:
 		return
-	var big := Story.barn_status(self) == "active"      # assalto al fienile: ondate molto piu' grosse
-	horde_t = maxf(0.35 if big else 0.7, (0.9 if big else 1.6) - horde_age / 60.0)   # ondate sempre piu' fitte
+	var big := Story.barn_assault_active(self)
+	var elapsed := maxf(0.0, Story.BARN_TIME - Story.barn_t) if big else 0.0
+	horde_t = maxf(1.3, 2.5 - elapsed / 100.0) if big else maxf(0.7, 1.6 - horde_age / 60.0)
 	var alive := 0
 	for e in enemies:
 		if e.horde:
 			alive += 1
-	var cap := mini(180 if big else 110, (80 if big else 45) + int(horde_age / (1.5 if big else 3.0)))
+	var cap := mini(14, 6 + int(elapsed / 15.0)) if big else mini(110, 45 + int(horde_age / 3.0))
 	if alive >= cap:
 		return
 	var pool: Array = []
@@ -7352,18 +7369,24 @@ func horde_update(real: float) -> void:
 	else:
 		pool = Game.BIO[int(dun.get("bio", 1))]["pool"]
 	# a gruppi: ogni ondata arriva da una o due direzioni, appena fuori dallo schermo
-	var n := mini(cap - alive, (14 if big else 6) + player.lv / 6 + int(horde_age / (8.0 if big else 15.0)))
+	var wave_size := 3 + mini(2, int(elapsed / 40.0)) if big else 6 + player.lv / 6 + int(horde_age / 15.0)
+	var n := mini(cap - alive, wave_size)
 	var dirs: Array = [randf() * TAU]
 	if n > 8:
 		dirs.append(dirs[0] + PI + randf_range(-0.8, 0.8))
+	var spawn_min := 140.0 if big else 250.0
+	var spawn_max := 210.0 if big else 330.0
+	var fallback_min := 140.0 if big else 220.0
+	var fallback_max := 210.0 if big else 320.0
 	for i in n:
 		var a0: float = dirs[i % dirs.size()]
 		for att in 12:
-			var pos := player.position + Vector2.from_angle(a0 + randf_range(-0.6, 0.6)) * randf_range(250.0, 330.0) * (1.25 if big else 1.0)
+			var pos := player.position + Vector2.from_angle(a0 + randf_range(-0.6, 0.6)) * randf_range(spawn_min, spawn_max)
 			if att >= 8:
-				pos = player.position + Vector2.from_angle(randf() * TAU) * randf_range(220.0, 320.0)
+				pos = player.position + Vector2.from_angle(randf() * TAU) * randf_range(fallback_min, fallback_max)
 			if free_at(pos, 5.0):
-				var e := spawn_enemy(pool[randi() % pool.size()], pos, 0.55, false, tint)
+				var kind := Story.barn_horde_enemy_kind() if big else str(pool[randi() % pool.size()])
+				var e := spawn_enemy(kind, pos, 0.55, false, tint)
 				e.horde = true
 				e.dmg *= 0.75
 				e.awake = true
@@ -10664,30 +10687,77 @@ func _process(_dt: float) -> void:
 			Story.barn_runner = null
 			Story.barn_runtime = false
 			Story.barn_t = 0.0
+			Story.barn_horde_kills = 0
+			Story.barn_horde_spawns = 0
 			Story.barn_wait = 0.0
 			Story.update(self, 0.05)
 			print("BARN prima del ritardo: stato=", Story.barn_status(self))
 			Story.barn_wait = Story.BARN_DELAY       # il contadino arriva solo dopo il ritardo: lo salto
 			player.items.erase("arrosto")
 			player.focus = Player.MAX_FOCUS
+			settings["auto_fire"] = true
 			state = "play"
 			Story.update(self, 0.05)
 			var steps := 0
 			while steps < 400 and Story.barn_status(self) != "active":
 				Story.update(self, 0.05)
 				steps += 1
+			Story.update(self, 0.05)
 			var started := Story.barn_status(self) == "active" and player.zmode == 1 and state == "dialog"
+			var automatic_fire_disabled := not bool(settings["auto_fire"])
+			var camera_height_reasonable := skin is W3DSkin and is_equal_approx((skin as W3DSkin).cam_extra, Story.BARN_CAM) and Story.BARN_CAM <= 10.0
 			state = "play"
-			Story.update(self, Story.BARN_TIME + 0.1)
-			var final_spawned: bool = Story.barn_final_active(self) and is_instance_valid(Story.barn_final) and Story.barn_final.kind == "knight_fallen"
-			if is_instance_valid(Story.barn_final):
-				Story.barn_final.dying = true
+			clear_horde()
+			horde_t = 0.0
+			horde_update(1.0)
+			var horde_count := 0
+			var horde_within_view := true
+			var horde_early_weak := true
+			for enemy in enemies:
+				if enemy.horde:
+					horde_count += 1
+					if enemy.position.distance_to(player.position) > 220.0:
+						horde_within_view = false
+					if not ["rat", "goblin", "kobold", "skeleton", "crow"].has(enemy.kind):
+						horde_early_weak = false
+			var saved_barn_t := Story.barn_t
+			var saved_barn_spawns := Story.barn_horde_spawns
+			Story.barn_horde_spawns = 0
+			Story.barn_t = Story.BARN_TIME
+			var early_mages := 0
+			var early_roster_weak := true
+			for i in 20:
+				var kind := Story.barn_horde_enemy_kind()
+				if kind == "goblin_shaman":
+					early_mages += 1
+				elif not Story.BARN_WEAK_ENEMIES.has(kind):
+					early_roster_weak = false
+			Story.barn_t = 30.0
+			Story.barn_horde_spawns = 4
+			var middle_kind := Story.barn_horde_enemy_kind()
+			Story.barn_t = 19.0
+			Story.barn_horde_spawns = 4
+			var late_kind := Story.barn_horde_enemy_kind()
+			var staged_difficulty := middle_kind == "ghoul" and ["orc", "troll"].has(late_kind)
+			Story.barn_t = saved_barn_t
+			Story.barn_horde_spawns = saved_barn_spawns
+			var souls: Array[int] = []
+			for i in 5:
+				souls.append(Story.barn_horde_soul_reward(40))
+			var reduced_souls := souls.count(0) == 4 and souls[4] == 10
+			var countdown_active := true
+			Story.update(self, Story.BARN_TIME - 0.05)
+			countdown_active = Story.barn_status(self) == "active" and Story.barn_t > 0.0 and Story.barn_t <= 0.051
+			Story.update(self, 0.04)
+			countdown_active = countdown_active and Story.barn_status(self) == "active" and Story.barn_t > 0.0
+			Story.update(self, 0.02)
 			Story.update(self, 0.05)
 			var completed := Story.barn_done(self) and player.zmode == 0
+			var automatic_fire_restored := bool(settings["auto_fire"])
 			journey_update()
 			var advanced := journey_step() == 3 and int(player.items.get("arrosto", 0)) == 2
-			print("BARN richiesta=", started, " capobranco=", final_spawned, " conclusa=", completed, " progresso=", advanced, " avvicinamento=", steps, " obiettivo=", objective())
-			assert(started and final_spawned and completed and advanced, "Assalto al fienile non completato correttamente")
+			print("BARN richiesta=", started, " auto_fire_off=", automatic_fire_disabled, " nemici_onda=", horde_count, " visibili=", horde_within_view, " deboli_iniziali=", horde_early_weak and early_roster_weak, " incantatori_su_20=", early_mages, " difficolta_progressiva=", staged_difficulty, " anime_ridotte=", reduced_souls, " camera=", camera_height_reasonable, " conto_alla_rovescia=", countdown_active, " conclusa=", completed, " auto_fire_ripristinato=", automatic_fire_restored, " progresso=", advanced, " avvicinamento=", steps, " obiettivo=", objective())
+			assert(started and automatic_fire_disabled and limited_waves and horde_within_view and horde_early_weak and early_roster_weak and few_casters and staged_difficulty and reduced_souls and camera_height_reasonable and countdown_active and completed and automatic_fire_restored and advanced, "Assalto al fienile non completato correttamente")
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--storytest"):
 		tgs += 1

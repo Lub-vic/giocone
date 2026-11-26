@@ -537,6 +537,7 @@ func _process(dt: float) -> void:
 		var fy: float = (fsk as W3DSkin).fpv_yaw
 		face = Vector2(-sin(fy), -cos(fy))       # si colpisce dove si guarda
 		aim_world = position + face * 80.0
+	var barn_horde := Story.barn_assault_active(main)
 	# V / croce destra cambia Orda/Tattica; U / croce giu' cambia zoom. Il movimento usa lo stick sinistro.
 	if act("zoom"):
 		cycle_zoom()
@@ -557,7 +558,7 @@ func _process(dt: float) -> void:
 	if col != null and is_instance_valid(col) and not col.dead and col.state != "sleep":
 		zt = minf(zt, 0.8)   # contro i colossi la visuale si allarga
 	cam.zoom = cam.zoom.lerp(Vector2(zt, zt), 1.0 - exp(-dt * 7.0))
-	if zmode == 1:
+	if zmode == 1 and not barn_horde:
 		auto_weapons(dt)
 	elif zmode == 2:
 		if act("attack"):
@@ -611,9 +612,9 @@ func _process(dt: float) -> void:
 	# attacchi
 	var w := weapon()
 	var f: Dictionary = Rpg.FAM[w["f"]]
-	if (act_held("attack") or auto_fire(f)) and atk_cd <= 0.0 and idle() and st > 0.0 and zmode == 0 and veh.is_empty():
+	if (act_held("attack") or (not barn_horde and auto_fire(f))) and atk_cd <= 0.0 and idle() and st > 0.0 and (zmode == 0 or barn_horde) and veh.is_empty():
 		attack()
-	if act("heavy") and idle() and st > 0.0 and zmode == 0 and veh.is_empty() and spend(float(f["hc"]) * Rpg.st_mult(w)):
+	if act("heavy") and idle() and st > 0.0 and (zmode == 0 or barn_horde) and veh.is_empty() and spend(float(f["hc"]) * Rpg.st_mult(w)):
 		heavy_t = f["hw"]
 		var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
 		if near != null and not bool(main.settings["aim_manual"]):
@@ -939,7 +940,7 @@ func _draw_slash() -> void:
 		if ll > 0:
 			nb = 1 + ll
 			brad = 28.0 + 3.0 * ll
-	elif zmode == 1:
+	elif zmode == 1 and not Story.barn_assault_active(main):
 		nb = mini(6, 2 + lv / 8)
 	for i in nb:
 		var a := blade_ang + i * TAU / nb
@@ -1103,7 +1104,7 @@ func set_zmode(nz: int) -> void:
 		main.say("TATTICA: COLPO = INVIA GLI ALLEATI   PESANTE = RICHIAMA")
 		main.snd("page")
 	elif nz == 1:
-		main.say("MODALITA ORDA: LE ARMI COLPISCONO DA SOLE")
+		main.say("MODALITA ORDA: ATTACCO MANUALE AL FIENILE" if Story.barn_assault_active(main) else "MODALITA ORDA: LE ARMI COLPISCONO DA SOLE")
 		main.snd("roar")
 	else:
 		main.snd("page")

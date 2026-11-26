@@ -15,17 +15,20 @@ const ESCAPE_INTRO := "escape_intro"
 const BARN_ASSAULT := "barn_assault"
 const BARN_TIME := 120.0           # durata dell'assalto al fienile (secondi)
 const BARN_DELAY := 150.0          # il contadino arriva solo dopo tanti secondi di gioco da quando la missione si sblocca
-const BARN_CAM := 26.0             # di quanto si alza la vista durante l'assalto
+const BARN_CAM := 8.0              # di quanto si alza la vista durante l'assalto
+const BARN_WEAK_ENEMIES := ["rat", "goblin", "kobold", "skel_runner", "crow"]
 const FIRE_OFF := Vector2i(3, 0)           # il falo' del villaggio e' a SEEDS[0] + questo
 const ESCAPE_LINE := "IL VILLAGGIO E' STATO INVASO DURANTE LA NOTTE. I MOSTRI SONO OVUNQUE E IL FALO' E' SPENTO. LIBERALO, TI PREGO: E' LA' DOVE INDICA LA FRECCIA"
 static var runner = null    # il fuggiasco che corre incontro all'eroe appena uscito dalle celle
 static var runner_done := false
 static var barn_runner = null
-static var barn_final = null
 static var barn_t := 0.0
+static var barn_horde_kills := 0
+static var barn_horde_spawns := 0
 static var barn_wait := 0.0
 static var barn_prev_mode := 0
 static var barn_prev_focus := 0.0
+static var barn_prev_auto_fire := false
 static var barn_prev_horde_age := 0.0
 static var barn_prev_horde_t := 0.0
 static var barn_runtime := false
@@ -102,8 +105,26 @@ static func barn_done(m) -> bool:
 	return barn_status(m) == "done"
 
 
-static func barn_final_active(m) -> bool:
-	return barn_status(m) == "final"
+static func barn_assault_active(m) -> bool:
+	return not m.run_mode and m.area == "world" and barn_status(m) == "active"
+
+
+static func barn_horde_soul_reward(base: int) -> int:
+	barn_horde_kills += 1
+	if barn_horde_kills % 5 != 0:
+		return 0
+	return maxi(1, int(round(base * 0.25)))
+
+
+static func barn_horde_enemy_kind() -> String:
+	barn_horde_spawns += 1
+	if barn_horde_spawns % 20 == 0:
+		return "goblin_shaman"
+	if barn_t <= 20.0 and barn_horde_spawns % 5 == 0:
+		return ["orc", "orc", "troll"][int(barn_horde_spawns / 5 - 1) % 3]
+	if barn_t <= 35.0 and barn_horde_spawns % 5 == 0:
+		return "ghoul"
+	return BARN_WEAK_ENEMIES[randi_range(0, BARN_WEAK_ENEMIES.size() - 1)]
 
 
 static func _spawn_barn_farmer(m) -> void:
@@ -119,6 +140,7 @@ static func _restore_barn_mode(m) -> void:
 	if m.player.zmode != barn_prev_mode:
 		m.player.set_zmode(barn_prev_mode)
 	m.player.focus = barn_prev_focus
+	m.settings["auto_fire"] = barn_prev_auto_fire
 	if barn_prev_mode == 1:
 		m.horde_age = barn_prev_horde_age
 		m.horde_t = barn_prev_horde_t
@@ -132,13 +154,17 @@ static func _ensure_barn_mode(m) -> void:
 	if not barn_runtime:
 		barn_runtime = true
 		barn_t = BARN_TIME
+		barn_horde_kills = 0
+		barn_horde_spawns = 0
 		barn_prev_mode = m.player.zmode
 		barn_prev_focus = m.player.focus
+		barn_prev_auto_fire = bool(m.settings.get("auto_fire", false))
 		barn_prev_horde_age = m.horde_age
 		barn_prev_horde_t = m.horde_t
 		if barn_prev_mode != 1:
 			m.horde_age = 0.0
 			m.horde_t = 0.0
+		m.settings["auto_fire"] = false
 	m.player.focus = Player.MAX_FOCUS
 	if m.player.zmode != 1:
 		m.player.set_zmode(1)
@@ -185,26 +211,11 @@ static func _run_to_hero_barn(m, dt: float) -> void:
 
 static func _finish_barn_assault(m) -> void:
 	flags(m)[BARN_ASSAULT] = "done"
-	barn_final = null
 	_restore_barn_mode(m)
 	m.popup(m.player.position + Vector2(0, -30), "RISERVE DEL FIENILE SALVE!", Color(1.0, 0.85, 0.5))
 	m.snd("level")
 	m.shake(4.0)
 	m.save_game()
-
-
-static func _spawn_barn_final(m) -> void:
-	var pos: Vector2 = m.player.position + Vector2(180.0, 0.0)
-	for att in 20:
-		var candidate: Vector2 = m.player.position + Vector2.from_angle(randf() * TAU) * randf_range(170.0, 230.0)
-		if m.free_at(candidate, 8.0):
-			pos = candidate
-			break
-	barn_final = m.spawn_enemy("knight_fallen", pos, 0.7, false, Color(1.0, 0.8, 0.55))
-	barn_final.awake = true
-	barn_final.set_process(true)
-	m.say("IL CAPOBRANCO HA RAGGIUNTO IL FIENILE!")
-	m.snd("roar")
 
 
 static func _barn_cam(m) -> void:
@@ -227,7 +238,6 @@ static func _barn_update(m, dt: float) -> void:
 			return
 		f[BARN_ASSAULT] = "approach"
 		barn_runner = null
-		barn_final = null
 		barn_runtime = false
 		barn_t = 0.0
 		status = "approach"
@@ -236,8 +246,7 @@ static func _barn_update(m, dt: float) -> void:
 			_run_to_hero_barn(m, dt)
 		return
 	if status != "active":
-		if status != "final":
-			return
+		return
 	if m.area != "world":
 		if m.player.zmode == 1:
 			m.player.set_zmode(barn_prev_mode)
@@ -246,16 +255,10 @@ static func _barn_update(m, dt: float) -> void:
 	if m.state != "play":
 		return
 	if status == "active":
-		barn_t -= dt
+		barn_t = maxf(0.0, barn_t - dt)
 		if barn_t <= 0.0:
-			f[BARN_ASSAULT] = "final"
-			barn_final = null
 			m.clear_horde()
-			_spawn_barn_final(m)
-	elif not is_instance_valid(barn_final):
-		_spawn_barn_final(m)
-	elif barn_final.dying:
-		_finish_barn_assault(m)
+			_finish_barn_assault(m)
 
 
 static func init_world(m) -> void:
