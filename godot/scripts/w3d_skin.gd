@@ -2477,6 +2477,19 @@ var game_road_sd := PackedFloat32Array()    # per texel: distanza con segno dal 
 ## Il generatore casuale avanza comunque, quindi tutto il resto del mondo resta identico.
 const GAME_ROAD_CLEAR := 0.4       # spazio libero attorno al centro di una cella strada (il giocatore ha raggio 0.25)
 var road_guard := true
+const RELOCATE_STEPS := [2.0, 3.5, 5.0]     # di quanto si prova a spostare un oggetto che copre una strada (celle)
+var relocated_count := 0
+var removed_count := 0
+
+
+## un oggetto spostato non deve compenetrare quelli gia' costruiti nello stesso blocco
+func _overlaps_earlier(cols: Array, from: int) -> bool:
+	for i in range(from, cols.size()):
+		var center: Vector2 = cols[i][1]
+		for j in from:
+			if _col_hit(cols[j], center, 0.35):
+				return true
+	return false
 const PLAYABLE_SCENE_PROPS := ["page", "loot", "gate_top"]
 
 
@@ -2558,9 +2571,32 @@ func _obj(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGener
 		super(k, o, p, yaw, r, cols, lamps)
 		return
 	var mark := _build_mark([o], cols, lamps)
+	var state_before := r.state
+	var colour_before := o.rn.state
 	super(k, o, p, yaw, r, cols, lamps)
-	if _covers_game_road(cols, mark["cols"]):
-		_build_rollback(mark, [o], cols, lamps)
+	if not _covers_game_road(cols, mark["cols"]):
+		return
+	# le estrazioni successive devono restare quelle della prima costruzione, ovunque finisca l'oggetto
+	var state_after := r.state
+	var colour_after := o.rn.state
+	_build_rollback(mark, [o], cols, lamps)
+	for shift: float in RELOCATE_STEPS:
+		for a in 8:
+			var q := p + Vector2.from_angle(TAU * a / 8.0) * shift
+			if (edge_fn.is_valid() and bool(edge_fn.call(q))) or _clear_at(q, 1.0):
+				continue
+			r.state = state_before
+			o.rn.state = colour_before
+			super(k, o, q, yaw, r, cols, lamps)
+			if not _covers_game_road(cols, mark["cols"]) and not _overlaps_earlier(cols, mark["cols"]):
+				r.state = state_after
+				o.rn.state = colour_after
+				relocated_count += 1
+				return
+			_build_rollback(mark, [o], cols, lamps)
+	r.state = state_after
+	o.rn.state = colour_after
+	removed_count += 1
 
 
 ## recinti, cataste e campi non passano da _obj: se coprono una strada si rinuncia all'intero lotto
@@ -3638,6 +3674,8 @@ func _sealed_gate_hit(p: Vector2, r: float) -> bool:
 
 func world_free(p: Vector2, r: float) -> bool:
 	var c := Vector2i(floori(p.x / 16.0), floori(p.y / 16.0))
+	if gm.outside.size() != Game.MW * Game.MH:
+		return gm.is_floor(c)      # dati di un interno: vale il suo reticolo
 	if not gm.inb(c) or (gm.outside[gm.idx(c)] == 1 and gm.grid[gm.idx(c)] == 0):
 		return false
 	if _gcol_hit(p / 16.0, r / 16.0 * 0.8):
@@ -3699,7 +3737,7 @@ func _unstick(dt: float) -> void:
 				gm.player.position = bank
 				break
 	for pr in gm.props:
-		if not is_instance_valid(pr) or not (str(pr.kind) in ["page", "loot"]):
+		if not is_instance_valid(pr) or not (str(pr.kind) in ["page", "loot", "qitem", "dig", "shrine"] or str(pr.kind).begins_with("res_")):
 			continue
 		var centre: Vector2 = (pr as Node2D).position + Vector2(8, -8)
 		if centre.distance_to(gm.player.position) > 500.0 or world_free(centre, 4.0):

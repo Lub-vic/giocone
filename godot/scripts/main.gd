@@ -10010,6 +10010,9 @@ func _process(_dt: float) -> void:
 	if OS.get_cmdline_user_args().has("--d0test"):
 		tgs += 1
 		if tgs == 5:
+			if area != "d0":
+				build_area("d0")      # la prova riguarda le celle: parte da li' anche senza --startd0
+				player.position = Vector2(center(rooms[0])) * Game.TS + Vector2(8, 36)
 			print("D0 area=", area, " stato=", state, " obiettivo=", objective(), " nemici=", enemies.size(), " boss=", boss_kind)
 			state = "play"
 			var ex: Prop = null
