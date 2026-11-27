@@ -4528,18 +4528,6 @@ func quest_claim(qid: String) -> void:
 	save_game()
 
 
-## compatibilita' per i test: accetta o consegna senza dialogo
-func quest_talk(v) -> String:
-	var st := quest_state(v.qid)
-	if st == "new":
-		quest_accept(v.qid)
-		return "MISSIONE: %s" % quest_defs[v.qid]["txt"]
-	if st == "ready":
-		quest_claim(v.qid)
-		return "GRAZIE"
-	return ""
-
-
 var dlg := {}
 
 
@@ -6028,49 +6016,6 @@ func add_fx(p: Prop, name: String, f: Vector2i, fx: bool) -> void:
 		sm.scale_amount_max = 3.0
 
 
-func scatter_objects() -> void:
-	var noises := {}
-	var glows := 0
-	for y in range(5, Game.MH - 5):
-		for x in range(5, Game.MW - 5):
-			var i := y * Game.MW + x
-			if reach[i] != 1 or road[i] == 1 or cobble[i] == 1:
-				continue
-			if absi(x - SEEDS[0].x) < 28 and absi(y - SEEDS[0].y) < 22:
-				continue
-			var b: int = biome[i]
-			var rules: Array = Scenery.OBJECTS[b]
-			for ri in rules.size():
-				var r: Dictionary = rules[ri]
-				var dens: float = r["d"]
-				if r.has("cf"):
-					var nk := b * 16 + ri
-					if not noises.has(nk):
-						var nz := FastNoiseLite.new()
-						nz.seed = world_seed + nk * 17
-						nz.frequency = r["cf"]
-						noises[nk] = nz
-					var n := (((noises[nk] as FastNoiseLite).get_noise_2d(x, y)) + 1.0) * 0.5
-					dens *= smoothstep(r["ct"], r["ct"] + 0.15, n) * 1.8
-				if randf() >= dens:
-					continue
-				var names: Array = r["n"]
-				var nm: String = names[randi() % names.size()]
-				var want_fx := false
-				if not Scenery.glow(nm).is_empty():
-					if glows >= 60:
-						continue
-					want_fx = true
-					glows += 1
-				var pr: Prop = null
-				if nm.begins_with("bush_") or nm.begins_with("circle_top"):
-					place_tree(nm, Vector2i(x, y))
-				else:
-					pr = try_place(nm, Vector2i(x, y), want_fx)
-				if pr != null:
-					break
-
-
 # ---------------- composizioni pianificate
 func roof_name(w: int, h: int, theme: String) -> String:
 	var pools := {
@@ -7371,11 +7316,6 @@ func dungeon_room(r: Rect2i, inner: Rect2i) -> void:
 			corner_cluster(inner, 3 - c0, ["crate_top", "barrel_top", "sack_top"], 3)
 
 
-func add_candelabra(c: Vector2i) -> void:
-	if not blocks_opening(c, Vector2i.ONE):
-		add_prop("candelabra", c)
-
-
 func rand_cell(r: Rect2i) -> Vector2i:
 	for k in 30:
 		var c := Vector2i(randi_range(r.position.x, r.end.x - 1), randi_range(r.position.y, r.end.y - 1))
@@ -7437,19 +7377,6 @@ func light_bonfire(p: Prop) -> void:
 		p.light.texture_scale = 1.9
 		p.light.color = Color(1.0, 0.8, 0.5)
 		flick.append([p.light, 1.15, randf() * 10.0])
-
-
-func __unused_spawn_all() -> void:
-	for e in enemies:
-		e.queue_free()
-	enemies.clear()
-	for s in spawns:
-		spawn_enemy(s["k"], s["pos"], s["mult"], s["elite"], s["tint"])
-	if boss_kind != "" and not persist["bosses"].has(boss_kind):
-		spawn_enemy(boss_kind, boss_pos, 1.0, false, boss_tint)
-	for c in fx.get_children():
-		if c is Projectile:
-			c.queue_free()
 
 
 func spawn_enemy(k: String, pos: Vector2, mult := 1.0, elite := false, tint := Color.WHITE) -> Enemy:

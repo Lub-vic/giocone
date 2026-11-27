@@ -840,49 +840,6 @@ func _m_cage(b: W3DBuilder, p: Vector3, lamps: Array) -> void:
 	b.box(t * Transform3D(Basis.IDENTITY, Vector3(0, 1.18, 0)), Vector3(0.22, 0.2, 0.12), _k(BONE, 0.9), 0.1, 8)
 
 
-func _m_shelf(b: W3DBuilder, base: Vector3, nrm: Vector3, yaw: float, r: RandomNumberGenerator) -> void:
-	# libreria addossata al muro (profondita' 0.28: dentro la fascia dove il giocatore non arriva)
-	var tan := Vector3(-nrm.z, 0, nrm.x)
-	b.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.14 + Vector3(0, 0.85, 0)), Vector3(0.28, 1.7, 0.95), _k(WOOD_D, 0.9), 0.14, 8)
-	for row in 4:
-		for q in 6:
-			var h := r.randf_range(0.18, 0.3)
-			var col := Color(r.randf_range(0.2, 0.5), r.randf_range(0.08, 0.2), r.randf_range(0.08, 0.2))
-			b.box(Transform3D(Basis(Vector3.UP, yaw), base + nrm * 0.18 + tan * (q - 2.5) * 0.14 + Vector3(0, 0.3 + row * 0.38 + h * 0.5, 0)), Vector3(0.2, h, 0.1), col, 0.2, 8)
-
-
-func _decor_place(room: Rect2i, fw: int, fh: int, occ: Dictionary, r: RandomNumberGenerator, margin := 2) -> Dictionary:
-	var inner := room.grow(-margin)
-	if inner.size.x < fw or inner.size.y < fh:
-		return {}
-	for attempt in 30:
-		var cx := r.randi_range(inner.position.x, inner.end.x - fw)
-		var cy := r.randi_range(inner.position.y, inner.end.y - fh)
-		var ok := true
-		for dy in range(-1, fh + 1):
-			for dx in range(-1, fw + 1):
-				var c := Vector2i(cx + dx, cy + dy)
-				if occ.has(c) or gm.block.has(c) or gm.reserved.has(c) or not gm.is_floor(c):
-					ok = false
-					break
-				if dx >= 0 and dx < fw and dy >= 0 and dy < fh and gm.has_carpet(c):
-					ok = false
-					break
-			if not ok:
-				break
-		if ok and Vector2(cx + fw * 0.5, cy + fh * 0.5).distance_to(gm.player.position / 16.0) < 3.5:
-			ok = false
-		if not ok:
-			continue
-		for dy in fh:
-			for dx in fw:
-				occ[Vector2i(cx + dx, cy + dy)] = true
-				gm.block[Vector2i(cx + dx, cy + dy)] = true
-				decor_cells.append(Vector2i(cx + dx, cy + dy))
-		return {"x": cx, "y": cy}
-	return {}
-
-
 var decor_cells: Array = []     # celle bloccate dagli arredi generati (si ricalcolano a ogni ricostruzione, cosi' spostare o togliere un arredo libera il passaggio)
 var decor_area := ""
 var decor_seed := ""
@@ -1338,7 +1295,6 @@ func _real_lights(dt: float) -> void:
 	hero_light.light_energy = 0.55 if world_on else 0.7
 	env.ambient_light_energy = 0.30 if world_on else 0.16
 	env.ambient_light_color = Color(0.40, 0.44, 0.58) if world_on else Color(0.36, 0.38, 0.52)
-
 
 
 # ------------------------------------------------------------------ bolla spazio-temporale (Cronotone) in 3D
@@ -2325,7 +2281,6 @@ func _base_prop(kind: String, tw: float, th: float, sd: int) -> ArrayMesh:
 
 # ------------------------------------------------------------------ mondo aperto: blocchi da 16x16 creati attorno al giocatore
 const WSC := 16
-var wchunks: Dictionary = {}
 var world_on := false
 var world_zoom_far := false
 
@@ -2333,36 +2288,6 @@ var world_zoom_far := false
 func toggle_world_zoom() -> void:
 	world_zoom_far = not world_zoom_far
 	gm.say("VISUALE AMPIA" if world_zoom_far else "VISUALE VICINA")
-
-
-func _wtile_col(t: int) -> Color:
-	match t:
-		Game.T_TERRA: return Color(0.22, 0.18, 0.13)
-		Game.T_CIMITERO: return Color(0.15, 0.19, 0.15)
-		Game.T_PALUDE: return Color(0.11, 0.19, 0.14)
-		Game.T_NEVE: return Color(0.46, 0.50, 0.58)
-		Game.T_LAVA: return Color(0.55, 0.14, 0.04, 0.6)
-		Game.T_ROCCIAG: return Color(0.24, 0.24, 0.27)
-		Game.T_SENTIERO: return Color(0.30, 0.26, 0.21)
-		Game.T_SANGUE: return Color(0.22, 0.07, 0.07)
-	return Color(0.2, 0.19, 0.2)
-
-
-## altezza del terreno: rilievo dolce, piatto vicino a strade, ponti e acqua
-func _wh(vx: float, vz: float) -> float:
-	var cx := floori(vx)
-	var cz := floori(vz)
-	var rd := 3.0
-	for dz in range(-1, 1):
-		for dx in range(-1, 1):
-			var qx := cx + dx
-			var qz := cz + dz
-			if qx < 0 or qz < 0 or qx >= Game.MW or qz >= Game.MH:
-				continue
-			var qi := qz * Game.MW + qx
-			if gm.road[qi] == 1 or gm.cobble[qi] == 1 or gm.water[qi] == 1 or gm.bridge[qi] == 1 or gm.grid[qi] == 0:
-				rd = 0.5
-	return n_h.get_noise_2d(vx, vz) * 0.2 * smoothstep(1.4, 3.4, rd)
 
 
 ## ------------------------------------------------------------------ quote del terreno
@@ -2551,6 +2476,14 @@ var game_road_sd := PackedFloat32Array()    # per texel: distanza con segno dal 
 ## Il generatore casuale avanza comunque, quindi tutto il resto del mondo resta identico.
 const GAME_ROAD_CLEAR := 0.4       # spazio libero attorno al centro di una cella strada (il giocatore ha raggio 0.25)
 var road_guard := true
+## Il villaggio e' quello disegnato dal motore 3D, con le sue vie: qui dentro le strade della mappa (che seguono il
+## vecchio schema 2D a croce) non vengono disegnate e non tolgono oggetti. Semiassi della cinta, in celle.
+const VILLAGE_KEEP := Vector2i(28, 22)
+
+
+func _in_village(cell: Vector2i) -> bool:
+	var d: Vector2i = cell - gm.SEEDS[0]
+	return absi(d.x) <= VILLAGE_KEEP.x and absi(d.y) <= VILLAGE_KEEP.y
 
 
 func _covers_game_road(cols: Array, from: int) -> bool:
@@ -2562,7 +2495,7 @@ func _covers_game_road(cols: Array, from: int) -> bool:
 		for y in range(floori(gc.y - reach), floori(gc.y + reach) + 1):
 			for x in range(floori(gc.x - reach), floori(gc.x + reach) + 1):
 				var cell := Vector2i(x, y)
-				if not gm.inb(cell) or gm.road[y * Game.MW + x] == 0 or gm.bridge[y * Game.MW + x] == 1:
+				if not gm.inb(cell) or gm.road[y * Game.MW + x] == 0 or gm.bridge[y * Game.MW + x] == 1 or _in_village(cell):
 					continue
 				if _col_hit(cl, Vector2(x + 0.5, y + 0.5) - world_off, GAME_ROAD_CLEAR):
 					return true
@@ -2626,6 +2559,41 @@ func _ed_apply(j: Dictionary) -> void:
 	road_guard = true
 
 
+var village_links: Array[Vector2i] = []     # celle dei raccordi fra le strade della mappa e le vie del villaggio
+
+
+## le strade della mappa si fermano alla cinta: da li' un breve raccordo raggiunge la via del villaggio piu' vicina
+func _village_link_cells() -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for id in gm.road_paths:
+		if id is String:
+			continue                # solo le vie principali (indici di ROADS)
+		var path: Array = gm.road_paths[id]
+		if path.is_empty():
+			continue
+		if _in_village(path[path.size() - 1]):
+			path = path.duplicate()
+			path.reverse()
+		if not _in_village(path[0]):
+			continue
+		for cell: Vector2i in path:
+			if _in_village(cell):
+				continue
+			var from := Vector2(cell) + Vector2(0.5, 0.5) - world_off
+			var target := from
+			var best := INF
+			for n in segs_a.size():
+				var point := Geometry2D.get_closest_point_to_segment(from, segs_a[n], segs_b[n])
+				if from.distance_squared_to(point) < best:
+					best = from.distance_squared_to(point)
+					target = point
+			var end := Vector2i((target + world_off).floor())
+			out.append(cell)
+			out.append_array(gm.carve_path_peek(cell, end))
+			break
+	return out
+
+
 ## strade e sentieri della mappa di gioco (quelli che si vedono nella mappa): distanza calcolata una volta sola
 func _game_roads_build() -> void:
 	var t0 := Time.get_ticks_msec()
@@ -2646,21 +2614,28 @@ func _game_roads_build() -> void:
 				offs.append(dz * tw + dx)
 				dists.append(sd)
 	var stamp := offs.size()
+	# Solo le strade: il selciato (cobble) e' la pianta schematica di villaggio e arene, e appiattirebbe il 3D.
+	var cells: Array[Vector2i] = []
+	var i: int = gm.road.find(1)
+	while i >= 0:
+		# sull'acqua e sui ponti non si disegna il sentiero (i ponti hanno le loro assi)
+		var cell := Vector2i(i % w, i / w)
+		if gm.water[i] == 0 and gm.bridge[i] == 0 and not _in_village(cell):
+			cells.append(cell)
+		i = gm.road.find(1, i + 1)
+	village_links = _village_link_cells()
+	cells.append_array(village_links)
 	var count := 0
-	for layer: PackedByteArray in [gm.road, gm.cobble]:
-		var i := layer.find(1)
-		while i >= 0:
-			var x := i % w
-			var z := i / w
-			# sull'acqua e sui ponti non si disegna il sentiero (i ponti hanno le loro assi); al bordo mappa non ci sono strade
-			if gm.water[i] == 0 and gm.bridge[i] == 0 and x >= GAME_ROAD_REACH and z >= GAME_ROAD_REACH and x < w - GAME_ROAD_REACH and z < Game.MH - GAME_ROAD_REACH:
-				var base := z * GRES * tw + x * GRES
-				for k in stamp:
-					var ti := base + offs[k]
-					if dists[k] < game_road_sd[ti]:
-						game_road_sd[ti] = dists[k]
-				count += 1
-			i = layer.find(1, i + 1)
+	for cell in cells:
+		# al bordo della mappa non ci sono strade
+		if cell.x < GAME_ROAD_REACH or cell.y < GAME_ROAD_REACH or cell.x >= w - GAME_ROAD_REACH or cell.y >= Game.MH - GAME_ROAD_REACH:
+			continue
+		var base := cell.y * GRES * tw + cell.x * GRES
+		for k in stamp:
+			var ti := base + offs[k]
+			if dists[k] < game_road_sd[ti]:
+				game_road_sd[ti] = dists[k]
+		count += 1
 	if gm.testing:
 		print("W3D strade della mappa: celle=", count, " ms=", Time.get_ticks_msec() - t0)
 
@@ -2734,9 +2709,6 @@ func _gmap_fill(j: Dictionary) -> void:
 
 
 func _world_clear() -> void:
-	for k in wchunks.keys():
-		(wchunks[k] as Node3D).queue_free()
-	wchunks.clear()
 	for c in static_root.get_children():
 		c.queue_free()
 
@@ -2822,7 +2794,7 @@ func _update_minimap() -> void:
 	for y in ch:
 		for x in cw:
 			var ri: int = gm.idx(Vector2i(ox + x, oy + y))
-			if gm.road[ri] == 1 and gm.water[ri] == 0:
+			if gm.road[ri] == 1 and gm.water[ri] == 0 and not _in_village(Vector2i(ox + x, oy + y)):
 				im.set_pixel(x, y, Color(0.5, 0.45, 0.36))
 	for key in house_doors:
 		var dv: Vector3 = house_doors[key]
@@ -2834,7 +2806,6 @@ func _update_minimap() -> void:
 				if px2 >= 0 and py2 >= 0 and px2 < cw and py2 < ch:
 					im.set_pixel(px2, py2, Color(0.55, 0.32, 0.2))
 	gm.mm3d = ImageTexture.create_from_image(im)
-
 
 
 ## le case generate dal motore 3D hanno una porta vera: diventa un ingresso per l'interno
@@ -3379,7 +3350,6 @@ func side_scroll_breakable_at(point: Vector2, radius: float) -> bool:
 func _world_init() -> void:
 	_elev_build()
 	_gmap_init()
-	_game_roads_build()
 	ed_load()
 	ed_set_area("world")
 	ed_hide_sync()
@@ -3398,6 +3368,7 @@ func _world_init() -> void:
 	_gen_roads()
 	# il falo' del villaggio di gioco coincide con il primo falo' del motore: stesse strade organiche, stessa partenza
 	world_off = Vector2(gm.SEEDS[0]) + Vector2(3.5, 0.5) - (bonfires[1] as Vector2)
+	_game_roads_build()
 	_merge_broken_keys()
 	if OS.get_cmdline_user_args().has("--listkinds"):
 		var cnt := {}
@@ -3642,16 +3613,7 @@ func world_free(p: Vector2, r: float) -> bool:
 	return not _blocked(p / 16.0 - world_off, r / 16.0 * 0.8)
 
 
-const STRUCT_PFX := ["roof_", "cathedral_top", "chapel_top", "tower_top", "smithy_top", "archive_top", "sanatorium_top", "mill_top",
-		"mausoleum_top", "arch_top", "ruin_tower", "pond_", "stump_big", "tbig_", "top_dead", "top_sick", "wall_top", "circle_top", "cart_top", "lamp_top"]
 var gcols: Dictionary = {}
-
-
-func _is_struct(kind: String) -> bool:
-	for p in STRUCT_PFX:
-		if kind.begins_with(p):
-			return true
-	return false
 
 
 func _bio_game(p: Vector2) -> int:
@@ -3662,31 +3624,6 @@ func _bio_game(p: Vector2) -> int:
 	if b == 0 and not gm.gen_chunks.has(Vector2i(c.x / gm.CH, c.y / gm.CH)):
 		return 0
 	return b
-
-
-func _register_structs() -> void:
-	gcols.clear()
-	for g in gm.ents.get_children():
-		if not (g is Prop) or not bool(g.scene) or g.spr == null or g.spr.texture == null:
-			continue
-		var kd := str(g.kind)
-		if not _is_struct(kd):
-			continue
-		var c := _sprite_center(g, g.spr) / 16.0
-		var hs := Vector2(g.spr.texture.get_width(), g.spr.texture.get_height()) / 32.0
-		var wk := not (kd.begins_with("pond_") or kd.begins_with("circle_") or kd.begins_with("arch_"))
-		if kd.begins_with("top_") or kd.begins_with("tbig_") or kd.begins_with("stump_"):
-			hs = Vector2(0.45, 0.45) if not kd.begins_with("tbig_") else Vector2(0.8, 0.8)
-		elif kd.begins_with("roof_") or kd.begins_with("wall_") or kd.contains("_top"):
-			hs *= 0.9
-		if wk:
-			var key := Vector2i(floori(c.x / 8.0), floori(c.y / 8.0))
-			if not gcols.has(key):
-				gcols[key] = []
-			(gcols[key] as Array).append([c, hs])
-		if hs.x > 0.9 or hs.y > 0.9:
-			var cc := c - world_off
-			clear_pts.append(Vector3(cc.x, cc.y, maxf(hs.x, hs.y) + 0.8))
 
 
 func _gcol_hit(p: Vector2, r: float) -> bool:
@@ -3702,43 +3639,6 @@ func _gcol_hit(p: Vector2, r: float) -> bool:
 				if absf(p.x - c.x) < hs.x + r and absf(p.y - c.y) < hs.y + r:
 					return true
 	return false
-
-
-var road_cache: Dictionary = {}
-
-
-## strade del mondo di gioco viste dal motore 3D: distanza dal bordo piu' vicino delle celle di strada/selciato
-func _grid_road(p: Vector2) -> Dictionary:
-	var key := Vector2i(roundi(p.x * 2.0), roundi(p.y * 2.0))
-	if road_cache.has(key):
-		return road_cache[key]
-	var gp := p + world_off
-	var cx := floori(gp.x)
-	var cz := floori(gp.y)
-	var best := 99.0
-	var bn := p
-	for dz in range(-3, 4):
-		for dx in range(-3, 4):
-			var c := Vector2i(cx + dx, cz + dz)
-			if not gm.inb(c):
-				continue
-			var ci: int = gm.idx(c)
-			if gm.road[ci] != 1 and gm.cobble[ci] != 1:
-				continue
-			if gm.water[ci] == 1 or gm.bridge[ci] == 1:
-				continue       # sull'acqua e sui ponti non si disegna il sentiero (i ponti hanno le loro assi)
-			var ex := maxf(absf(gp.x - (c.x + 0.5)) - 0.5, 0.0)
-			var ez := maxf(absf(gp.y - (c.y + 0.5)) - 0.5, 0.0)
-			var d := sqrt(ex * ex + ez * ez)
-			if d < best:
-				best = d
-				bn = Vector2(c.x + 0.5, c.y + 0.5) - world_off
-	var tg := (p - bn).orthogonal()
-	var res := {"d": best + 1.0 if best < 98.0 else 99.0, "nearest": bn, "tan": tg.normalized() if tg.length() > 0.01 else Vector2.RIGHT, "w": 2.0}
-	if road_cache.size() > 60000:
-		road_cache.clear()
-	road_cache[key] = res
-	return res
 
 
 var unstick_t := 0.0
@@ -3818,110 +3718,6 @@ func _world_lamps() -> void:
 			lc.append(Vector3(0, 0, 0))
 	_mp("lamps", arr)
 	_mp("lamp_col", lc)
-
-
-func _world_chunk(k: Vector2i) -> void:
-	var fb := W3DBuilder.new()
-	var ob := W3DBuilder.new()
-	var wb := W3DBuilder.new()
-	fb.rn.seed = k.x * 31 + k.y
-	ob.rn.seed = k.x * 17 + k.y * 5
-	wb.rn.seed = k.x * 13 + k.y * 3
-	ob.sat = 1.3
-	ob.con = 1.2
-	wb.sat = 1.55
-	wb.con = 1.45
-	var w: int = Game.MW
-	for y in range(k.y * WSC, (k.y + 1) * WSC):
-		for x in range(k.x * WSC, (k.x + 1) * WSC):
-			if x >= w or y >= Game.MH:
-				continue
-			var i: int = y * w + x
-			var hv := _hash2(x, y)
-			var hv2 := _hash2(x, y, 5)
-			var bio := int(gm.biome[i])
-			var bd: Dictionary = Game.BIO[bio]
-			if gm.water[i] == 1:
-				fb.quad(Vector3(x, -0.12, y), Vector3(x + 1, -0.12, y), Vector3(x + 1, -0.12, y + 1), Vector3(x, -0.12, y + 1), Color(0.07 + hv * 0.02, 0.12 + hv * 0.03, 0.18 + hv * 0.04))
-				continue
-			if gm.bridge[i] == 1:
-				fb.quad(Vector3(x, 0.02, y), Vector3(x + 1, 0.02, y), Vector3(x + 1, 0.02, y + 1), Vector3(x, 0.02, y + 1), Color(0.24, 0.16, 0.1).lerp(Color(0.34, 0.24, 0.15), hv))
-				continue
-			if gm.grid[i] == 1:
-				var g: Array = bd["g"]
-				var t: int = int(g[int(hv2 * 7.0) % g.size()])
-				var col := _wtile_col(t)
-				if gm.cobble[i] == 1:
-					col = Color(0.27, 0.26, 0.28)
-				elif gm.road[i] == 1:
-					col = Color(0.30, 0.26, 0.21)
-				# macchie di terreno a bassa frequenza: il suolo non e' uniforme
-				var natural: bool = gm.road[i] == 0 and gm.cobble[i] == 0
-				var base_col := col
-				for sj in 2:
-					for si in 2:
-						var gp := Vector2(x + (si + 0.5) * 0.5, y + (sj + 0.5) * 0.5)
-						var gc := _ground_col(gp, 50.0, 0.0) if natural else _ground_col(gp, 0.0, 3.0).lerp(Color(0.2, 0.19, 0.2), 0.35 if gm.cobble[i] == 1 else 0.0)
-						if natural and t != Game.T_TERRA:
-							gc = gc.lerp(_wtile_col(t), 0.45)
-						if t == Game.T_NEVE and natural:
-							gc = _wtile_col(t).lerp(gc, 0.25)
-						gc = fb.shade(gc, 0.035)
-						var x0 := x + si * 0.5
-						var z0 := y + sj * 0.5
-						var a := Vector3(x0, _wh(x0, z0), z0)
-						var b := Vector3(x0 + 0.5, _wh(x0 + 0.5, z0), z0)
-						var d := Vector3(x0 + 0.5, _wh(x0 + 0.5, z0 + 0.5), z0 + 0.5)
-						var e := Vector3(x0, _wh(x0, z0 + 0.5), z0 + 0.5)
-						if (si + sj + x + y) % 2 == 0:
-							fb.tri(a, b, d, gc)
-							fb.tri(a, d, e, gc)
-						else:
-							fb.tri(a, b, e, gc)
-							fb.tri(b, d, e, gc)
-				if natural and t != Game.T_LAVA and t != Game.T_NEVE:
-					# erba secca come nel motore originale: ciuffi lungo i campi di densita'
-					for q in 3:
-						var gp2 := Vector2(x + _hash2(x, y, 60 + q), y + _hash2(x, y, 70 + q))
-						var vg := n_veg.get_noise_2d(gp2.x, gp2.y) * 0.5 + 0.5
-						var dens := smoothstep(0.32, 0.78, vg + n_veg2.get_noise_2d(gp2.x, gp2.y) * 0.12)
-						if _hash2(x, y, 90 + q) < dens:
-							_tuft(ob, Vector3(gp2.x, 0.0, gp2.y), dens, n_veg2.get_noise_2d(gp2.x + 50.0, gp2.y) * 0.5 + 0.5)
-					if hv > 0.97:
-						ob.rock(Vector3(x + 0.5, 0.1, y + 0.5), Vector3(0.3, 0.2, 0.28), Color(0.19, 0.19, 0.2), 0.1, 0.35, hv * 9.0)
-			else:
-				var bt: int = int(bd["b"])
-				if gm.outside[i] == 1:
-					fb.quad(Vector3(x, -0.3, y), Vector3(x + 1, -0.3, y), Vector3(x + 1, -0.3, y + 1), Vector3(x, -0.3, y + 1), Color(0.03, 0.03, 0.04))
-					continue
-				fb.quad(Vector3(x, 0, y), Vector3(x + 1, 0, y), Vector3(x + 1, 0, y + 1), Vector3(x, 0, y + 1), Color(0.07, 0.09, 0.07))
-				if bt == Game.T_CHIOMA and _hash2(x, y, 4) < 0.5:
-					var tcols: Array = []
-					var tr := RandomNumberGenerator.new()
-					tr.seed = x * 7919 + y
-					_dead_tree(wb, Vector2(x + 0.5, y + 0.5), tr, tcols)
-				elif bt == Game.T_CHIOMA:
-					var th := 1.5 + hv * 1.6
-					wb.box(Transform3D(Basis.IDENTITY, Vector3(x + 0.5, th * 0.5, y + 0.5)), Vector3(0.22, th, 0.22), Color(0.17, 0.11, 0.08), 0.1, 6)
-					var gc := Color(0.08, 0.2, 0.1).lerp(Color(0.12, 0.28, 0.14), hv2)
-					wb.rock(Vector3(x + 0.5, th + 0.35, y + 0.5), Vector3(1.5 + hv * 0.3, 1.1, 1.5 + hv2 * 0.3), gc, 0.22, 0.45, hv * 7.0)
-				elif bt == Game.T_ACQUA:
-					fb.quad(Vector3(x, -0.12, y), Vector3(x + 1, -0.12, y), Vector3(x + 1, -0.12, y + 1), Vector3(x, -0.12, y + 1), Color(0.07, 0.13, 0.18))
-				else:
-					var rh := 0.9 + hv * 1.5
-					wb.rock(Vector3(x + 0.5, rh * 0.5, y + 0.5), Vector3(1.15, rh, 1.15), Color(0.2, 0.2, 0.23).lerp(Color(0.3, 0.29, 0.32), hv2), 0.2, 0.4, hv * 11.0)
-	var root := Node3D.new()
-	for pr in [[fb, false], [ob, false], [wb, true]]:
-		var bld: W3DBuilder = pr[0]
-		if bld.v.size() == 0:
-			continue
-		var mi := MeshInstance3D.new()
-		mi.mesh = bld.mesh()
-		mi.material_override = mat
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if pr[1] else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		root.add_child(mi)
-	static_root.add_child(root)
-	wchunks[k] = root
 
 
 var skin_us := 0
