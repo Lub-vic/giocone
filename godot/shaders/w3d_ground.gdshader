@@ -17,7 +17,7 @@ uniform float hero_glow = 1.0;
 uniform float floor_min = 0.62;
 uniform vec4 lamps[16];
 uniform vec3 lamp_col[16];
-uniform sampler2D gmap : filter_linear, repeat_disable;   // R = distanza con segno dal bordo del sentiero (0.5 = bordo, scala 8 unita')
+uniform sampler2D gmap : filter_linear, repeat_disable;   // R = distanza con segno dal bordo (0.5 = bordo, scala 8 unita'); G = selciato: 0 terra, 0.6 a chiazze, 1 pieno
 uniform vec2 gmap_inv = vec2(0.0005, 0.0007);              // 1 / dimensioni della mappa (celle)
 
 varying vec3 wpos;
@@ -171,21 +171,41 @@ void fragment() {
 		col = mix(col, vec3(0.2, 0.19, 0.21) * (0.85 + 0.3 * hsh(floor(w * 5.0))), rk * 0.85);
 	}
 
-	// --- sentiero: bordo netto e irregolare, orlo scuro, terra battuta con pietre incastonate
-	float sd = (texture(gmap, w * gmap_inv).r - 0.5) * 8.0;
+	// --- strade: selciato (villaggio, e a chiazze sulle vie principali) oppure terra battuta dai bordi sfrangiati
+	vec2 road_data = texture(gmap, w * gmap_inv).rg;
+	float sd = (road_data.r - 0.5) * 8.0;
+	float full = smoothstep(0.72, 0.9, road_data.g);
+	float patches = smoothstep(0.3, 0.5, road_data.g) * (1.0 - full)
+		* smoothstep(0.4, 0.56, vnoise(w * 0.31 + 17.0) * 0.78 + vnoise(w * 1.15) * 0.22);
+	float cob = max(full, patches);
+	// il bordo del selciato e' netto; quello della terra si sfilaccia in lingue e chiazze di piu' scale
 	sd += (vnoise(w * 4.5) - 0.5) * 0.26 + (vnoise(w * 12.0) - 0.5) * 0.09;
+	sd += (1.0 - full) * ((vnoise(w * 0.85 + 5.0) - 0.5) * 0.55 + (vnoise(w * 2.1 + 31.0) - 0.5) * 0.34);
 	float aa = max(fwidth(sd), 0.11);
-	float inside = 1.0 - smoothstep(-aa, aa, sd);
-	float rim = (1.0 - smoothstep(-aa, aa * 2.0, sd - 0.14)) - inside;
+	float soft = mix(0.2, 0.0, cob);
+	float inside = 1.0 - smoothstep(-aa - soft, aa + soft, sd);
+	float rim = max((1.0 - smoothstep(-aa, aa * 2.0, sd - 0.14)) - inside, 0.0);
 	if (inside > 0.001) {
+		// terra battuta: toni bruni a macchie, centro consumato piu' chiaro, sassi radi, erba che rientra dai lati
+		float damp = vnoise(w * 0.55 + 41.0);
+		vec3 dirt = mix(vec3(0.205, 0.148, 0.098), vec3(0.275, 0.208, 0.142), vnoise(w * 1.7 + 9.0));
+		dirt = mix(dirt, vec3(0.15, 0.112, 0.082), smoothstep(0.6, 0.78, damp));
+		dirt *= 0.9 + 0.2 * hsh(floor(w / 0.11));
+		dirt = mix(dirt, dirt * 1.16, smoothstep(-0.22, -0.62, sd) * (0.4 + 0.6 * vnoise(w * 0.9)));
+		vec3 grit = stones(w + 11.3, 1.35, 0.16, 0.04, 33.0);
+		dirt = mix(dirt, dirt * 0.55, grit.y);
+		dirt = mix(dirt, vec3(0.22, 0.2, 0.185) * (0.75 + 0.4 * grit.z), grit.x * 0.7);
+		float weeds = smoothstep(-0.5, 0.05, sd) * smoothstep(0.52, 0.72, vnoise(w * 3.3 + 3.0));
+		dirt = mix(dirt, col, weeds * 0.85);
+		// selciato
 		float pg = hsh(floor(w / 0.11));
-		vec3 pc = vec3(0.19, 0.165, 0.142) * (pg < 0.25 ? 0.82 : (pg > 0.85 ? 1.18 : 1.0));
+		vec3 paving = vec3(0.19, 0.165, 0.142) * (pg < 0.25 ? 0.82 : (pg > 0.85 ? 1.18 : 1.0));
 		vec3 st = stones(w + 3.7, 2.6, 0.55, 0.075, 21.0);
-		pc = mix(pc, pc * 0.45, st.y);
-		pc = mix(pc, vec3(0.24, 0.225, 0.23) * (0.72 + 0.5 * st.z), st.x * 0.75);
-		col = mix(col, pc, inside);
+		paving = mix(paving, paving * 0.45, st.y);
+		paving = mix(paving, vec3(0.24, 0.225, 0.23) * (0.72 + 0.5 * st.z), st.x * 0.75);
+		col = mix(col, mix(dirt, paving, cob), inside);
 	}
-	col *= 1.0 - rim * 0.4;
+	col *= 1.0 - rim * mix(0.14, 0.4, cob);
 
 	{
 		float ll = dot(col, vec3(0.3, 0.59, 0.11));

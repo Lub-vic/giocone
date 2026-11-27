@@ -188,6 +188,7 @@ var spawn_t := 0.0
 var gate_cell := {}                 # id cancello -> cella centrale sul ponte
 var road_paths := {}
 var main_road_cells := {}             # celle dell'asse delle vie principali (riempito alla prima richiesta)
+var trails: Array = []                # assi dei sentieri verso gli ingressi (celle, in ordine): il 3D li disegna
 var landmarks: Array = []             # oggetti delle zone unificate (w3d_landmarks.gd): il 3D li disegna dove li mette la logica
 var map_doors: Array = []             # porte degli edifici della mappa: il 3D ricrea l'elenco delle porte e deve riaverle
 var road_links := {}                # id luogo -> accesso e sentiero secondario generato
@@ -1140,7 +1141,7 @@ func clear_area() -> void:
 const WORLD_KEYS := ["grid", "biome", "road", "cobble", "water", "bridge", "outside", "reach", "ovr", "room_of", "gen_chunks",
 	"eager_chunks", "gn_nz", "gn_wz", "gn_cz", "spawn_buckets", "spawn_indexed", "props", "enemies", "block", "spawns", "critters",
 	"villagers", "arenas", "quest_items", "doors", "reserved", "furn", "flick", "area_nodes", "ents", "world_ready", "mm_img", "mm_tex",
-	"seen", "gate_cell", "road_paths", "road_links", "landmarks", "map_doors", "main_road_cells", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
+	"seen", "gate_cell", "road_paths", "road_links", "landmarks", "trails", "map_doors", "main_road_cells", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
 
 
 func drop_world_cache() -> void:
@@ -2183,17 +2184,18 @@ func gen_world() -> void:
 	prof("fiumi")
 	for ri in ROADS.size():
 		road_paths[ri] = carve_path(SEEDS[ROADS[ri][0]], SEEDS[ROADS[ri][1]])
-	carve_path(SEEDS[3], ENTR["dF"])
-	carve_path(SEEDS[2], ENTR["d0"])
-	carve_path(SEEDS[1], ENTR["d1"])
-	carve_path(SEEDS[4], ENTR["d2"])
-	carve_path(SEEDS[6], ENTR["d3"])
-	carve_path(SEEDS[2], ENTR["d4"])
-	carve_path(SEEDS[3], ENTR["d5"])
-	carve_path(SEEDS[5], ENTR["d6"])
+	trails = []
+	_trail(SEEDS[3], ENTR["dF"])
+	_trail(SEEDS[2], ENTR["d0"])
+	_trail(SEEDS[1], ENTR["d1"])
+	_trail(SEEDS[4], ENTR["d2"])
+	_trail(SEEDS[6], ENTR["d3"])
+	_trail(SEEDS[2], ENTR["d4"])
+	_trail(SEEDS[3], ENTR["d5"])
+	_trail(SEEDS[5], ENTR["d6"])
 	clear_cathedral_site()
-	carve_path(SEEDS[1], ENTR["d7"] + Vector2i(9, 5))      # il sentiero arriva alla facciata da sud
-	carve_path(ENTR["d7"] + Vector2i(9, 5), ENTR["d7"] + Vector2i(0, 1))
+	_trail(SEEDS[1], ENTR["d7"] + Vector2i(9, 5))      # il sentiero arriva alla facciata da sud
+	_trail(ENTR["d7"] + Vector2i(9, 5), ENTR["d7"] + Vector2i(0, 1))
 	prof("strade")
 	apply_paint()
 	# cancelli: al centro del ponte della strada indicata
@@ -2287,6 +2289,13 @@ func clear_disc(c: Vector2i, r: int) -> void:
 			if inb(p) and x > 2 and y > 2 and x < Game.MW - 3 and y < Game.MH - 3 and (x - c.x) * (x - c.x) + (y - c.y) * (y - c.y) <= r * r and water[idx(p)] == 0:
 				grid[idx(p)] = 1
 				ovr[idx(p)] = 1
+
+
+## sentiero verso un ingresso: come carve_path, e ne ricorda l'asse
+func _trail(a: Vector2i, b: Vector2i) -> void:
+	var path: Array = [a]
+	path.append_array(carve_path(a, b))
+	trails.append(path)
 
 
 func carve_path(a: Vector2i, b: Vector2i) -> Array:

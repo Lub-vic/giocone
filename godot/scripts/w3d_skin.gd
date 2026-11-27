@@ -2464,11 +2464,19 @@ func elev_at(cx: float, cz: float) -> float:
 
 ## ------------------------------------------------------------------ suolo per pixel: mappa globale delle distanze dai sentieri
 const GRES := 2                    # texel per cella
-const GAME_ROAD_PAD := 0.45        # allargamento oltre la cella: un sentiero di una cella resta continuo e largo circa 1,9
 const GAME_ROAD_W := 1.9           # larghezza dichiarata al 3D: sotto 2.3, quindi senza i ciottoli della via principale
-const GAME_ROAD_REACH := 3         # celle attorno a ogni strada entro cui la distanza viene calcolata
 const GAME_ROAD_RANGE := 2.5       # oltre questa distanza dal bordo la strada non influisce piu' su suolo e natura
+# aspetto delle vie: semilarghezza media, ondulazione laterale (celle) e pavimentazione
+# (0 terra battuta, 0.6 selciato vecchio a chiazze, 1 selciato pieno: solo nel villaggio)
+const MAIN_HALF := 1.2
+const MAIN_WOBBLE := 0.3
+const MAIN_PAVED := 0.6
+const TRAIL_HALF := 0.74
+const TRAIL_WOBBLE := 0.55
+const VILLAGE_PAVED := 1.0
 var game_road_sd := PackedFloat32Array()    # per texel: distanza con segno dal bordo delle strade della mappa di gioco
+var game_road_paved := PackedByteArray()     # per texel: pavimentazione della via piu' vicina (0-255)
+var n_road := FastNoiseLite.new()
 
 
 ## ------------------------------------------------------------------ oggetti 3D e strade della mappa
@@ -2694,8 +2702,8 @@ var village_links: Array[Vector2i] = []     # celle dei raccordi fra le strade d
 
 
 ## le strade della mappa si fermano alla cinta: da li' un breve raccordo raggiunge la via del villaggio piu' vicina
-func _village_link_cells() -> Array[Vector2i]:
-	var out: Array[Vector2i] = []
+func _village_link_paths() -> Array:
+	var out: Array = []
 	for id in gm.road_paths:
 		if id is String:
 			continue                # solo le vie principali (indici di ROADS)
@@ -2719,56 +2727,114 @@ func _village_link_cells() -> Array[Vector2i]:
 					best = from.distance_squared_to(point)
 					target = point
 			var end := Vector2i((target + world_off).floor())
-			out.append(cell)
-			out.append_array(gm.carve_path_peek(cell, end))
+			var link: Array = [cell]
+			link.append_array(gm.carve_path_peek(cell, end))
+			out.append(link)
 			break
 	return out
 
 
-## strade e sentieri della mappa di gioco (quelli che si vedono nella mappa): distanza calcolata una volta sola
+## strade e sentieri della mappa di gioco, calcolati una volta sola. Si disegnano dagli ASSI delle vie, lisciati e resi
+## irregolari: le celle della logica (a scalini, con celle sparse ai lati) darebbero bordi a quadretti.
 func _game_roads_build() -> void:
 	var t0 := Time.get_ticks_msec()
+	var texels: int = Game.MW * GRES * Game.MH * GRES
+	game_road_sd.resize(texels)
+	game_road_sd.fill(99.0)
+	game_road_paved.resize(texels)
+	game_road_paved.fill(0)
+	n_road.seed = int(gm.world_seed) + 211
+	n_road.frequency = 0.09
+	n_road.fractal_octaves = 2
+	var links := _village_link_paths()
+	village_links = []
+	for link in links:
+		village_links.append_array(link)
+	var count := 0
+	# prima i sentieri, poi le vie principali: agli incroci la pavimentazione e' quella della via principale
+	for id in gm.road_paths:
+		if id is String:
+			count += _road_ribbon(gm.road_paths[id], TRAIL_HALF, TRAIL_WOBBLE, 0.0)
+	for trail: Array in gm.trails:
+		count += _road_ribbon(trail, TRAIL_HALF * 1.1, TRAIL_WOBBLE, 0.0)
+	for id in gm.road_paths:
+		if id is int:
+			count += _road_ribbon(gm.road_paths[id], MAIN_HALF, MAIN_WOBBLE, MAIN_PAVED)
+	for link: Array in links:
+		count += _road_ribbon(link, MAIN_HALF * 0.9, MAIN_WOBBLE, MAIN_PAVED)
+	if gm.testing:
+		print("W3D strade della mappa: tratti=", count, " ms=", Time.get_ticks_msec() - t0)
+
+
+## asse morbido di una via: media mobile sugli scalini, un punto ogni tre celle, ondulazione e angoli arrotondati
+func _road_axis(cells: Array, wobble: float) -> PackedVector2Array:
+	var n := cells.size()
+	var coarse := PackedVector2Array()
+	var i := 0
+	while true:
+		var reach := mini(4, mini(i, n - 1 - i))
+		var total := Vector2.ZERO
+		for d in range(-reach, reach + 1):
+			total += Vector2(cells[i + d])
+		coarse.append(total / (reach * 2 + 1) + Vector2(0.5, 0.5))
+		if i == n - 1:
+			break
+		i = mini(i + 3, n - 1)
+	for k in range(1, coarse.size() - 1):
+		var side := (coarse[k + 1] - coarse[k - 1]).orthogonal().normalized()
+		coarse[k] += side * n_road.get_noise_2d(coarse[k].x * 1.7, coarse[k].y * 1.7) * wobble * 2.0
+	if coarse.size() < 3:
+		return coarse
+	var out := PackedVector2Array([coarse[0]])
+	for k in coarse.size() - 1:
+		out.append(coarse[k].lerp(coarse[k + 1], 0.25))
+		out.append(coarse[k].lerp(coarse[k + 1], 0.75))
+	out.append(coarse[coarse.size() - 1])
+	return out
+
+
+## stampa una via nel campo delle distanze; la larghezza varia lungo il percorso
+func _road_ribbon(cells: Array, half: float, wobble: float, paved: float) -> int:
+	if cells.size() < 2:
+		return 0
+	var axis := _road_axis(cells, wobble)
 	var w: int = Game.MW
 	var tw := w * GRES
 	var th: int = Game.MH * GRES
-	game_road_sd.resize(tw * th)
-	game_road_sd.fill(99.0)
-	# Stampo unico per tutte le celle, in indici lineari: e' un ciclo caldo, durante il caricamento.
-	var offs := PackedInt32Array()
-	var dists := PackedFloat32Array()
-	for dz in range(-GAME_ROAD_REACH * GRES, (GAME_ROAD_REACH + 1) * GRES):
-		for dx in range(-GAME_ROAD_REACH * GRES, (GAME_ROAD_REACH + 1) * GRES):
-			var ex := maxf(absf((dx + 0.5) / GRES - 0.5) - 0.5, 0.0)
-			var ez := maxf(absf((dz + 0.5) / GRES - 0.5) - 0.5, 0.0)
-			var sd := sqrt(ex * ex + ez * ez) - GAME_ROAD_PAD
-			if sd < GAME_ROAD_RANGE:
-				offs.append(dz * tw + dx)
-				dists.append(sd)
-	var stamp := offs.size()
-	# Solo le strade: il selciato (cobble) e' la pianta schematica di villaggio e arene, e appiattirebbe il 3D.
-	var cells: Array[Vector2i] = []
-	var i: int = gm.road.find(1)
-	while i >= 0:
-		# sull'acqua e sui ponti non si disegna il sentiero (i ponti hanno le loro assi)
-		var cell := Vector2i(i % w, i / w)
-		if gm.water[i] == 0 and gm.bridge[i] == 0 and not _road_hidden(cell):
-			cells.append(cell)
-		i = gm.road.find(1, i + 1)
-	village_links = _village_link_cells()
-	cells.append_array(village_links)
-	var count := 0
-	for cell in cells:
-		# al bordo della mappa non ci sono strade
-		if cell.x < GAME_ROAD_REACH or cell.y < GAME_ROAD_REACH or cell.x >= w - GAME_ROAD_REACH or cell.y >= Game.MH - GAME_ROAD_REACH:
+	var paint := int(paved * 255.0)
+	var stamped := 0
+	for s in axis.size() - 1:
+		var a := axis[s]
+		var b := axis[s + 1]
+		var mid := Vector2i(((a + b) * 0.5).floor())
+		# sui ponti e sull'acqua non si disegna (i ponti hanno le loro assi); villaggio e collina restano del 3D
+		if not gm.inb(mid) or gm.water[gm.idx(mid)] == 1 or gm.bridge[gm.idx(mid)] == 1 or _road_hidden(mid):
 			continue
-		var base := cell.y * GRES * tw + cell.x * GRES
-		for k in stamp:
-			var ti := base + offs[k]
-			if dists[k] < game_road_sd[ti]:
-				game_road_sd[ti] = dists[k]
-		count += 1
-	if gm.testing:
-		print("W3D strade della mappa: celle=", count, " ms=", Time.get_ticks_msec() - t0)
+		var wide_a := half * (1.0 + 0.45 * n_road.get_noise_2d(a.x * 2.3 + 90.0, a.y * 2.3))
+		var wide_b := half * (1.0 + 0.45 * n_road.get_noise_2d(b.x * 2.3 + 90.0, b.y * 2.3))
+		var reach := maxf(wide_a, wide_b) + GAME_ROAD_RANGE
+		var ab := b - a
+		var len2 := maxf(ab.length_squared(), 0.0001)
+		var x0 := maxi(0, floori((minf(a.x, b.x) - reach) * GRES))
+		var x1 := mini(tw - 1, ceili((maxf(a.x, b.x) + reach) * GRES))
+		var z0 := maxi(0, floori((minf(a.y, b.y) - reach) * GRES))
+		var z1 := mini(th - 1, ceili((maxf(a.y, b.y) + reach) * GRES))
+		for tz in range(z0, z1 + 1):
+			var row := tz * tw
+			for tx in range(x0, x1 + 1):
+				var q := Vector2((tx + 0.5) / GRES, (tz + 0.5) / GRES)
+				var t := clampf((q - a).dot(ab) / len2, 0.0, 1.0)
+				var sd := q.distance_to(a + ab * t) - lerpf(wide_a, wide_b, t)
+				if sd >= GAME_ROAD_RANGE:
+					continue
+				var ti := row + tx
+				if sd < game_road_sd[ti]:
+					game_road_sd[ti] = sd
+					game_road_paved[ti] = paint
+				elif paint > game_road_paved[ti] and sd < 0.2:
+					game_road_paved[ti] = paint
+		stamped += 1
+	return stamped
 
 
 ## distanza con segno dal bordo della strada di gioco piu' vicina (99 se lontana); p in coordinate del motore 3D
@@ -2787,6 +2853,8 @@ func _road_dist_sub(p: Vector2, sub: Array) -> Vector2:
 	var base := super(p, sub)
 	if not world_on or grid_road_fn.is_valid():
 		return base
+	if base.y > 2.3 and not _in_village(Vector2i((p + world_off).floor())):
+		base = Vector2(base.x - base.y * 0.5 + 1.125, 2.25)      # stesso bordo, senza i ciottoli in rilievo
 	var sd := _game_road_dist(p)
 	if sd < base.x - base.y * 0.5:
 		return Vector2(sd + GAME_ROAD_W * 0.5, GAME_ROAD_W)
@@ -2801,7 +2869,7 @@ var gmap_dirty := false
 func _gmap_init() -> void:
 	gmap_w = Game.MW * GRES
 	gmap_h = Game.MH * GRES
-	gmap_img = Image.create(gmap_w, gmap_h, false, Image.FORMAT_R8)
+	gmap_img = Image.create(gmap_w, gmap_h, false, Image.FORMAT_RG8)
 	gmap_img.fill(Color(1, 0, 0, 1))
 	gmap_tex = ImageTexture.create_from_image(gmap_img)
 	if mat_ground == null:
@@ -2835,7 +2903,11 @@ func _gmap_fill(j: Dictionary) -> void:
 				continue
 			var rdv := _road_dist_sub(pe, sub)
 			var sd: float = rdv.x - rdv.y * 0.5
-			gmap_img.set_pixel(tx, tz, Color(clampf(sd / 8.0 + 0.5, 0.0, 1.0), 0, 0, 1))
+			var paved := VILLAGE_PAVED if _in_village(Vector2i(floori((tx + 0.5) / GRES), floori((tz + 0.5) / GRES))) else 0.0
+			var ti := tz * gmap_w + tx
+			if not game_road_sd.is_empty() and game_road_sd[ti] <= sd + 0.001:
+				paved = game_road_paved[ti] / 255.0
+			gmap_img.set_pixel(tx, tz, Color(clampf(sd / 8.0 + 0.5, 0.0, 1.0), paved, 0, 1))
 	gmap_dirty = true
 
 
