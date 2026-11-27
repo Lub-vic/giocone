@@ -6,6 +6,9 @@ const WORLD_W := 960
 const WORLD_H := 704
 const WS := 3.2
 const CH := 32
+const RoadNetwork = preload("res://scripts/road_network.gd")
+const PHASE_TITLES := ["PLAN 9 FROM OUTER TIME"]   # un titolo per fase, mostrato nelle schermate di caricamento
+const LOADING_MIN_MS := 3000        # il titolo resta leggibile; se la generazione dura di piu' non si aggiunge attesa
 # centri delle regioni nel disegno originale (indice = id bioma in Game.BIO)
 const BASE_SEEDS := [Vector2i(45, 185), Vector2i(130, 170), Vector2i(55, 105), Vector2i(140, 100),
 	Vector2i(245, 115), Vector2i(245, 45), Vector2i(245, 190)]
@@ -184,6 +187,8 @@ var nook_count := 0
 var spawn_t := 0.0
 var gate_cell := {}                 # id cancello -> cella centrale sul ponte
 var road_paths := {}
+var road_links := {}                # id luogo -> accesso e sentiero secondario generato
+var road_keep := {}                 # asse dei sentieri secondari: arredo e vegetazione non lo occupano
 var block := {}                    # Vector2i -> true (oggetti solidi)
 var rooms: Array[Rect2i] = []
 var themes: Array[int] = []
@@ -204,6 +209,9 @@ var fog_mat: ShaderMaterial
 var fog_d := 0.3
 const FOG_BIO := [0.30, 0.52, 0.42, 0.58, 0.32, 0.26, 0.10]
 var fade: ColorRect
+var phase := 0                      # indice in PHASE_TITLES
+var loading_since := 0
+var deferred_chunks := {}           # blocchi "eager" non ancora completati: si completano quando ci si avvicina
 var area_nodes: Array = []
 var flick: Array = []              # [luce, energia base, fase]
 var state := "play"
@@ -825,11 +833,40 @@ func end_run(win: bool) -> void:
 	state = "results"
 
 
+## in gioco si completano subito solo i blocchi attorno al punto di comparsa. Le prove da riga di comando vogliono il
+## mondo come prima (--lazy le fa girare come il gioco), e la modalita' corsa azzera i nemici dopo il completamento.
+func defer_far_chunks() -> bool:
+	return not run_mode and (not testing or OS.get_cmdline_user_args().has("--lazy"))
+
+
+## le prove da riga di comando saltano la schermata: devono restare sincrone
+func loading_enabled() -> bool:
+	return not testing
+
+
+## mostra la schermata e aspetta che sia disegnata, prima di un lavoro che blocca il gioco
+func begin_loading() -> void:
+	state = "loading"
+	loading_since = Time.get_ticks_msec()
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## completa il tempo minimo, poi passa dal titolo al gioco con una dissolvenza in nero
+func end_loading(next_state: String) -> void:
+	var left := LOADING_MIN_MS - (Time.get_ticks_msec() - loading_since)
+	if left > 0:
+		await get_tree().create_timer(left / 1000.0, true, false, true).timeout
+	var out := create_tween()
+	out.tween_property(fade, "color:a", 1.0, 0.4)
+	await out.finished
+	state = next_state
+	create_tween().tween_property(fade, "color:a", 0.0, 0.6)
+
+
 func start_game(ld: Dictionary, cls_id := "negromante") -> void:
-	if not testing:
-		state = "loading"
-		await get_tree().process_frame
-		await get_tree().process_frame
+	if loading_enabled():
+		await begin_loading()
 	drop_world_cache()
 	if run_mode:
 		start_run(cls_id)
@@ -975,8 +1012,14 @@ func start_game(ld: Dictionary, cls_id := "negromante") -> void:
 		if lf["area"] != "world":
 			build_area(lf["area"])
 		player.position = cell_pos(c) + Vector2(0, 18)
+	if defer_far_chunks():
+		ensure_area(player.position, 2)      # l'area d'arrivo; le altre si completano avvicinandosi
 	player.cam.reset_smoothing()
-	state = "story" if d0_start else "play"
+	var next_state := "story" if d0_start else "play"
+	if loading_enabled():
+		await end_loading(next_state)
+	else:
+		state = next_state
 	say("KILGORE T. SI RISVEGLIA" if d0_start else "BENTORNATO")
 
 
@@ -998,6 +1041,8 @@ func new_cycle() -> void:
 	player.flasks = player.max_flasks
 	build_area("world")
 	player.position = Vector2(SEEDS[0] + Vector2i(0, 4)) * Game.TS + Vector2(8, 8)
+	if defer_far_chunks():
+		ensure_area(player.position, 2)
 	player.cam.reset_smoothing()
 	state = "play"
 	say("CICLO %d: LA VALLE SI E' RIGENERATA" % (cycle + 1))
@@ -1088,7 +1133,7 @@ func clear_area() -> void:
 const WORLD_KEYS := ["grid", "biome", "road", "cobble", "water", "bridge", "outside", "reach", "ovr", "room_of", "gen_chunks",
 	"eager_chunks", "gn_nz", "gn_wz", "gn_cz", "spawn_buckets", "spawn_indexed", "props", "enemies", "block", "spawns", "critters",
 	"villagers", "arenas", "quest_items", "doors", "reserved", "furn", "flick", "area_nodes", "ents", "wr_node", "mm_img", "mm_tex",
-	"seen", "gate_cell", "road_paths", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
+	"seen", "gate_cell", "road_paths", "road_links", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
 
 
 func drop_world_cache() -> void:
@@ -2033,7 +2078,10 @@ func apply_world_edits(key: Vector2i) -> void:
 	if not edits_loaded:
 		load_world_edits()
 	if edit_buckets.has(key):
+		var keep := road_keep      # gli oggetti messi a mano con l'editor hanno la precedenza sui sentieri
+		road_keep = {}
 		run_ops(Vector2i.ZERO, edit_buckets[key], false, false)
+		road_keep = keep
 
 
 func road_detail_chunk(key: Vector2i) -> void:
@@ -2203,7 +2251,7 @@ func gen_world() -> void:
 	carve_path(SEEDS[2], ENTR["d4"])
 	carve_path(SEEDS[3], ENTR["d5"])
 	carve_path(SEEDS[5], ENTR["d6"])
-	find_cathedral_spot()
+	clear_cathedral_site()
 	carve_path(SEEDS[1], ENTR["d7"] + Vector2i(9, 5))      # il sentiero arriva alla facciata da sud
 	carve_path(ENTR["d7"] + Vector2i(9, 5), ENTR["d7"] + Vector2i(0, 1))
 	prof("strade")
@@ -2218,6 +2266,9 @@ func gen_world() -> void:
 		if bc.size() > 0:
 			gate_cell[gd["id"]] = bc[bc.size() / 2]
 	gen_pois()
+	# Dopo gen_pois: posizioni, ID e RNG dei luoghi restano identici alle partite precedenti.
+	RoadNetwork.generate(self)
+	prof("collegamenti POI")
 	# zone "eager": intorno ai centri regione il terreno e' generato subito (li' ci sono le strutture pianificate)
 	var zones: Array = []
 	for sc in SEEDS:
@@ -2388,8 +2439,13 @@ func populate_world() -> void:
 	add_child(wr_node)
 	area_nodes.append(wr_node)
 	wr_node.init_stream(self, Game.MW, Game.MH)
-	for k in eager_chunks:
-		finalize_chunk(k, true)
+	deferred_chunks.clear()
+	if defer_far_chunks():
+		for k in eager_chunks:
+			deferred_chunks[k] = true      # chi porta il giocatore nel mondo completa l'area d'arrivo con ensure_area
+	else:
+		for k in eager_chunks:
+			finalize_chunk(k, true)
 	wr_node.s_tex.update(wr_node.s_img)
 	prof("finalizza %d blocchi (scatter %d ms, nook/camp %d ms, render %d ms di cui veg+alberi %d ms)" % [eager_chunks.size(), fin_prof[0] / 1000, fin_prof[1] / 1000, fin_prof[2] / 1000, fin_prof[3] / 1000])
 	if run_mode:
@@ -2402,6 +2458,9 @@ func populate_world() -> void:
 func finalize_chunk(key: Vector2i, eager := false) -> void:
 	if gen_chunks.get(key, false):
 		return
+	# un blocco rimandato mantiene le regole di quelli completati al caricamento
+	var was_deferred := deferred_chunks.erase(key)
+	eager = eager or was_deferred
 	seed(world_seed * 7919 + key.x * 131 + key.y * 9973)
 	pop_rng.seed = hash([world_seed, key.x, key.y, pop_salt])
 	var tA := Time.get_ticks_usec()
@@ -2423,7 +2482,7 @@ func finalize_chunk(key: Vector2i, eager := false) -> void:
 	if not eager:
 		fauna_chunk(key)
 	var tC := Time.get_ticks_usec()
-	wr_node.add_chunk(key.x, key.y, not eager)
+	wr_node.add_chunk(key.x, key.y, was_deferred or not eager)   # completato in corsa: la texture va aggiornata subito
 	var tD := Time.get_ticks_usec()
 	fin_prof[0] += tB - tA
 	fin_prof[1] += tC - tB
@@ -2728,32 +2787,22 @@ func spawn_all() -> void:
 		spawn_enemy(boss_kind, boss_pos, 1.0, false, boss_tint)
 
 
-## cerca vicino al cimitero un'area tutta calpestabile per la cattedrale; l'ingresso va davanti alla sua porta
-func find_cathedral_spot() -> void:
+## area occupata dalla cattedrale: l'ingresso (d7) e' davanti alla sua porta
+func cathedral_rect() -> Rect2i:
 	var f := tex_fp("cathedral_top")
-	var want: Vector2i = SEEDS[1] + Vector2i(-22, 18)
-	var best := Vector2i(-1, -1)
-	var best_d := 1e9
-	for dy in range(-30, 31, 2):
-		for dx in range(-30, 31, 2):
-			var g := want + Vector2i(dx, dy)
-			var c := g + Vector2i(-f.x / 2, -f.y)
-			var ok := true
-			for y in range(-1, f.y + 2):
-				for x in range(-1, f.x + 1):
-					var cc := c + Vector2i(x, y)
-					if not is_floor(cc) or reserved.has(cc):
-						ok = false
-						break
-				if not ok:
-					break
-			if ok:
-				var d := Vector2(dx, dy).length()
-				if d < best_d:
-					best_d = d
-					best = g
-	if best.x >= 0:
-		ENTR["d7"] = best
+	return Rect2i(ENTR["d7"] + Vector2i(-f.x / 2, -f.y), f)
+
+
+## spiana il sito della cattedrale a ovest del cimitero. Non si cerca un'area gia' libera: l'unica abbastanza grande
+## nei paraggi e' la radura del cimitero, che finirebbe coperta.
+func clear_cathedral_site() -> void:
+	var site := cathedral_rect().grow(1)
+	for y in range(site.position.y, site.end.y):
+		for x in range(site.position.x, site.end.x):
+			var c := Vector2i(x, y)
+			if inb(c) and x > 2 and y > 2 and x < Game.MW - 3 and y < Game.MH - 3 and water[idx(c)] == 0:
+				grid[idx(c)] = 1
+				ovr[idx(c)] = 1
 
 
 ## la cattedrale in rovina sopra l'ingresso del Campanile: il portale e' davanti alla porta del campanile
@@ -5859,6 +5908,8 @@ func try_place(name: String, c: Vector2i, fx := false) -> Prop:
 				return null   # niente carri accanto alle tende
 	if not area_free(c, f):
 		return null
+	if area == "world" and RoadNetwork.blocks_path(self, c, f):
+		return null
 	if area == "world" and persist["broken"].has(key(c)):
 		return null   # distrutto dal giocatore
 	if name.begins_with("tent"):
@@ -5944,6 +5995,8 @@ func place_tree(name: String, center_c: Vector2i) -> void:
 	var f := tex_fp(name)
 	var c := center_c - f / 2
 	if not is_floor(center_c) or block.has(center_c):
+		return
+	if area == "world" and road_keep.has(center_c):
 		return
 	if area == "world" and persist["broken"].has(key(center_c)):
 		return   # abbattuto dal giocatore
@@ -6611,7 +6664,7 @@ func mm_color(c: Vector2i) -> Color:
 		if cobble[i] == 1:
 			return Color(0.45, 0.43, 0.5)
 		if road[i] == 1:
-			return Color(0.38, 0.28, 0.2)
+			return Color(0.56, 0.42, 0.24)
 		return BIOC[biome[i]]
 	if grid[i] == 0:
 		return Color(0.07, 0.06, 0.09)
@@ -8444,9 +8497,21 @@ func change_area(dest: String) -> void:
 	state = "fade"
 	var tw := create_tween()
 	tw.tween_property(fade, "color:a", 1.0, 0.35)
+	# la prima uscita dalle celle genera tutto il mondo: schermata col titolo invece del nero
+	if dest == "world" and world_cache.is_empty() and loading_enabled():
+		tw.tween_callback(_change_with_loading.bind(dest))
+		return
 	tw.tween_callback(_do_change.bind(dest))
 	tw.tween_property(fade, "color:a", 0.0, 0.4)
 	tw.tween_callback(func(): if state == "fade": state = "play")
+
+
+func _change_with_loading(dest: String) -> void:
+	fade.color.a = 0.0      # il velo nero sta sopra l'HUD e coprirebbe la schermata
+	await begin_loading()
+	_do_change(dest)
+	await end_loading("play")
+	msg_t = 3.0             # il nome della zona non deve scadere dietro la schermata
 
 
 func _do_change(dest: String) -> void:
@@ -10008,6 +10073,26 @@ func _gatetest() -> void:
 		for si in SEEDS.size():
 			res += "R%d=%s " % [si, "SI" if near_seen(seen, SEEDS[si]) else "no"]
 		print("GATETEST aperti=", open_ids, " -> ", res)
+		if step == GATE_DEF.size() and OS.get_cmdline_user_args().has("--roaddebug"):
+			print("GATE DEBUG cimitero ", SEEDS[1], ": S centro, = strada, o raggiunto, # ostacolo")
+			for gy in range(-10, 12):
+				var line := ""
+				for gx in range(-12, 13):
+					var c: Vector2i = SEEDS[1] + Vector2i(gx, gy)
+					var marker := "o" if seen.has(c) else "."
+					if road[idx(c)] == 1:
+						marker = "="
+					if not is_floor(c):
+						marker = "~"
+					if block.has(c):
+						marker = "#"
+					if c == SEEDS[1]:
+						marker = "X" if block.has(c) else "S"
+					line += marker
+				print("GATE DEBUG y=", gy, " ", line)
+			for pr in props:
+				if absi(pr.cell.x - SEEDS[1].x) <= 3 and pr.cell.y >= SEEDS[1].y + 5 and pr.cell.y <= SEEDS[1].y + 10 and block.has(pr.cell):
+					print("GATE DEBUG ostacolo=", pr.kind, " cella=", pr.cell)
 		if step < GATE_DEF.size():
 			var gid: String = GATE_DEF[step]["id"]
 			open_ids.append(gid)
@@ -12190,6 +12275,22 @@ func _process(_dt: float) -> void:
 				var sp1 := free_spot(pc1, f1)
 				print("LAND ", nm1, " fp=", f1, " spot=", sp1)
 				pc1 += Vector2i(8, 0)
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--roadtest") or OS.get_cmdline_user_args().has("--roadshot"):
+		tgs += 1
+		if tgs == 5:
+			var road_failures := RoadNetwork.test(self)
+			if OS.get_cmdline_user_args().has("--roadshot"):
+				if road_failures > 0:
+					get_tree().quit(1)
+				else:
+					RoadNetwork.reveal_map(self)
+			else:
+				get_tree().quit(1 if road_failures > 0 else 0)
+		if OS.get_cmdline_user_args().has("--roadshot") and tgs == 35:
+			var road_shot_path := "user://roadmap.png"
+			get_viewport().get_texture().get_image().save_png(road_shot_path)
+			print("ROADSHOT UI ", ProjectSettings.globalize_path(road_shot_path))
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--gatetest"):
 		_gatetest()

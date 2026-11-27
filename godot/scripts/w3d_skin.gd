@@ -2538,6 +2538,153 @@ func elev_at(cx: float, cz: float) -> float:
 
 ## ------------------------------------------------------------------ suolo per pixel: mappa globale delle distanze dai sentieri
 const GRES := 2                    # texel per cella
+const GAME_ROAD_PAD := 0.45        # allargamento oltre la cella: un sentiero di una cella resta continuo e largo circa 1,9
+const GAME_ROAD_W := 1.9           # larghezza dichiarata al 3D: sotto 2.3, quindi senza i ciottoli della via principale
+const GAME_ROAD_REACH := 3         # celle attorno a ogni strada entro cui la distanza viene calcolata
+const GAME_ROAD_RANGE := 2.5       # oltre questa distanza dal bordo la strada non influisce piu' su suolo e natura
+var game_road_sd := PackedFloat32Array()    # per texel: distanza con segno dal bordo delle strade della mappa di gioco
+
+
+## ------------------------------------------------------------------ oggetti 3D e strade della mappa
+## Il motore 3D non conosce le strade di gioco quando dispone case e arredi. Le collisioni 3D sono quelle che fermano
+## il giocatore: un oggetto che copre una cella stradale viene annullato per intero (mai visibile ma attraversabile).
+## Il generatore casuale avanza comunque, quindi tutto il resto del mondo resta identico.
+const GAME_ROAD_CLEAR := 0.4       # spazio libero attorno al centro di una cella strada (il giocatore ha raggio 0.25)
+var road_guard := true
+
+
+func _covers_game_road(cols: Array, from: int) -> bool:
+	for i in range(from, cols.size()):
+		var cl: Array = cols[i]
+		var center: Vector2 = cl[1]
+		var reach: float = (float(cl[2]) if cl[0] == "c" else (cl[2] as Vector2).length()) + GAME_ROAD_CLEAR
+		var gc := center + world_off
+		for y in range(floori(gc.y - reach), floori(gc.y + reach) + 1):
+			for x in range(floori(gc.x - reach), floori(gc.x + reach) + 1):
+				var cell := Vector2i(x, y)
+				if not gm.inb(cell) or gm.road[y * Game.MW + x] == 0 or gm.bridge[y * Game.MW + x] == 1:
+					continue
+				if _col_hit(cl, Vector2(x + 0.5, y + 0.5) - world_off, GAME_ROAD_CLEAR):
+					return true
+	return false
+
+
+func _build_mark(builders: Array, cols: Array, lamps: Array) -> Dictionary:
+	var sizes: Array = []
+	for b: W3DBuilder in builders:
+		sizes.append([b.v.size(), b.reg.size(), b.breakables.size(), b.smokes.size()])
+	return {"builders": sizes, "cols": cols.size(), "lamps": lamps.size(), "doors": house_doors.keys()}
+
+
+func _build_rollback(mark: Dictionary, builders: Array, cols: Array, lamps: Array) -> void:
+	for n in builders.size():
+		var b: W3DBuilder = builders[n]
+		var sizes: Array = mark["builders"][n]
+		b.v.resize(sizes[0])
+		b.c.resize(sizes[0])
+		b.reg.resize(sizes[1])
+		b.breakables.resize(sizes[2])
+		b.smokes.resize(sizes[3])
+	cols.resize(mark["cols"])
+	lamps.resize(mark["lamps"])
+	var before: Array = mark["doors"]
+	for key in house_doors.keys():
+		if not before.has(key):
+			house_doors.erase(key)
+
+
+func _guarding_roads() -> bool:
+	return road_guard and world_on and not grid_road_fn.is_valid()
+
+
+func _obj(k: String, o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
+	if not _guarding_roads():
+		super(k, o, p, yaw, r, cols, lamps)
+		return
+	var mark := _build_mark([o], cols, lamps)
+	super(k, o, p, yaw, r, cols, lamps)
+	if _covers_game_road(cols, mark["cols"]):
+		_build_rollback(mark, [o], cols, lamps)
+
+
+## recinti, cataste e campi non passano da _obj: se coprono una strada si rinuncia all'intero lotto
+func _lot(j: Dictionary, ix: int, iz: int) -> void:
+	if not _guarding_roads():
+		super(j, ix, iz)
+		return
+	var builders: Array = [j["o"], j["v"]]
+	var cols: Array = j["cols"]
+	var mark := _build_mark(builders, cols, j["lamps"])
+	super(j, ix, iz)
+	if _covers_game_road(cols, mark["cols"]):
+		_build_rollback(mark, builders, cols, j["lamps"])
+
+
+func _ed_apply(j: Dictionary) -> void:
+	road_guard = false      # gli oggetti messi a mano con l'editor restano dove sono
+	super(j)
+	road_guard = true
+
+
+## strade e sentieri della mappa di gioco (quelli che si vedono nella mappa): distanza calcolata una volta sola
+func _game_roads_build() -> void:
+	var t0 := Time.get_ticks_msec()
+	var w: int = Game.MW
+	var tw := w * GRES
+	var th: int = Game.MH * GRES
+	game_road_sd.resize(tw * th)
+	game_road_sd.fill(99.0)
+	# Stampo unico per tutte le celle, in indici lineari: e' un ciclo caldo, durante il caricamento.
+	var offs := PackedInt32Array()
+	var dists := PackedFloat32Array()
+	for dz in range(-GAME_ROAD_REACH * GRES, (GAME_ROAD_REACH + 1) * GRES):
+		for dx in range(-GAME_ROAD_REACH * GRES, (GAME_ROAD_REACH + 1) * GRES):
+			var ex := maxf(absf((dx + 0.5) / GRES - 0.5) - 0.5, 0.0)
+			var ez := maxf(absf((dz + 0.5) / GRES - 0.5) - 0.5, 0.0)
+			var sd := sqrt(ex * ex + ez * ez) - GAME_ROAD_PAD
+			if sd < GAME_ROAD_RANGE:
+				offs.append(dz * tw + dx)
+				dists.append(sd)
+	var stamp := offs.size()
+	var count := 0
+	for layer: PackedByteArray in [gm.road, gm.cobble]:
+		var i := layer.find(1)
+		while i >= 0:
+			var x := i % w
+			var z := i / w
+			# sull'acqua e sui ponti non si disegna il sentiero (i ponti hanno le loro assi); al bordo mappa non ci sono strade
+			if gm.water[i] == 0 and gm.bridge[i] == 0 and x >= GAME_ROAD_REACH and z >= GAME_ROAD_REACH and x < w - GAME_ROAD_REACH and z < Game.MH - GAME_ROAD_REACH:
+				var base := z * GRES * tw + x * GRES
+				for k in stamp:
+					var ti := base + offs[k]
+					if dists[k] < game_road_sd[ti]:
+						game_road_sd[ti] = dists[k]
+				count += 1
+			i = layer.find(1, i + 1)
+	if gm.testing:
+		print("W3D strade della mappa: celle=", count, " ms=", Time.get_ticks_msec() - t0)
+
+
+## distanza con segno dal bordo della strada di gioco piu' vicina (99 se lontana); p in coordinate del motore 3D
+func _game_road_dist(p: Vector2) -> float:
+	var tx := floori((p.x + world_off.x) * GRES)
+	var tz := floori((p.y + world_off.y) * GRES)
+	var tw: int = Game.MW * GRES
+	if tx < 0 or tz < 0 or tx >= tw or tz >= Game.MH * GRES or game_road_sd.is_empty():
+		return 99.0
+	return game_road_sd[tz * tw + tx]
+
+
+## suolo, erba, sassi, alberi e rilievi evitano sia le vie del motore 3D sia le strade della mappa di gioco.
+## Case e lotti usano _road_near e restano disposti come prima.
+func _road_dist_sub(p: Vector2, sub: Array) -> Vector2:
+	var base := super(p, sub)
+	if not world_on or grid_road_fn.is_valid():
+		return base
+	var sd := _game_road_dist(p)
+	if sd < base.x - base.y * 0.5:
+		return Vector2(sd + GAME_ROAD_W * 0.5, GAME_ROAD_W)
+	return base
 var gmap_img: Image
 var gmap_tex: ImageTexture
 var gmap_w := 0
@@ -2672,6 +2819,11 @@ func _update_minimap() -> void:
 					var py := int(pt.y) + dy
 					if px >= 0 and py >= 0 and px < cw and py < ch and not (gm.outside[gm.idx(Vector2i(ox + px, oy + py))] == 1 and gm.grid[gm.idx(Vector2i(ox + px, oy + py))] == 0):
 						im.set_pixel(px, py, Color(0.5, 0.45, 0.36))
+	for y in ch:
+		for x in cw:
+			var ri: int = gm.idx(Vector2i(ox + x, oy + y))
+			if gm.road[ri] == 1 and gm.water[ri] == 0:
+				im.set_pixel(x, y, Color(0.5, 0.45, 0.36))
 	for key in house_doors:
 		var dv: Vector3 = house_doors[key]
 		var hp := Vector2(dv.x, dv.y) + world_off - Vector2(ox, oy)
@@ -3227,6 +3379,7 @@ func side_scroll_breakable_at(point: Vector2, radius: float) -> bool:
 func _world_init() -> void:
 	_elev_build()
 	_gmap_init()
+	_game_roads_build()
 	ed_load()
 	ed_set_area("world")
 	ed_hide_sync()

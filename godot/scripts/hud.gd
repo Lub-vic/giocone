@@ -199,9 +199,10 @@ func _draw() -> void:
 		return
 	if main.state == "loading":
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.0, 0.04, 1.0))
-		_txt("CRYPT OF EMBERS", Vector2(0, 110), Color(0.95, 0.72, 0.3), 18, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-		_txt("GENERAZIONE DEL MONDO" + ".".repeat(int(Time.get_ticks_msec() / 300) % 4), Vector2(0, 150), Color(0.8, 0.78, 0.92), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-		_txt("LA VALLE DI VESPRA SI RISVEGLIA", Vector2(0, 170), Color(0.55, 0.55, 0.68), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		var mid := roundf(size.y * 0.5)
+		_txt("FASE %d" % (main.phase + 1), Vector2(0, mid - 26), Color(0.55, 0.55, 0.68), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		_txt(main.PHASE_TITLES[main.phase], Vector2(0, mid), Color(0.95, 0.72, 0.3), 18, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		_txt("CARICAMENTO...", Vector2(0, size.y - 22), Color(0.8, 0.78, 0.92), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		return
 	if main.state == "story":
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.0, 0.04, 0.96))

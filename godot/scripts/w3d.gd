@@ -723,24 +723,17 @@ func _ground_rows(j: Dictionary, r0: int, r1: int) -> void:
 	var x0: float = j["x0"]
 	var z0: float = j["z0"]
 	var n := int(CHS / GS)
-	var crow: Array = []
 	var rrow: Array = []
-	crow.resize(n)
 	rrow.resize(n)
 	for jj in range(r0, r1):
 		for ii in n:
 			var p := Vector2(x0 + (ii + 0.5) * GS, z0 + (jj + 0.5) * GS)
-			# colore e distanza dalla strada calcolati a blocchi 2x2 (variano lentamente): molto piu' veloce
+			# distanza dalla strada calcolata a blocchi 2x2 (varia lentamente): molto piu' veloce
 			if (jj & 1) == 0 and (ii & 1) == 0:
 				var pc := Vector2(x0 + (ii + 1.0) * GS, z0 + (jj + 1.0) * GS)
-				var rd0: Vector2 = _road_dist_sub(pc, sub)
-				rrow[ii] = rd0
-				crow[ii] = _ground_col(pc, rd0.x, rd0.y)
+				rrow[ii] = _road_dist_sub(pc, sub)
 			elif (ii & 1) == 1:
 				rrow[ii] = rrow[ii - 1]
-				crow[ii] = crow[ii - 1]
-			elif (jj & 1) == 1:
-				pass
 			var rdv: Vector2 = rrow[ii]
 			# il colore base non conosce i sentieri: li disegna lo shader per pixel (bordo netto e curvo)
 			var col: Color = _ground_col(p, 99.0, 2.0)
