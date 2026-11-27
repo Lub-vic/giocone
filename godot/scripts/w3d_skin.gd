@@ -1922,7 +1922,8 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 			return
 		_sync_pickup(n as Pickup, id)
 		return
-	var func_prop: bool = n is Prop and not bool((n as Prop).scene)
+	# pagine, bottino e cancelli sono creati come arredo (setup_top) ma servono al gioco: vanno disegnati
+	var func_prop: bool = n is Prop and _is_game_prop(n as Prop)
 	if world_on and not (is_player or func_prop or n is Enemy or n is Villager or n is Ally or n is Critter or n is Pickup):
 		if dyn.has(id):
 			_drop_dyn(id)
@@ -2476,6 +2477,12 @@ var game_road_sd := PackedFloat32Array()    # per texel: distanza con segno dal 
 ## Il generatore casuale avanza comunque, quindi tutto il resto del mondo resta identico.
 const GAME_ROAD_CLEAR := 0.4       # spazio libero attorno al centro di una cella strada (il giocatore ha raggio 0.25)
 var road_guard := true
+const PLAYABLE_SCENE_PROPS := ["page", "loot", "gate_top"]
+
+
+## oggetti di gioco da disegnare in 3D; pagine, bottino e cancelli sono creati come arredo (setup_top) ma servono al gioco
+func _is_game_prop(p: Prop) -> bool:
+	return not bool(p.scene) or str(p.kind) in PLAYABLE_SCENE_PROPS
 ## Il villaggio e' quello disegnato dal motore 3D, con le sue vie: qui dentro le strade della mappa (che seguono il
 ## vecchio schema 2D a croce) non vengono disegnate e non tolgono oggetti. Semiassi della cinta, in celle.
 const VILLAGE_KEEP := Vector2i(28, 22)
@@ -3426,10 +3433,10 @@ func _merge_broken_keys() -> void:
 			ed_hide_keys[Vector2i(int(coords[0]), int(coords[1]))] = true
 
 
-## zone da tenere libere nei blocchi nuovi: partenza del giocatore, falo', portali, anziano, grandi strutture
+## zone da tenere libere nei blocchi nuovi: falo', portali, anziano, grandi strutture. Sono tutti punti fissi: la posizione
+## del giocatore non deve entrarci, altrimenti la casa da cui si e' appena usciti non verrebbe ricostruita (la porta si').
 func _rebuild_clear_pts() -> void:
 	clear_pts.clear()
-	clear_pts.append(Vector3(gm.player.position.x / 16.0 - world_off.x, gm.player.position.y / 16.0 - world_off.y, 2.5))
 	for g in gm.props:
 		if not is_instance_valid(g) or bool(g.scene) or not (str(g.kind) in ["portal", "bonfire", "elder"]):
 			continue
@@ -3620,12 +3627,25 @@ func _mega_guardians(kind: String, mg: Vector2, yaw: float, r: RandomNumberGener
 
 
 ## collisione del mondo aperto: i solidi sono quelli visibili in 3D
+## i cancelli sigillati occupano celle di ponte nella logica (block): in 3D devono fermare allo stesso modo
+func _sealed_gate_hit(p: Vector2, r: float) -> bool:
+	for off in [Vector2(-r, 0.0), Vector2(r, 0.0), Vector2(0.0, -r), Vector2(0.0, r), Vector2.ZERO]:
+		var c := Vector2i(((p + off) / 16.0).floor())
+		if gm.inb(c) and gm.bridge.size() > gm.idx(c) and gm.bridge[gm.idx(c)] == 1 and gm.block.has(c):
+			return true
+	return false
+
+
 func world_free(p: Vector2, r: float) -> bool:
 	var c := Vector2i(floori(p.x / 16.0), floori(p.y / 16.0))
 	if not gm.inb(c) or (gm.outside[gm.idx(c)] == 1 and gm.grid[gm.idx(c)] == 0):
 		return false
 	if _gcol_hit(p / 16.0, r / 16.0 * 0.8):
 		return false
+	if _sealed_gate_hit(p, r):
+		return false
+	if gm.water.size() > gm.idx(c) and gm.water[gm.idx(c)] == 1 and gm.bridge[gm.idx(c)] == 0:
+		return false      # il fiume si passa solo sui ponti (e dai passaggi sotterranei): altrimenti i cancelli non servono
 	return not _blocked(p / 16.0 - world_off, r / 16.0 * 0.8)
 
 
@@ -3670,6 +3690,26 @@ func _unstick(dt: float) -> void:
 	if unstick_t > 0.0:
 		return
 	unstick_t = 0.8
+	# una partita salvata (o un vecchio mondo) puo' lasciare il giocatore in acqua: lo si riporta sulla riva
+	var pc: Vector2i = Vector2i((gm.player.position / 16.0).floor())
+	if gm.inb(pc) and gm.water.size() > gm.idx(pc) and gm.water[gm.idx(pc)] == 1 and gm.bridge[gm.idx(pc)] == 0:
+		for step in 240:
+			var bank: Vector2 = gm.player.position + Vector2.from_angle(TAU * (step % 12) / 12.0) * (step / 12 + 1) * 16.0
+			if world_free(bank, 5.0):
+				gm.player.position = bank
+				break
+	for pr in gm.props:
+		if not is_instance_valid(pr) or not (str(pr.kind) in ["page", "loot"]):
+			continue
+		var centre: Vector2 = (pr as Node2D).position + Vector2(8, -8)
+		if centre.distance_to(gm.player.position) > 500.0 or world_free(centre, 4.0):
+			continue
+		for step in 96:
+			var shift := Vector2.from_angle(TAU * (step % 12) / 12.0) * (step / 12 + 1) * 16.0
+			if world_free(centre + shift, 4.0):
+				(pr as Node2D).position += shift
+				_drop_dyn((pr as Node2D).get_instance_id())
+				break
 	for e in gm.enemies:
 		if not is_instance_valid(e):
 			continue
@@ -3974,7 +4014,7 @@ func _process_inner(dt: float) -> void:
 			near_props_t = 12
 			near_props.clear()
 			for gp in gm.props:
-				if is_instance_valid(gp) and not bool(gp.scene) and (gp as Node2D).position.distance_squared_to(ppx) <= 640000.0:
+				if is_instance_valid(gp) and _is_game_prop(gp) and (gp as Node2D).position.distance_squared_to(ppx) <= 640000.0:
 					near_props.append(gp)
 		for lst in [gm.enemies, gm.villagers, gm.allies, gm.critters, near_props, gm.pickups]:
 			for n in lst:
