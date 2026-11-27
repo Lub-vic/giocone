@@ -187,6 +187,9 @@ var nook_count := 0
 var spawn_t := 0.0
 var gate_cell := {}                 # id cancello -> cella centrale sul ponte
 var road_paths := {}
+var main_road_cells := {}             # celle dell'asse delle vie principali (riempito alla prima richiesta)
+var landmarks: Array = []             # oggetti delle zone unificate (w3d_landmarks.gd): il 3D li disegna dove li mette la logica
+var map_doors: Array = []             # porte degli edifici della mappa: il 3D ricrea l'elenco delle porte e deve riaverle
 var road_links := {}                # id luogo -> accesso e sentiero secondario generato
 var road_keep := {}                 # asse dei sentieri secondari: arredo e vegetazione non lo occupano
 var block := {}                    # Vector2i -> true (oggetti solidi)
@@ -1124,6 +1127,9 @@ func clear_area() -> void:
 	terr_dmg.clear()
 	cut_idx_n = -1
 	furn.clear()
+	landmarks = []
+	map_doors = []
+	main_road_cells = {}
 	doors.clear()
 	allies.clear()
 	if player != null:
@@ -1134,7 +1140,7 @@ func clear_area() -> void:
 const WORLD_KEYS := ["grid", "biome", "road", "cobble", "water", "bridge", "outside", "reach", "ovr", "room_of", "gen_chunks",
 	"eager_chunks", "gn_nz", "gn_wz", "gn_cz", "spawn_buckets", "spawn_indexed", "props", "enemies", "block", "spawns", "critters",
 	"villagers", "arenas", "quest_items", "doors", "reserved", "furn", "flick", "area_nodes", "ents", "world_ready", "mm_img", "mm_tex",
-	"seen", "gate_cell", "road_paths", "road_links", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
+	"seen", "gate_cell", "road_paths", "road_links", "landmarks", "map_doors", "main_road_cells", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
 
 
 func drop_world_cache() -> void:
@@ -1757,6 +1763,16 @@ func destroy_at(c: Vector2i, p: Prop, mat: String, kind: String, loot := true) -
 
 
 ## muri e alberi del bosco gia' abbattuti: li ripristina come tagliati quando il blocco viene creato
+## true sull'asse delle vie principali fra le regioni (quelle di ROADS)
+func on_main_road(c: Vector2i) -> bool:
+	if main_road_cells.is_empty():
+		for id in road_paths:
+			if id is int:
+				for q: Vector2i in road_paths[id]:
+					main_road_cells[q] = true
+	return main_road_cells.has(c)
+
+
 func apply_cuts(cx: int, cy: int) -> void:
 	if cut_idx_n != persist["broken"].size():
 		cut_idx.clear()
@@ -2735,6 +2751,12 @@ func place_cathedral() -> void:
 				reserved.erase(cc)
 				block.erase(cc)
 	world_has_cathedral = try_place("cathedral_top", c) != null
+	if world_has_cathedral and W3DLandmarks.in_zone(self, c):
+		for y in f.y:
+			for x in f.x:
+				block.erase(c + Vector2i(x, y))
+		for wall_cell in W3DLandmarks.cathedral_cells(c, f, W3DLandmarks.transept_rows(self, c, f)):
+			block[wall_cell] = true
 	if not world_has_cathedral:
 		print("CATTEDRALE: spazio occupato a ", c)
 
@@ -5790,7 +5812,7 @@ func try_place(name: String, c: Vector2i, fx := false) -> Prop:
 				return null   # niente carri accanto alle tende
 	if not area_free(c, f):
 		return null
-	if area == "world" and RoadNetwork.blocks_path(self, c, f):
+	if area == "world" and (RoadNetwork.blocks_path(self, c, f) or W3DLandmarks.would_block_road(self, name, c, f)):
 		return null
 	if area == "world" and persist["broken"].has(key(c)):
 		return null   # distrutto dal giocatore
@@ -5801,6 +5823,7 @@ func try_place(name: String, c: Vector2i, fx := false) -> Prop:
 		for dy in f.y:
 			for dx in f.x:
 				block[Vector2i(c.x + dx, c.y + dy)] = true
+		W3DLandmarks.record(self, name, c, f)
 		if dummy_prop == null:
 			dummy_prop = Prop.new()
 		return dummy_prop
@@ -5878,12 +5901,13 @@ func place_tree(name: String, center_c: Vector2i) -> void:
 	var c := center_c - f / 2
 	if not is_floor(center_c) or block.has(center_c):
 		return
-	if area == "world" and road_keep.has(center_c):
+	if area == "world" and (road_keep.has(center_c) or W3DLandmarks.would_block_road(self, "tree", center_c, Vector2i.ONE)):
 		return
 	if area == "world" and persist["broken"].has(key(center_c)):
 		return   # abbattuto dal giocatore
 	if area == "world":
 		block[center_c] = true       # solo 3D: nessun nodo 2D per gli alberi, resta l'ingombro
+		W3DLandmarks.record(self, "tree", center_c, Vector2i.ONE)
 		return
 	var p := Prop.new()
 	p.setup_top(name, c, f, true)
@@ -5964,6 +5988,31 @@ func graveyard(o: Vector2i, w: int, h: int, chapel_roof: String, mausoleums: int
 	place_tree("top_dead_%d" % (randi() % 4), o + Vector2i(w - 2, h - 2))
 	try_place("lamp_top", o + Vector2i(w / 2 - 2, h), true)
 	try_place("lamp_top", o + Vector2i(w / 2 + 2, h), true)
+
+
+## il cimitero grande e' fitto e disordinato: altre tombe fra i vialetti, ossa e alberi secchi. Usa un generatore
+## proprio, cosi' il resto del mondo non cambia; il vialetto centrale (dal cancello alla cappella) resta libero.
+func crowd_graveyard(o: Vector2i, w: int, h: int) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = world_seed * 41 + 7
+	for att in 260:
+		var cell := o + Vector2i(rng.randi_range(1, w - 2), rng.randi_range(1, h - 4))
+		var aisle := absi(cell.x - (o.x + w / 2)) <= 2
+		var crowded := false
+		for dy in range(-1, 3):
+			for dx in range(-1, 2):
+				if block.has(cell + Vector2i(dx, dy)):      # una cella libera tutt'intorno: in 3D le lapidi sono piu' larghe
+					crowded = true
+		var front_lane := cell.y >= o.y + 4 and cell.y <= o.y + 6      # davanti alle porte dei mausolei si passa
+		if aisle or crowded or front_lane:
+			continue
+		var roll := rng.randf()
+		if roll < 0.8:
+			try_place(["grave_mound_0", "grave_slab_0", "grave_slab_1", "grave_cross_0", "grave_cross_1"][rng.randi() % 5], cell)
+		elif roll < 0.92:
+			try_place("skullpile", cell)
+		else:
+			place_tree("top_dead_%d" % rng.randi_range(0, 3), cell)
 
 
 func build_village() -> void:
@@ -6156,6 +6205,7 @@ func build_hamlet(c: Vector2i, n: int, theme: String) -> void:
 func place_structures() -> void:
 	build_village()
 	graveyard(SEEDS[1] + Vector2i(-9, -7), 19, 15, "chapel_top_slate", 2)
+	crowd_graveyard(SEEDS[1] + Vector2i(-9, -7), 19, 15)
 	build_camp(SEEDS[2] + Vector2i(0, 0), 4, true)
 	build_hamlet(SEEDS[3], 4, "swamp")
 	build_ruin(SEEDS[4] + Vector2i(-11, -9), 23, 18, "cat")
