@@ -22,6 +22,7 @@ var mega_cols: Dictionary = {}  # collisioni delle grandi strutture, per posizio
 var megas: Array = []           # grandi strutture pianificate: [tipo, posizione, rotazione] (le costruisce il blocco che contiene il centro)
 var clear_pts: Array = []        # Vector3(x, z, raggio): zone da tenere libere (falo', portali, oggetti di gioco)
 var no_base_fires := false
+var plain_house := false        # casa senza recinto e cataste (le case dei luoghi della mappa)
 var field_n := 0
 var pier_n := 0
 var first_pier := Vector2(-9999, -9999)
@@ -1640,7 +1641,7 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		o.box(Transform3D(ab, t0 * Vector3(sx0 + 0.55, 2.5, sz0)), Vector3(1.1, 0.07, 0.07), WOOD, 0.1, 8)
 		o.box(Transform3D(ab, t0 * Vector3(sx0 + 1.0, 2.1, sz0)), Vector3(0.07, 0.55, 0.7), Color(0.30, 0.2, 0.12), 0.1, 8)
 		o.box(Transform3D(ab, t0 * Vector3(sx0 + 1.0, 2.1, sz0)), Vector3(0.09, 0.3, 0.4), [Color(0.6, 0.15, 0.1), Color(0.65, 0.5, 0.15), Color(0.15, 0.35, 0.5)][dr.randi() % 3], 0.05, 8)
-	if r.randf() < 0.5 and _fence_ok(p):
+	if not plain_house and r.randf() < 0.5 and _fence_ok(p):
 		var m := r.randf_range(1.4, 2.4)
 		var hx := w * 0.5 + m
 		var hz := d * 0.5 + m
@@ -1651,7 +1652,7 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 			wc.append(Vector2(wv.x, wv.z))
 		for si in 4:
 			_fence_run(o, wc[si], wc[(si + 1) % 4], r, cols, si == 1)
-	for i in r.randi_range(0, 3):
+	for i in (0 if plain_house else r.randi_range(0, 3)):
 		var q := Vector2(p.x, p.y) + Vector2(cos(yaw) * (w * 0.5 + 1.4), -sin(yaw) * (w * 0.5 + 1.4)) + Vector2(sin(yaw), cos(yaw)) * r.randf_range(-d * 0.45, d * 0.45) + Vector2(r.randf_range(-0.8, 0.8), r.randf_range(-0.8, 0.8))
 		var kk := r.randf()
 		if kk < 0.4:

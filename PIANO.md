@@ -77,8 +77,16 @@ Fatto:
 - gli oggetti 3D sulle strade vengono spostati (163) invece che tolti (4 tolti);
 - pagine, bottino, risorse, oggetti di missione, scavi e santuari finiti dentro un oggetto 3D vengono portati fuori.
 
-Da fare:
-1. **Un solo mondo:** la logica 2D piazza ancora ingombri invisibili. Va fatto a zone, con confronto prima e dopo,
-   tenendo il villaggio 3D come riferimento.
-2. **Edifici della mappa non disegnati** nel mondo aperto (cattedrale, cappella, mausolei).
-3. **Tempi di caricamento** (rimandati su tua richiesta).
+## Mondo unico — fatto il 28/11
+
+- Strutture, luoghi, rovine, accampamenti ed edifici della mappa sono disegnati in 3D, con collisioni e porte.
+- Villaggio, collina della prigione e oggetti sparsi a caso: comanda il 3D e la logica si adegua.
+- Campione di 17 luoghi: ostacoli invisibili da 1.547 a 0, oggetti noti solo al 3D da 1.476 a 0, porte raggiungibili
+  42 su 43 (resta chiusa una fucina nel quartiere delle fonderie).
+- Passaggi sotterranei riparati (le due scale erano lo stesso oggetto): da provare in partita.
+- Strade: selciato rotto sulle vie principali, terra battuta irregolare per sentieri e vie fuori dal villaggio.
+
+Da controllare:
+1. Scatti mentre si cammina vicino a luoghi grandi: non misurati dopo il mondo unico.
+2. Le due vie che terminano nella cappella del cimitero si aggirano con un giro largo.
+3. **Tempi di caricamento** (rimandati su tua richiesta; uscita dalle celle circa 8,8 s).

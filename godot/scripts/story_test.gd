@@ -51,6 +51,7 @@ static func village_rect_has(m, cell: Vector2) -> bool:
 
 static func run(m) -> void:
 	errors.clear()
+	m.auto_doors = false      # il teletrasporto sui bersagli finirebbe dentro le case
 	await frames(m, 20)
 	m.build_area("world")
 	m.persist["bosses"]["boss_jailer"] = true

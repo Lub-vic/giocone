@@ -1,17 +1,16 @@
 class_name W3DLandmarks
 extends RefCounted
-## Un solo mondo, una zona alla volta. In una zona unificata:
-##  - il 3D disegna cio' che la logica piazza (stesse celle, collisioni e porte);
-##  - nelle aree riservate (cimitero, cattedrale) non vi aggiunge case, alberi o massi propri;
-##  - intorno la sua natura resta, e le sue collisioni vengono segnate anche nella logica.
-## Una zona si aggiunge a ZONES dopo averne confrontato l'aspetto prima e dopo.
+## Un solo mondo. Quello che il giocatore vede e quello che la logica considera occupato coincidono:
+##  - le strutture composte dalla logica (luoghi, rovine, accampamenti, cimiteri, edifici) le disegna il 3D, con le
+##    stesse celle, collisioni e porte; gli oggetti del motore 3D che vi si sovrappongono si spostano o spariscono;
+##  - nel villaggio e sulla collina della prigione, e per gli oggetti sparsi a caso, comanda il 3D: della logica non si
+##    disegna nulla e il suo ingombro resta solo dove in 3D c'e' davvero un ostacolo ("fantasmi");
+##  - in ogni caso le collisioni 3D vengono segnate anche nella logica.
 
-## zone unificate: nome, indice della regione (SEEDS) e rettangolo di celle relativo al suo centro
-const ZONES := [
-	{"name": "cimitero e cattedrale", "seed": 1, "rect": Rect2i(-32, -12, 47, 35)},
-]
 ## edifici della mappa che hanno una porta (le case del villaggio ricevono la loro dal 3D)
-const DOORED := ["chapel_top", "mausoleum_top"]
+const DOORED := ["roof_", "chapel_top", "mausoleum_top", "tower_top", "smithy_top", "archive_top", "sanatorium_top"]
+## sul terreno ci si passa sopra: niente collisione
+const FLAT := ["bone_", "pond_", "circle_top", "rug_top", "log_top", "stump_top", "grave_mound"]
 
 const STONE := Color(0.29, 0.28, 0.31)
 const DARK := Color(0.02, 0.015, 0.025)
@@ -19,52 +18,55 @@ const IRON := Color(0.11, 0.11, 0.13)
 const SLATE := Color(0.14, 0.15, 0.19)
 
 
-## area in cui esiste solo cio' che piazza la logica: il recinto del cimitero e la cattedrale con il suo sagrato
+## area in cui il motore 3D non mette nulla di suo: il recinto del cimitero e la cattedrale con il suo sagrato
 static func reserved_for_map(m, cell: Vector2i, margin := 0) -> bool:
 	var yard := Rect2i((m.SEEDS[1] as Vector2i) + Vector2i(-10, -8), Vector2i(21, 20))
 	return yard.grow(margin).has_point(cell) or (m.cathedral_rect() as Rect2i).grow(2 + margin).has_point(cell)
 
 
-static func in_zone(m, cell: Vector2i, margin := 0) -> bool:
-	for z in ZONES:
-		var r: Rect2i = z["rect"]
-		if Rect2i((m.SEEDS[int(z["seed"])] as Vector2i) + r.position, r.size).grow(margin).has_point(cell):
+## zone dove l'aspetto e' quello del motore 3D: il villaggio (cinta di 28x22 celle) e la collina dell'uscita
+static func keeps_3d_look(m, cell: Vector2i) -> bool:
+	var d: Vector2i = cell - (m.SEEDS[0] as Vector2i)
+	if absi(d.x) <= W3DSkin.VILLAGE_KEEP.x and absi(d.y) <= W3DSkin.VILLAGE_KEEP.y:
+		return true
+	return Vector2(cell - (m.ENTR["d0"] as Vector2i)).length() < W3DSkin.EXIT_KEEP
+
+
+static func _starts(name: String, prefixes: Array) -> bool:
+	for prefix: String in prefixes:
+		if name.begins_with(prefix):
 			return true
 	return false
 
 
-## arredo che lascia libere le vie principali: dove una via attraversa il recinto resta un varco
-const CLEARS_ROAD := ["fence_", "grave_", "skullpile", "boulder", "lamp_top", "top_dead", "top_sick", "tbig_", "tree"]
+## le vie principali restano libere da tutto l'arredo (dove una attraversa un recinto resta un varco); gli edifici restano
 
 
 static func would_block_road(m, name: String, cell: Vector2i, footprint: Vector2i) -> bool:
-	if not in_zone(m, cell):
+	if m.placing_scatter or keeps_3d_look(m, cell) or _starts(name, DOORED) or name.begins_with("cathedral_top"):
 		return false
-	var movable := false
-	for prefix: String in CLEARS_ROAD:
-		movable = movable or name.begins_with(prefix)
-	if not movable:
-		return false
-	# tombe, massi e alberi in 3D sporgono dalla propria cella; la cancellata no
-	var reach := 0 if name.begins_with("fence_") else 1
+	# tombe, massi e alberi in 3D sporgono dalla propria cella; cancellate e muretti no
+	var reach := 0 if (name.begins_with("fence_") or name.begins_with("wall_")) else 1
 	for y in range(cell.y - reach, cell.y + footprint.y + reach):
 		for x in range(cell.x - reach, cell.x + footprint.x + reach):
 			var q := Vector2i(x, y)
-			# road_keep sono i sentieri secondari, gia' protetti; qui contano le vie principali
 			if m.inb(q) and m.road[m.idx(q)] == 1 and not m.road_keep.has(q) and m.on_main_road(q):
 				return true
 	return false
 
 
-## annota un oggetto che la logica sta piazzando in una zona unificata
+## annota un oggetto che la logica sta piazzando nel mondo aperto
 static func record(m, name: String, cell: Vector2i, footprint: Vector2i) -> void:
-	if not in_zone(m, cell):
+	var ghost: bool = m.placing_scatter or keeps_3d_look(m, cell)
+	m.landmarks.append({"n": name, "c": cell, "f": footprint, "ghost": ghost})
+	if ghost:
 		return
-	m.landmarks.append({"n": name, "c": cell, "f": footprint})
-	for prefix: String in DOORED:
-		if name.begins_with(prefix):
-			m.register_door(name, cell, footprint)
-			m.map_doors.append(m.doors.back())
+	for y in footprint.y:
+		for x in footprint.x:
+			m.landmark_cells[cell + Vector2i(x, y)] = true
+	if _starts(name, DOORED):
+		m.register_door(name, cell, footprint, true)
+		m.map_doors.append(m.doors.back())
 
 
 ## righe dei muri laterali in cui passa una via principale: li' si aprono i portali del transetto.
@@ -117,7 +119,15 @@ static func build(sk, entry: Dictionary, o: W3DBuilder, cols: Array, lamps: Arra
 		# la facciata cade sul lato sud dell'ingombro, dove si trova la porta; il campanile sta a nord
 		sk._chapel(o, p + Vector2(0.0, foot.y * 0.5 - 4.4), 0.0, r, cols, lamps)
 	elif name.begins_with("mausoleum_top"):
-		_scaled(sk, o, p + Vector2(0.0, -0.4), 0.7, r, cols, lamps)
+		_scaled(sk, o, "mausoleum", p + Vector2(0.0, -0.4), Vector2(0.7, 0.7), 0.0, r, cols, lamps)
+	elif name.begins_with("roof_"):
+		# casa del motore con la porta a sud, adattata all'ingombro in larghezza e profondita' separatamente: non deve
+		# sporgere, altrimenti copre la porta propria o quella della casa accanto
+		_scaled(sk, o, "house", p + Vector2(0.0, -0.15), Vector2(foot.x, foot.y - 0.3), -PI * 0.5, r, cols, lamps)
+	elif name.begins_with("grave_mound"):
+		sk._bone(o, Vector3(p.x, 0.05, p.y))
+		for i in 5:
+			o.rock(Vector3(p.x + r.randf_range(-0.25, 0.25), 0.08, p.y + (i - 2) * 0.28), Vector3(0.55, 0.22, 0.34), Color(0.16, 0.12, 0.1), 0.16, 0.4, r.randf() * TAU)
 	elif name.begins_with("grave_"):
 		sk._grave_item(o, p + Vector2(r.randf_range(-0.12, 0.12), r.randf_range(-0.2, 0.2)), r, cols, lamps)
 	elif name.begins_with("fence_"):
@@ -126,26 +136,71 @@ static func build(sk, entry: Dictionary, o: W3DBuilder, cols: Array, lamps: Arra
 		sk._dead_tree(o, p, r, cols)
 	elif name.begins_with("lamp_top"):
 		sk._ed_make("lamp", o, p, 0.0, r, cols, lamps)
-	elif name.begins_with("boulder"):
+	elif name.begins_with("barrel_top"):
+		sk._barrel(o, p, r, cols)
+	elif name.begins_with("crate_top"):
+		sk._crate(o, p, r, cols)
+	elif name.begins_with("hay_top"):
+		sk._hay(o, p, r, cols)
+	elif name.begins_with("woodpile"):
+		sk._woodpile(o, p, r.randf_range(-0.3, 0.3), r, cols)
+	elif name.begins_with("cart_top"):
+		sk._cart(o, p, r.randf() * TAU, r, cols)
+	elif name.begins_with("well_top"):
+		sk._well(o, p, r, cols)
+	elif name.begins_with("gibbet"):
+		sk._gallows(o, p, r, cols)
+	elif name.begins_with("bush_"):
+		sk._bush(o, p, r, cols)
+	elif name.begins_with("log_top"):
+		sk._fallen_log(o, p, r)
+	elif name.begins_with("boulder") or name.begins_with("mossy_rock"):
 		var s := 0.42 * maxf(foot.x, foot.y)
-		o.rock(Vector3(p.x, s * 0.55, p.y), Vector3(s * 1.9, s * 1.25, s * 1.7), STONE * r.randf_range(0.75, 1.1), 0.18, 0.45, r.randf() * TAU)
+		var tone := STONE if name.begins_with("boulder") else Color(0.2, 0.28, 0.2)
+		o.rock(Vector3(p.x, s * 0.55, p.y), Vector3(s * 1.9, s * 1.25, s * 1.7), tone * r.randf_range(0.75, 1.1), 0.18, 0.45, r.randf() * TAU)
 		cols.append(["c", p, s * 0.85])
 	elif name.begins_with("skullpile"):
 		for i in r.randi_range(7, 11):
 			sk._bone(o, Vector3(p.x + r.randf_range(-0.55, 0.55), 0.08 + r.randf() * 0.2, p.y + r.randf_range(-0.55, 0.55)))
 		o.rock(Vector3(p.x, 0.22, p.y), Vector3(0.45, 0.38, 0.4), Color(0.6, 0.57, 0.48), 0.1, 0.25, r.randf() * TAU)
 		cols.append(["c", p, 0.4])
+	elif W3DMapProps.build(name, o, p, Vector2(foot), r, cols, lamps):
+		pass
 	else:
-		# oggetti senza modello dedicato: un cumulo di macerie grande quanto l'ingombro
+		_generic(sk, name, o, p, foot, r, cols)
+
+
+## oggetti con la sola versione "a oggetti": si usa la loro geometria 3D, dimensionata sull'ingombro
+static func _generic(sk, name: String, o: W3DBuilder, p: Vector2, foot: Vector2i, r: RandomNumberGenerator, cols: Array) -> void:
+	var t: Texture2D = Game.tex(name)
+	var tw := float(t.get_width()) / 16.0
+	var th := float(t.get_height()) / 16.0
+	var key := "map:" + name
+	if not sk.map_mesh_cache.has(key):
+		var mesh: ArrayMesh = sk._base_prop(name, tw, th, hash(name))
+		if mesh == null and W3DProps.ok(name):
+			mesh = W3DProps.build(name, tw, th, Color(0.4, 0.37, 0.34), hash(name))
+		sk.map_mesh_cache[key] = mesh.surface_get_arrays(0) if mesh != null and mesh.get_surface_count() > 0 else []
+	var arrays: Array = sk.map_mesh_cache[key]
+	if arrays.is_empty():      # nessun modello: un cumulo di macerie grande quanto l'ingombro
 		for i in 3 + foot.x * foot.y:
 			var q := p + Vector2(r.randf_range(-0.4, 0.4) * foot.x, r.randf_range(-0.4, 0.4) * foot.y)
 			var s := r.randf_range(0.25, 0.6)
 			o.rock(Vector3(q.x, s * 0.4, q.y), Vector3(s * 1.4, s, s * 1.2), STONE * r.randf_range(0.6, 1.0), 0.16, 0.4, r.randf() * TAU)
+	else:
+		var at := Vector3(p.x, 0.0, p.y)
+		for v: Vector3 in arrays[Mesh.ARRAY_VERTEX]:
+			o.v.append(at + v)
+		o.c.append_array(arrays[Mesh.ARRAY_COLOR])
+	if not _starts(name, FLAT):
 		cols.append(["b", p, Vector2(foot) * 0.42, 0.0])
 
 
-## il mausoleo del motore e' piu' largo dell'ingombro della mappa: si costruisce a parte e si rimpicciolisce
-static func _scaled(sk, o: W3DBuilder, p: Vector2, k: float, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
+## casa e mausoleo del motore sono piu' grandi degli ingombri della mappa: si costruiscono a parte e si rimpiccioliscono.
+## La casa si costruisce spoglia (senza recinto e cataste, che uscirebbero dall'ingombro) e senza la sua porta: la porta
+## e' quella registrata dalla mappa.
+## Per la casa "size" e' l'ingombro da riempire (in celle); per il mausoleo e' il fattore di riduzione.
+static func _scaled(sk, o: W3DBuilder, kind: String, p: Vector2, size: Vector2, yaw: float, r: RandomNumberGenerator, cols: Array, lamps: Array) -> void:
 	var part := W3DBuilder.new()
 	part.rn = o.rn
 	part.sat = o.sat
@@ -153,14 +208,32 @@ static func _scaled(sk, o: W3DBuilder, p: Vector2, k: float, r: RandomNumberGene
 	part.gain = o.gain
 	var own_cols: Array = []
 	var own_lamps: Array = []
-	sk._mausoleum(part, p, 0.0, r, own_cols, own_lamps)
+	if kind == "house":
+		var doors_before: Dictionary = sk.house_doors.duplicate()
+		sk.plain_house = true
+		sk._house(part, p, yaw, r, own_cols, own_lamps)
+		sk.plain_house = false
+		sk.house_doors = doors_before
+	else:
+		sk._mausoleum(part, p, yaw, r, own_cols, own_lamps)
+	var k := Vector3(size.x, 0.0, size.y)
+	if kind == "house" and not own_cols.is_empty():
+		# il corpo della casa e' l'ultimo collisore; con la porta a sud la sua x locale corre lungo la profondita'
+		var half: Vector2 = own_cols[own_cols.size() - 1][2]
+		k = Vector3(size.x * 0.5 / half.y, 0.0, size.y * 0.5 / half.x)
+	k.y = clampf(sqrt(k.x * k.z), 0.6, 1.15)
 	var centre := Vector3(p.x, 0.0, p.y)
 	for v in part.v:
 		o.v.append(centre + (v - centre) * k)
 	o.c.append_array(part.c)
+	var turned := absf(sin(yaw)) > 0.7      # a 90 gradi gli assi locali dei collisori sono scambiati
 	for cl: Array in own_cols:
-		var at: Vector2 = p + ((cl[1] as Vector2) - p) * k
-		cols.append(["b", at, (cl[2] as Vector2) * k, cl[3]])
+		var at: Vector2 = p + ((cl[1] as Vector2) - p) * Vector2(k.x, k.z)
+		if cl[0] == "c":
+			cols.append(["c", at, float(cl[2]) * minf(k.x, k.z)])
+		else:
+			var scale := Vector2(k.z, k.x) if turned else Vector2(k.x, k.z)
+			cols.append(["b", at, (cl[2] as Vector2) * scale, cl[3]])
 	for l: Vector4 in own_lamps:
 		var at3 := centre + (Vector3(l.x, l.y, l.z) - centre) * k
 		lamps.append(Vector4(at3.x, at3.y, at3.z, l.w))

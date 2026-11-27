@@ -189,6 +189,8 @@ var gate_cell := {}                 # id cancello -> cella centrale sul ponte
 var road_paths := {}
 var main_road_cells := {}             # celle dell'asse delle vie principali (riempito alla prima richiesta)
 var trails: Array = []                # assi dei sentieri verso gli ingressi (celle, in ordine): il 3D li disegna
+var landmark_cells := {}              # celle occupate dagli oggetti che il 3D disegna: il motore le lascia libere
+var placing_scatter := false          # si stanno spargendo oggetti a caso (restano al 3D, vedi w3d_landmarks.gd)
 var landmarks: Array = []             # oggetti delle zone unificate (w3d_landmarks.gd): il 3D li disegna dove li mette la logica
 var map_doors: Array = []             # porte degli edifici della mappa: il 3D ricrea l'elenco delle porte e deve riaverle
 var road_links := {}                # id luogo -> accesso e sentiero secondario generato
@@ -305,6 +307,7 @@ var scout: ScoutFx = null
 const INTERACT := {"res_erba": 1, "res_fungo": 1, "res_legna": 1, "res_minerale": 1, "bed_top": 1, "qitem": 1, "villager": 1, "bell": 1, "shrine": 1, "key": 1, "lever": 1, "stairs_top": 1, "gate_top": 1, "bonfire": 1, "portal": 1, "elder": 1, "npc": 1, "loot": 1, "dig": 1}
 var pick_sel := 0
 var lock_pos := Vector2(-9999.0, -9999.0)
+var auto_doors := true               # le porte si aprono avvicinandosi (le prove che teletrasportano lo sospendono)
 var chain := 0
 var chain_t := 0.0
 var testing := false
@@ -410,6 +413,8 @@ var world_ready := false            # il mondo aperto e' popolato: i blocchi si 
 
 
 func _ready() -> void:
+	if OS.get_cmdline_user_args().has("--selftest"):
+		auto_doors = false      # la prova si sposta da sola e non deve entrare nelle case
 	if OS.get_cmdline_user_args().has("--sequencetest"):
 		StoryTest.run.call_deferred(self)
 	if OS.get_cmdline_user_args().has("--balancetest"):
@@ -1129,6 +1134,7 @@ func clear_area() -> void:
 	cut_idx_n = -1
 	furn.clear()
 	landmarks = []
+	landmark_cells = {}
 	map_doors = []
 	main_road_cells = {}
 	doors.clear()
@@ -1141,7 +1147,7 @@ func clear_area() -> void:
 const WORLD_KEYS := ["grid", "biome", "road", "cobble", "water", "bridge", "outside", "reach", "ovr", "room_of", "gen_chunks",
 	"eager_chunks", "gn_nz", "gn_wz", "gn_cz", "spawn_buckets", "spawn_indexed", "props", "enemies", "block", "spawns", "critters",
 	"villagers", "arenas", "quest_items", "doors", "reserved", "furn", "flick", "area_nodes", "ents", "world_ready", "mm_img", "mm_tex",
-	"seen", "gate_cell", "road_paths", "road_links", "landmarks", "trails", "map_doors", "main_road_cells", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
+	"seen", "gate_cell", "road_paths", "road_links", "landmarks", "landmark_cells", "trails", "map_doors", "main_road_cells", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
 
 
 func drop_world_cache() -> void:
@@ -2417,7 +2423,9 @@ func finalize_chunk(key: Vector2i, eager := false) -> void:
 	micro_rng.seed = world_seed * 53 + key.x * 977 + key.y * 31
 	micro_chunk(key, eager)
 	apply_world_edits(key)
+	placing_scatter = true
 	scatter_chunk(key)
+	placing_scatter = false
 	var tB := Time.get_ticks_usec()
 	nook_chunk(key)
 	secret_chunk(key)
@@ -2760,7 +2768,7 @@ func place_cathedral() -> void:
 				reserved.erase(cc)
 				block.erase(cc)
 	world_has_cathedral = try_place("cathedral_top", c) != null
-	if world_has_cathedral and W3DLandmarks.in_zone(self, c):
+	if world_has_cathedral:
 		for y in f.y:
 			for x in f.x:
 				block.erase(c + Vector2i(x, y))
@@ -2854,7 +2862,8 @@ func place_passages() -> void:
 			var sp := free_spot(c0, Vector2i(2, 2))
 			if sp.x < 0:
 				break
-			var pr := try_place("stairs_top", sp, true)
+			# nel mondo aperto try_place rende un segnaposto comune: qui servono due oggetti veri e distinti
+			var pr := add_prop("stairs_top", sp)
 			if pr == null:
 				break
 			pr.dest = pd["id"] + key_e
@@ -2863,7 +2872,6 @@ func place_passages() -> void:
 			passages[ends[0].dest] = ends[1].cell
 			passages[ends[1].dest] = ends[0].cell
 			for pr in ends:
-				props.append(pr)
 				Game.make_light(pr, Vector2(16, 16), Color(0.55, 0.5, 0.95), 1.4, 0.55)
 
 
@@ -5772,9 +5780,10 @@ func cull_lights() -> void:
 	var cand: Array = []
 	var lim := 340.0 / maxf(0.3, player.cam.zoom.x)
 	for f in flick:
-		var l: PointLight2D = f[0]
-		if not is_instance_valid(l):
+		# il controllo viene prima: assegnare a una variabile tipizzata un oggetto gia' rimosso e' un errore
+		if not is_instance_valid(f[0]):
 			continue
+		var l: PointLight2D = f[0]
 		var d2: float = l.global_position.distance_squared_to(player.position)
 		cand.append([d2, l])
 	cand.sort_custom(func(a, b): return a[0] < b[0])
@@ -5854,7 +5863,7 @@ func try_place(name: String, c: Vector2i, fx := false) -> Prop:
 	return p
 
 
-func register_door(name: String, c: Vector2i, f: Vector2i) -> void:
+func register_door(name: String, c: Vector2i, f: Vector2i, quiet := false) -> void:
 	if area != "world":
 		return
 	var ty := ""
@@ -5874,7 +5883,7 @@ func register_door(name: String, c: Vector2i, f: Vector2i) -> void:
 		ty = "sanatorium"
 	if ty == "":
 		return
-	if ty == "house":
+	if ty == "house" and not quiet:
 		randf()  # mantiene invariata la sequenza casuale (compatibilita' coi salvataggi)
 	# ingresso invisibile al centro del lato anteriore: basta avvicinarsi
 	var pos := Vector2(c.x * Game.TS + f.x * 8, (c.y + f.y) * Game.TS)
@@ -12355,7 +12364,7 @@ func _process(_dt: float) -> void:
 				interact(near_obj)
 		if lock_pos.x > -9000.0 and lock_pos.distance_to(player.position) > 30.0:
 			lock_pos = Vector2(-9999.0, -9999.0)
-		if lock_pos.x < -9000.0:
+		if auto_doors and lock_pos.x < -9000.0:
 			if area == "world":
 				for d in doors:
 					var dp: Vector2 = d["pos"]

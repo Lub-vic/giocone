@@ -2486,7 +2486,13 @@ var n_road := FastNoiseLite.new()
 const GAME_ROAD_CLEAR := 0.4       # spazio libero attorno al centro di una cella strada (il giocatore ha raggio 0.25)
 var road_guard := true
 const LOGIC_PROBE := 0.15               # lo stesso raggio con cui il movimento saggia il centro di una cella
-var landmarks_seen := 0                  # quanti oggetti delle zone unificate sono gia' noti al 3D
+var landmarks_seen := 0                  # quanti oggetti della logica sono gia' noti al 3D
+const RELOCATE_STEPS := [2.0, 3.5, 5.0]     # di quanto si prova a spostare un oggetto che copre una strada o un luogo (celle)
+var relocated_count := 0
+var removed_count := 0
+var landmarks_ref: Array = []            # la lista indicizzata: se il mondo viene rigenerato ne arriva un'altra
+var landmarks_by_chunk: Dictionary = {}  # blocco 3D -> oggetti della logica che vi ricadono
+var map_mesh_cache: Dictionary = {}
 var landmarks_dirty: Dictionary = {}     # blocchi 3D da rifare perche' la logica vi ha aggiunto qualcosa dopo
 
 
@@ -2495,30 +2501,98 @@ func _in_reserved(p: Vector2, margin := 0) -> bool:
 	return world_on and not grid_road_fn.is_valid() and W3DLandmarks.reserved_for_map(gm, Vector2i((p + world_off).floor()), margin)
 
 
-## nelle zone unificate le collisioni del blocco appena costruito valgono anche per la logica (nemici, oggetti, percorsi)
+## le collisioni del blocco appena costruito valgono anche per la logica (nemici, oggetti, percorsi)
 func _mirror_into_logic(k: Vector2i) -> void:
-	var origin := Vector2(k * CHS) + world_off
-	# tumuli e lapidi basse si scavalcano: dell'ingombro di un oggetto resta occupato solo cio' che ferma davvero
-	var area_rect := Rect2(Vector2(k * CHS), Vector2(CHS, CHS))
-	for entry: Dictionary in gm.landmarks:
-		if not area_rect.has_point(W3DLandmarks.anchor(entry, world_off)):
-			continue
-		var footprint: Vector2i = entry["f"]
-		for dy in footprint.y:
-			for dx in footprint.x:
-				var covered: Vector2i = (entry["c"] as Vector2i) + Vector2i(dx, dy)
-				if gm.block.has(covered) and not _blocked(Vector2(covered) + Vector2(0.5, 0.5) - world_off, LOGIC_PROBE):
-					gm.block.erase(covered)
-	for y in range(floori(origin.y), floori(origin.y + CHS)):
-		for x in range(floori(origin.x), floori(origin.x + CHS)):
-			var cell := Vector2i(x, y)
-			if gm.inb(cell) and W3DLandmarks.in_zone(gm, cell) and not gm.block.has(cell) and _blocked(Vector2(x + 0.5, y + 0.5) - world_off, LOGIC_PROBE):
-				gm.block[cell] = true
+	_index_landmarks()
+	for entry: Dictionary in landmarks_by_chunk.get(k, []):
+		_reconcile(entry)
+	if not chunks.has(k):
+		return
+	for cl: Array in chunks[k]["cols"]:
+		var center: Vector2 = cl[1]
+		var reach: float = (float(cl[2]) if cl[0] == "c" else (cl[2] as Vector2).length()) + LOGIC_PROBE
+		var gc := center + world_off
+		for y in range(floori(gc.y - reach), floori(gc.y + reach) + 1):
+			for x in range(floori(gc.x - reach), floori(gc.x + reach) + 1):
+				var cell := Vector2i(x, y)
+				if gm.inb(cell) and not gm.block.has(cell) and _col_hit(cl, Vector2(x + 0.5, y + 0.5) - world_off, LOGIC_PROBE):
+					gm.block[cell] = true
+
+
+## dei "fantasmi" (e delle sagome scavalcabili) resta occupato solo cio' che in 3D ferma davvero
+func _reconcile(entry: Dictionary) -> void:
+	var footprint: Vector2i = entry["f"]
+	for dy in footprint.y:
+		for dx in footprint.x:
+			var covered: Vector2i = (entry["c"] as Vector2i) + Vector2i(dx, dy)
+			if gm.block.has(covered) and not _blocked(Vector2(covered) + Vector2(0.5, 0.5) - world_off, LOGIC_PROBE):
+				gm.block.erase(covered)
+
+
+## distribuisce nei blocchi 3D gli oggetti che la logica ha aggiunto; quelli gia' costruiti che ne ricevono uno
+## visibile vengono segnati da rifare
+func _index_landmarks() -> void:
+	if not is_same(landmarks_ref, gm.landmarks):
+		# mondo nuovo (per esempio un nuovo ciclo) con la vista gia' all'aperto: si riparte e si rifanno i blocchi
+		landmarks_ref = gm.landmarks
+		landmarks_seen = 0
+		landmarks_by_chunk.clear()
+		landmarks_dirty.clear()
+		for key: Vector2i in chunks:
+			landmarks_dirty[key] = true
+	for i in range(landmarks_seen, gm.landmarks.size()):
+		var entry: Dictionary = gm.landmarks[i]
+		if not entry["ghost"] and _touches_village_link(entry):
+			# i raccordi con il villaggio restano sgombri: l'oggetto non si disegna e non occupa
+			entry["ghost"] = true
+			var size: Vector2i = entry["f"]
+			for dy in size.y:
+				for dx in size.x:
+					gm.landmark_cells.erase((entry["c"] as Vector2i) + Vector2i(dx, dy))
+		var at := W3DLandmarks.anchor(entry, world_off)
+		var key := Vector2i(floori(at.x / CHS), floori(at.y / CHS))
+		if not landmarks_by_chunk.has(key):
+			landmarks_by_chunk[key] = []
+		(landmarks_by_chunk[key] as Array).append(entry)
+		if chunks.has(key):
+			if entry["ghost"]:
+				_reconcile(entry)      # il blocco c'e' gia' e non va rifatto: si allinea subito la logica
+			else:
+				landmarks_dirty[key] = true
+	landmarks_seen = gm.landmarks.size()
+
+
+func _touches_village_link(entry: Dictionary) -> bool:
+	var area_rect := Rect2i(entry["c"], entry["f"]).grow(1)
+	for cell in village_links:
+		if area_rect.has_point(cell):
+			return true
+	return false
+
+
+## l'oggetto del motore finirebbe dentro qualcosa che la mappa disegna
+func _covers_map_object(cl: Array) -> bool:
+	if gm.landmark_cells.is_empty():
+		return false
+	var reach: float = (float(cl[2]) if cl[0] == "c" else (cl[2] as Vector2).length()) + 0.3
+	var gc: Vector2 = (cl[1] as Vector2) + world_off
+	for y in range(floori(gc.y - reach), floori(gc.y + reach) + 1):
+		for x in range(floori(gc.x - reach), floori(gc.x + reach) + 1):
+			if gm.landmark_cells.has(Vector2i(x, y)) and _col_hit(cl, Vector2(x + 0.5, y + 0.5) - world_off, 0.3):
+				return true
+	return false
 
 
 func _free(p: Vector2, r: float, cols: Array) -> bool:
 	if _in_reserved(p, 1):
 		return false
+	if world_on and not grid_road_fn.is_valid() and not gm.landmark_cells.is_empty():
+		var gc := p + world_off
+		var margin := minf(r, 1.4)
+		for y in range(floori(gc.y - margin), floori(gc.y + margin) + 1):
+			for x in range(floori(gc.x - margin), floori(gc.x + margin) + 1):
+				if gm.landmark_cells.has(Vector2i(x, y)):
+					return false
 	return super(p, r, cols)
 
 
@@ -2526,12 +2600,13 @@ func _free(p: Vector2, r: float, cols: Array) -> bool:
 func _finalize(j: Dictionary) -> void:
 	if world_on and not grid_road_fn.is_valid():
 		var o: W3DBuilder = j["o"]
-		var area_rect := Rect2(float(j["x0"]), float(j["z0"]), CHS, CHS)
+		_index_landmarks()
+		landmarks_dirty.erase(j["k"])
 		var colour_state := o.rn.state
 		var was_guarding := road_guard
 		road_guard = false
-		for entry: Dictionary in gm.landmarks:
-			if area_rect.has_point(W3DLandmarks.anchor(entry, world_off)):
+		for entry: Dictionary in landmarks_by_chunk.get(j["k"], []):
+			if not entry["ghost"]:
 				W3DLandmarks.build(self, entry, o, j["cols"], j["lamps"])
 		road_guard = was_guarding
 		o.rn.state = colour_state
@@ -2543,11 +2618,8 @@ func _finalize(j: Dictionary) -> void:
 
 ## la logica completa le zone mentre si gioca: i blocchi 3D gia' costruiti vengono rifatti, uno per fotogramma
 func _landmarks_update() -> void:
-	if gm.landmarks.size() != landmarks_seen:
-		for i in range(mini(landmarks_seen, gm.landmarks.size()), gm.landmarks.size()):
-			var at := W3DLandmarks.anchor(gm.landmarks[i], world_off)
-			landmarks_dirty[Vector2i(floori(at.x / CHS), floori(at.y / CHS))] = true
-		landmarks_seen = gm.landmarks.size()
+	if gm.landmarks.size() != landmarks_seen or not is_same(landmarks_ref, gm.landmarks):
+		_index_landmarks()
 	for key: Vector2i in landmarks_dirty.keys():
 		if job_keys.has(key):
 			continue
@@ -2555,9 +2627,6 @@ func _landmarks_update() -> void:
 		if chunks.has(key):
 			_enqueue(key)
 			break
-const RELOCATE_STEPS := [2.0, 3.5, 5.0]     # di quanto si prova a spostare un oggetto che copre una strada (celle)
-var relocated_count := 0
-var removed_count := 0
 
 
 ## un oggetto spostato non deve compenetrare quelli gia' costruiti nello stesso blocco
@@ -2603,13 +2672,18 @@ func _in_village(cell: Vector2i) -> bool:
 func _covers_game_road(cols: Array, from: int) -> bool:
 	for i in range(from, cols.size()):
 		var cl: Array = cols[i]
+		if _covers_map_object(cl):
+			return true
 		var center: Vector2 = cl[1]
 		var reach: float = (float(cl[2]) if cl[0] == "c" else (cl[2] as Vector2).length()) + GAME_ROAD_CLEAR
 		var gc := center + world_off
 		for y in range(floori(gc.y - reach), floori(gc.y + reach) + 1):
 			for x in range(floori(gc.x - reach), floori(gc.x + reach) + 1):
 				var cell := Vector2i(x, y)
-				if not gm.inb(cell) or gm.road[y * Game.MW + x] == 0 or gm.bridge[y * Game.MW + x] == 1 or _road_hidden(cell):
+				if not gm.inb(cell):
+					continue
+				var on_road: bool = gm.road[y * Game.MW + x] == 1 and gm.bridge[y * Game.MW + x] == 0 and not _road_hidden(cell)
+				if not on_road and not village_links.has(cell):      # i raccordi col villaggio non sono celle strada
 					continue
 				if _col_hit(cl, Vector2(x + 0.5, y + 0.5) - world_off, GAME_ROAD_CLEAR):
 					return true
@@ -3586,7 +3660,8 @@ func _world_init() -> void:
 	doors_seen.clear()
 	gm.doors.clear()
 	gm.doors.append_array(gm.map_doors)
-	landmarks_seen = gm.landmarks.size()
+	landmarks_seen = 0
+	landmarks_by_chunk.clear()
 	landmarks_dirty.clear()
 	stream_margin = 14.0
 	stream_drop = 40.0
