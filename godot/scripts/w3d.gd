@@ -1530,7 +1530,9 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		var bz: float = sz[i] * d * 0.5 + r.randf_range(-0.3, 0.3)
 		bc.append(t0 * Vector3(bx, 0, bz))
 		tc.append(t0 * Vector3(bx * 0.96, wh + r.randf_range(-0.3, 0.3), bz * 0.96))
-	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(0, wh * 0.5, 0)), Vector3(w - 0.3, wh, d - 0.3), Color(0.04, 0.035, 0.04), 0.0, 0)
+	# anima scura che chiude le fessure. Gli angoli rientrano fino a 0.3 (e in cima di un altro 4%): deve restarci
+	# dentro, altrimenti buca le pareti e in prima persona si vedono grandi macchie nere.
+	o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(0, (wh - 0.36) * 0.5, 0)), Vector3(w - 0.86, wh - 0.36, d - 0.9), Color(0.04, 0.035, 0.04), 0.0, 0)
 	var apex_a: Vector3 = t0 * Vector3(0, wh + rh, -d * 0.5)
 	var apex_b: Vector3 = t0 * Vector3(0, wh + rh, d * 0.5)
 	for i in 4:
@@ -1595,15 +1597,21 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		o.box(Transform3D(ab, lp), Vector3(0.24, 0.36, 0.24), Color(0.95, 0.8, 0.55, 0.2), 0.0, 8)
 		lamps.append(Vector4(lp.x, lp.y, lp.z, 1.0))
 	var lit := r.randf() < 0.6
+	var front_windows: Array = []
 	for k in 2:
 		var wz := (-d * 0.25 if k == 0 else d * 0.25)
 		if absf(wz - dz) < 1.5:
 			continue
 		var on := lit and r.randf() < 0.8
-		_window(o, t0, Vector3(w * 0.5, wh * 0.58, wz), 0, on, r)
+		front_windows.append([wz, on])
+		# la vecchia finestra si disegna a vuoto: consuma le stesse estrazioni, quindi tutto il resto del mondo resta identico
+		var discard := W3DBuilder.new()
+		discard.rn = o.rn
+		_window(discard, t0, Vector3(w * 0.5, wh * 0.58, wz), 0, on, r)
 		if on:
 			var wp := t0 * Vector3(w * 0.5 + 0.9, 1.4, wz)
 			lamps.append(Vector4(wp.x, wp.y, wp.z, 0.55))
+	W3DFacade.decorate(o, bc, tc, [apex_a, apex_b], d, dz, front_windows, style, base_col, roof_col, dr.seed + 977)
 	# abbaino con finestra, vialetto di lastre dalla porta e insegna appesa
 	if dr.randf() < 0.65:
 		var ds := -1.0 if dr.randf() < 0.5 else 1.0
