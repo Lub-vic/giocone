@@ -9,6 +9,12 @@ const GUN_P := 0.12         # probabilita' fissa che esca un'arma dal futuro (se
 const PITY_MAX := 3         # dopo tanti oggetti inutili di fila, il prossimo e' garantito utile
 
 static var owned := {}      # oggetti inutili in possesso: id -> quantita'
+## grado di storia (missions.gd) e singolarita' in corso: li aggiorna il gioco; il valore 3 non limita nulla
+static var story_tier := 3
+static var singularity := false
+## grado minimo per armi e alleati; le armi e gli alleati non elencati richiedono il grado 3
+const GUN_TIER := {"pistola": 1, "pompa": 2, "mitra": 2}
+const JACKPOT_TIER := {"drone": 1, "golem": 2, "carro": 2}
 static var tech := 0.0      # livello tecnologico unico del mondo (sale con il futuro evocato)
 ## quanto il mondo e' "maturo" per le intrusioni del futuro: dipende solo dal livello tecnologico (0 all'inizio, 1 a tech 40)
 static func maturity() -> float:
@@ -153,6 +159,25 @@ static func reset() -> void:
 	tech = 0.0
 
 
+static func gun_allowed(id: String) -> bool:
+	return not singularity and story_tier >= int(GUN_TIER.get(id, 3))
+
+
+## durante la singolarita' il Cronotone e' sempre carico: escono solo cose a tempo (niente armi ne' materiali da forgia)
+static func jackpot_allowed(id: String) -> bool:
+	if singularity:
+		return id == "drone"
+	return story_tier >= int(JACKPOT_TIER.get(id, 3))
+
+
+## grado di storia necessario per forgiare un oggetto anacronistico: prima armature e pozioni, poi le armi
+static func forge_tier(id: String) -> int:
+	var out: Dictionary = JUNK[id]["out"]
+	if str(out["t"]) != "w":
+		return 1
+	return 3 if float(out["b"]) >= 0.16 else 2
+
+
 ## estrazione pesata. pity = oggetti inutili usciti di fila
 static func roll(lv: int, pity: int) -> Dictionary:
 	# un'arma dal futuro ogni ~8 evocazioni, qualunque sia il resto del pool
@@ -160,7 +185,7 @@ static func roll(lv: int, pity: int) -> Dictionary:
 		var gp: Array = []
 		var gt := 0.0
 		for gid in GUN:
-			if lv >= int(GUN[gid]["lv"]):
+			if lv >= int(GUN[gid]["lv"]) and gun_allowed(gid):
 				gp.append([gid, float(GUN[gid]["w"])])
 				gt += float(GUN[gid]["w"])
 		var gr := randf() * gt
@@ -174,12 +199,12 @@ static func roll(lv: int, pity: int) -> Dictionary:
 		if lv >= int(USE[id]["lv"]):
 			pool.append(["use", id, float(USE[id]["w"])])
 	for id in JACKPOT:
-		if lv >= int(JACKPOT[id]["lv"]):
+		if lv >= int(JACKPOT[id]["lv"]) and jackpot_allowed(id):
 			pool.append(["jackpot", id, float(JACKPOT[id]["w"]) + minf(4.0, 0.15 * lv)])
 	for id in GUN:
-		if lv >= int(GUN[id]["lv"]):
+		if lv >= int(GUN[id]["lv"]) and gun_allowed(id):
 			pool.append(["gun", id, float(GUN[id]["w"])])
-	if pity < PITY_MAX:
+	if pity < PITY_MAX and not singularity:
 		for id in JUNK:
 			pool.append(["junk", id, float(JUNK[id]["w"])])
 	for e in pool:

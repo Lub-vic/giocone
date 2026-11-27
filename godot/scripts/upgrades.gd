@@ -23,7 +23,7 @@ const LIST := [
 
 
 static func cost(lv: int) -> int:
-	return int(80.0 * pow(float(lv), 1.6))
+	return int(130.0 * pow(float(lv), 1.7))
 
 
 static func total_max() -> int:

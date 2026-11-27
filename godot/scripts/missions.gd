@@ -10,11 +10,11 @@ const VERSION := 2
 const STAGES := [
 	{"id": "elder", "txt": "PARLA CON L'ANZIANO DEL VILLAGGIO"},
 	{"id": "page", "txt": "CERCA UNA PAGINA DI DIARIO NEL VILLAGGIO", "n": 1},
-	{"id": "scout", "txt": "ESPLORA I DINTORNI: SCOPRI NUOVI LUOGHI", "n": 3},
+	{"id": "scout", "txt": "ESPLORA I DINTORNI: SCOPRI NUOVI LUOGHI", "n": 4},
 	{"id": "level", "txt": "SALI A LIVELLO %d RIPOSANDO AL FALO'", "n": 3},
-	{"id": "supplies", "txt": "RACCOGLI PROVVISTE PER L'INVERNO", "n": 10},
+	{"id": "supplies", "txt": "RACCOGLI PROVVISTE PER L'INVERNO", "n": 18},
 	{"id": "barn", "txt": "DIFENDI LE RISERVE DI CIBO AL FIENILE"},
-	{"id": "scout", "txt": "STRANE LUCI DI NOTTE: BATTI LE TERRE LONTANE", "n": 5},
+	{"id": "scout", "txt": "STRANE LUCI DI NOTTE: BATTI LE TERRE LONTANE", "n": 6},
 	{"id": "pages", "txt": "RACCOGLI ALTRE PAGINE DI DIARIO", "n": 5},
 	{"id": "level", "txt": "SALI A LIVELLO %d RIPOSANDO AL FALO'", "n": 6},
 	{"id": "radura", "txt": "RAGGIUNGI LA RADURA DOVE SONO CADUTE LE LUCI"},
@@ -29,6 +29,17 @@ const EARLY_BIOMES := [0, 1, 2, 3]      # regioni raggiungibili con tutti i canc
 const SEEN_RADIUS := 13.0               # celle: un luogo e' "scoperto" quando ci si arriva vicino
 const RADURA_RADIUS := 18               # celle libere attorno al centro della radura
 const RADURA_TRIGGER := 7.0
+
+
+## grado raggiunto nella storia: decide cosa si puo' evocare e forgiare.
+## 0 prima del fienile, 1 dopo il fienile, 2 dopo la radura, 3 dopo il primo custode.
+static func tier(m) -> int:
+	if m.run_mode or m.guardians > 0:
+		return 3
+	var s: int = m.journey_step()
+	if s > RADURA_STAGE:
+		return 2
+	return 1 if s > BARN_STAGE else 0
 
 
 static func migrate(persist: Dictionary) -> void:

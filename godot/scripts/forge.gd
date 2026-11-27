@@ -206,6 +206,10 @@ static func _make_junk(v: Array) -> Dictionary:
 	if id == "" or int(Chrono.owned.get(id, 0)) <= 0:
 		return {"cost": {}, "lines": ["NESSUN OGGETTO ANACRONISTICO", "EVOCA CON N (SELECT)"], "item": {}, "err": "NESSUN OGGETTO"}
 	var j: Dictionary = Chrono.JUNK[id]
+	var need: int = Chrono.forge_tier(id)
+	if Chrono.story_tier < need:
+		var when: String = ["", "DOPO L'ASSALTO AL FIENILE", "DOPO LA RADURA DELL'UFO", "DOPO IL PRIMO CUSTODE"][need]
+		return {"cost": {}, "lines": [str(j["n"]), "NON SAI ANCORA TRASFORMARLO", "SI SBLOCCA " + when], "item": {}, "err": "SI SBLOCCA " + when}
 	var o: Dictionary = j["out"]
 	var lines: Array = ["%s -> %s" % [j["n"], str(o.get("nm", o.get("n", ""))).to_upper()]]
 	var it := {}

@@ -408,6 +408,8 @@ var world_ready := false            # il mondo aperto e' popolato: i blocchi si 
 func _ready() -> void:
 	if OS.get_cmdline_user_args().has("--sequencetest"):
 		StoryTest.run.call_deferred(self)
+	if OS.get_cmdline_user_args().has("--balancetest"):
+		BalanceTest.run.call_deferred(self)
 	Game.setup_input()
 	Keybinds.init()
 	if OS.get_cmdline_user_args().size() == 0:
@@ -3216,10 +3218,15 @@ func journey_advance(msg: String, souls: int, relics: int, weapon: int) -> void:
 	say(msg)
 	snd("level")
 	burst(player.position, Color(1.0, 0.85, 0.4), 24, 60.0, 0.6)
+	PlayLog.note(self, "tappa_chiusa")
 	save_game()
 
 
 func journey_update() -> void:
+	# il grado di storia limita evocazioni e forgia; nelle prove da riga di comando resta tutto sbloccato
+	Chrono.story_tier = 3 if testing else Missions.tier(self)
+	Chrono.singularity = not testing and Story.sing(self) == 2
+	PlayLog.tick(self, get_process_delta_time())
 	if side_scroll_active:
 		return
 	if persist["bosses"].has("boss_jailer"):
@@ -4804,6 +4811,7 @@ func craft_make() -> void:
 	if str(res.get("err", "")) != "":
 		say(str(res["err"]))
 		return
+	PlayLog.note(self, "forgia", "scheda %d %s" % [craft_tab, str(craft_ids())])
 	var cost: Dictionary = res["cost"]
 	if not craft_afford(cost):
 		say("MATERIALI INSUFFICIENTI")
@@ -4946,6 +4954,7 @@ func summon() -> void:
 		return
 	player.chrono -= Chrono.COST
 	var r := Chrono.roll(player.lv, player.pity)
+	PlayLog.note(self, "evocazione", "%s %s" % [r["cls"], r["id"]])
 	player.pity = player.pity + 1 if str(r["cls"]) == "junk" else 0
 	ChronoBubble.spawn(self, r, str(r["cls"]) != "junk" and str(r["cls"]) != "use")   # la bolla si apre vicino a te; l'effetto parte quando l'oggetto ti raggiunge
 
@@ -7617,6 +7626,7 @@ func enemy_died(e: Enemy) -> void:
 			grant_graces(1, "BOTTINO: " + e.nm)
 	player.hp = min(player.max_hp, player.hp + 0.4 + 2.0 * player.r("sangue") + 0.8 * player.rl("nodo"))
 	if e.is_boss:
+		PlayLog.note(self, "custode_sconfitto", e.kind)
 		persist["bosses"][e.kind] = true
 		save_game()
 		if run_mode:
@@ -7657,6 +7667,7 @@ func game_over(_win: bool) -> void:
 			_mission_test_restore()
 			say("TEST SIDE SCROLLING INTERROTTO")
 			return
+	PlayLog.note(self, "morte", area)
 	state = "dying"
 	death_area = area
 	death_pos = player.position
@@ -7823,6 +7834,7 @@ func choose(i: int) -> void:
 	var u: Dictionary = picks[i]
 	player.souls -= Upgrades.cost(player.lv)
 	player.lv += 1
+	PlayLog.note(self, "livello", str(player.lv))
 	player.attr[u["id"]] = player.a(u["id"]) + 1
 	player.apply_stats()
 	player.hp = player.max_hp
