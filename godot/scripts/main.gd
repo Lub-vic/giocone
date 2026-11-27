@@ -331,17 +331,58 @@ var mission_test_pending: Dictionary = {}
 var mission_test_entry: Dictionary = {}
 var mission_test_snapshot: Dictionary = {}
 var side_scroll_active := false
+var side_scroll_mode := "travel"
 var side_scroll_lane_y := 0.0
 var side_scroll_lane_base_y := 0.0
 var side_scroll_lane_target_y := 0.0
 var side_scroll_route_t := 0.0
 var side_scroll_start_x := 0.0
 var side_scroll_goal_x := 0.0
+var side_scroll_start_y := 0.0
+var side_scroll_goal_y := 0.0
 var side_scroll_spawn_t := 0.0
 var side_scroll_spawn_count := 0
 var side_scroll_enemies: Array = []
 var side_scroll_pickups: Array = []
+var side_scroll_drops: Array = []
+var side_scroll_ufo: Node3D = null
+var side_scroll_bubble: Node3D = null
+var side_scroll_temporal_center := Vector2.ZERO
+var side_scroll_ufo_t := 0.0
+var side_scroll_temporal_shots: Array = []
+var side_scroll_laser_target := Vector2.ZERO
+var side_scroll_laser_charge := 0.0
+var side_scroll_laser_t := 0.0
+var side_scroll_laser_cd := 0.0
+var side_scroll_laser_damage_cd := 0.0
+var side_scroll_weapon_family := ""
+var side_scroll_weapon_t := 0.0
+var side_scroll_weapon_cd := 0.0
+var side_scroll_ufo_hits := 0
+var side_scroll_ufo_escape_t := 0.0
 var side_scroll_suspended_nodes: Array = []
+var temporal_clearing_restart_pending := false
+var temporal_clearing_restart_area := ""
+var temporal_clearing_restart_position := Vector2.ZERO
+const TEMPORAL_UFO_HITS_TO_ESCAPE := 8
+const TEMPORAL_UFO_ESCAPE_DURATION := 2.8
+const TEMPORAL_CLEARING_RESTART_RADIUS := 64.0
+const TEMPORAL_MATERIALIZE_DURATION := 0.85
+const TEMPORAL_DROP_BELOW_UFO := 2.4
+const TEMPORAL_LASER_FIRST_DELAY := 5.0
+const TEMPORAL_LASER_COOLDOWN := 7.0
+const TEMPORAL_LASER_CHARGE_DURATION := 0.75
+const TEMPORAL_LASER_DURATION := 2.5
+const TEMPORAL_LASER_TRACK_SPEED := 4.0
+const TEMPORAL_LASER_DAMAGE_INTERVAL := 0.55
+const TEMPORAL_EXPLOSIVE_KINDS := ["tostapane", "frullatore", "batteria", "aspirapolvere", "phon", "energy", "drone", "mina"]
+const TEMPORAL_DROP_KINDS := [
+	"tostapane", "racchetta", "ombrello", "pentola", "mazza", "frullatore",
+	"batteria", "cuscino", "lampadario", "aspirapolvere", "mattarello", "padella",
+	"ferrostiro", "phon", "chitarra", "asta_selfie", "candeliere", "casco_moto",
+	"giubbotto", "stivali", "skateboard", "secchio", "caffe", "energy",
+	"drone", "golem", "mina", "fumo", "greco", "siringa",
+]
 var critters: Array = []
 var villagers: Array = []
 var day_t := 0.3
@@ -1166,6 +1207,11 @@ func build_area(a: String) -> void:
 		populate_interior()
 		amb_target = dun["amb"]
 		sfx_node.ambient("dun")
+	elif a == "temporal_clearing":
+		# Radura Temporale: arena piatta circolare, niente tilemap complessa
+		gen_temporal_clearing()
+		amb_target = Color(0.15, 0.12, 0.2)
+		sfx_node.ambient("world")
 	else:
 		dun = DUNS[a]
 		gen_dungeon()
@@ -1292,6 +1338,111 @@ func gen_pois() -> void:
 		if not poi_buckets.has(key):
 			poi_buckets[key] = []
 		(poi_buckets[key] as Array).append(po)
+
+
+## Radura Temporale: arena circolare piatta per la modalità UFO
+func gen_temporal_clearing() -> void:
+	# Reset griglie
+	grid.resize(Game.MW * Game.MH)
+	grid.fill(0)
+	biome.resize(Game.MW * Game.MH)
+	biome.fill(0)
+	room_of.resize(Game.MW * Game.MH)
+	room_of.fill(-1)
+	water.resize(Game.MW * Game.MH)
+	water.fill(0)
+	road.resize(Game.MW * Game.MH)
+	road.fill(0)
+	cobble.resize(Game.MW * Game.MH)
+	cobble.fill(0)
+	bridge.resize(Game.MW * Game.MH)
+	bridge.fill(0)
+	reach.resize(Game.MW * Game.MH)
+	reach.fill(0)
+	outside.resize(Game.MW * Game.MH)
+	outside.fill(0)
+	ovr.resize(Game.MW * Game.MH)
+	ovr.fill(0)
+	block.clear()
+	rooms.clear()
+	spawns.clear()
+	enemies.clear()
+	props.clear()
+	pickups.clear()
+	critters.clear()
+	villagers.clear()
+	arenas.clear()
+	pois.clear()
+	poi_buckets.clear()
+	doors.clear()
+	carved.clear()
+	furn.clear()
+	tent_cells.clear()
+	terr_dmg.clear()
+	dest_cells.clear()
+	reserved.clear()
+	spawn_buckets.clear()
+	spawn_indexed = 0
+	area_nodes.clear()
+	if mm_img != null:
+		mm_img = null
+	if mm_tex != null:
+		mm_tex = null
+
+	# Arena circolare al centro
+	var cx: int = Game.MW / 2
+	var cy: int = Game.MH / 2
+	var radius_cells := int(200.0 / Game.TS)  # ~12-13 celle
+
+	for y in range(cy - radius_cells, cy + radius_cells + 1):
+		for x in range(cx - radius_cells, cx + radius_cells + 1):
+			var dx := x - cx
+			var dy := y - cy
+			if dx * dx + dy * dy <= radius_cells * radius_cells:
+				var idx := y * Game.MW + x
+				grid[idx] = 1
+				biome[idx] = 0
+				reach[idx] = 1
+				outside[idx] = 1
+
+	# Erba/terra semplice per l'arena
+	new_layers(0)
+	var ts := make_tileset()
+	for y in range(cy - radius_cells, cy + radius_cells + 1):
+		for x in range(cx - radius_cells, cx + radius_cells + 1):
+			var dx := x - cx
+			var dy := y - cy
+			if dx * dx + dy * dy <= radius_cells * radius_cells:
+				var idx := y * Game.MW + x
+				if grid[idx] == 1:
+					# Erba con variazione
+					var hv: float = _hash2(x, y)
+					var tile_x := 0
+					if hv < 0.3:
+						tile_x = 0
+					elif hv < 0.6:
+						tile_x = 1
+					else:
+						tile_x = 2
+					floor_layer.set_cell(Vector2i(x, y), 0, Vector2i(tile_x, 0))
+					# Bordo arena
+					var is_edge := false
+					for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+						var nx: int = x + d.x
+						var ny: int = y + d.y
+						if nx < 0 or ny < 0 or nx >= Game.MW or ny >= Game.MH:
+							is_edge = true
+							break
+						var nidx: int = ny * Game.MW + nx
+						if grid[nidx] == 0:
+							is_edge = true
+							break
+					if is_edge:
+						wall_layer.set_cell(Vector2i(x, y), 0, Vector2i(3, 0))
+
+
+func _hash2(x: int, y: int, s: int = 0) -> float:
+	return fposmod(sin(float(x) * 12.9898 + float(y) * 78.233 + float(s) * 37.719) * 43758.5453, 1.0)
 
 
 func poi_enemies(c: Vector2i, kinds: Array, n: int, spread := 5, champ := true) -> void:
@@ -2772,6 +2923,12 @@ func build_cloister(c: Vector2i) -> void:
 
 func objective() -> String:
 	if side_scroll_active:
+		if side_scroll_mode == "temporal_clearing":
+			if side_scroll_ufo_escape_t > 0.0:
+				return "UFO IN FUGA! SOPRAVVIVI"
+			if side_scroll_weapon_t > 0.0:
+				return "COLPISCI L'UFO: %d/%d  |  ARMA %s" % [side_scroll_ufo_hits, TEMPORAL_UFO_HITS_TO_ESCAPE, str(Rpg.FAM[side_scroll_weapon_family]["n"]).to_upper()]
+			return "SCHIVA LE CADUTE, CERCA ARMI: UFO %d/%d" % [side_scroll_ufo_hits, TEMPORAL_UFO_HITS_TO_ESCAPE]
 		return "RAGGIUNGI LA CATTEDRALE IN ROVINA  (%d M)" % int(maxf(0.0, side_scroll_goal_x - player.position.x) / Game.TS)
 	if run_mode:
 		if run_boss_alive:
@@ -3266,6 +3423,11 @@ func _mission_test_build_entries() -> void:
 		"id": "side_scroll",
 		"label": "MODALITA - SIDE SCROLLING: VIAGGIA VERSO LA CATTEDRALE IN ROVINA",
 	})
+	mission_test_entries.append({
+		"kind": "mode",
+		"id": "temporal_clearing",
+		"label": "MODALITA - RADURA TEMPORALE: UFO E OGGETTI DAL FUTURO",
+	})
 	for mission in MISSION_TEST_STORY:
 		mission_test_entries.append({"kind": "story", "id": mission["id"], "label": mission["label"]})
 	var qids: Array = quest_defs.keys()
@@ -3282,7 +3444,10 @@ func _mission_test_build_entries() -> void:
 
 func _debug_build_list() -> void:
 	_mission_test_build_entries()
-	debug_list = [["world", "MONDO APERTO"]]
+	debug_list = [
+		["world", "MONDO APERTO"],
+		["debug_mode:temporal_clearing", "AVVIA TEST - RADURA TEMPORALE (UFO)"],
+	]
 	for area_id in DUNS:
 		debug_list.append([area_id, str(DUNS[area_id]["n"])])
 	for action in DEBUG_FUNCTION_ACTIONS:
@@ -3290,6 +3455,16 @@ func _debug_build_list() -> void:
 	for i in mission_test_entries.size():
 		debug_list.append(["mission_test:%d" % i, str(mission_test_entries[i]["label"])])
 	debug_sel = 0
+
+
+func _debug_activate_mode(id: String) -> void:
+	for index in mission_test_entries.size():
+		var entry: Dictionary = mission_test_entries[index]
+		if str(entry.get("kind", "")) == "mode" and str(entry.get("id", "")) == id:
+			mission_test_sel = index
+			_mission_test_launch_selected()
+			return
+	push_error("Modalita debug non trovata: %s" % id)
 
 
 func _debug_activate_function(action: String) -> void:
@@ -3511,7 +3686,9 @@ func _mission_test_begin_pending() -> void:
 		_mission_test_start_story(str(entry["id"]))
 		say("TEST MISSIONE: " + str(entry["label"]))
 	elif str(entry["kind"]) == "mode" and str(entry["id"]) == "side_scroll":
-		_side_scroll_start()
+		_side_scroll_start("travel")
+	elif str(entry["kind"]) == "mode" and str(entry["id"]) == "temporal_clearing":
+		_side_scroll_start("temporal_clearing")
 	else:
 		var qid := str(entry["id"])
 		if not quest_defs.has(qid):
@@ -3536,21 +3713,40 @@ func _mission_test_begin_pending() -> void:
 	player.cam.reset_smoothing()
 
 
-func _side_scroll_start() -> void:
+func _side_scroll_start(mode: String = "travel") -> void:
 	_side_scroll_stop()
+	var start_position := player.position
+	temporal_clearing_restart_pending = false
+	if mode == "temporal_clearing":
+		temporal_clearing_restart_area = area
+		temporal_clearing_restart_position = start_position
 	if skin is W3DSkin and (skin as W3DSkin).fpv:
 		(skin as W3DSkin).fpv_set(false)
 	if not player.veh.is_empty():
 		player.veh_exit(false)
 	run_mode = false
 	side_scroll_active = true
+	side_scroll_mode = mode
 	side_scroll_lane_y = clampf(player.position.y, 40.0 * Game.TS, (Game.MH - 40.0) * Game.TS)
 	side_scroll_lane_base_y = side_scroll_lane_y
 	side_scroll_lane_target_y = side_scroll_lane_y
 	side_scroll_route_t = 0.0
-	side_scroll_start_x = 15.0 * Game.TS
-	side_scroll_goal_x = (Game.MW - 15.0) * Game.TS
-	player.position = Vector2(30.0 * Game.TS, side_scroll_lane_y)
+	if mode == "temporal_clearing":
+		var arena_half_width := 18.0 * Game.TS
+		side_scroll_start_x = maxf(15.0 * Game.TS, start_position.x - arena_half_width)
+		side_scroll_goal_x = minf((Game.MW - 15.0) * Game.TS, start_position.x + arena_half_width)
+		side_scroll_start_y = maxf(15.0 * Game.TS, start_position.y - arena_half_width)
+		side_scroll_goal_y = minf((Game.MH - 15.0) * Game.TS, start_position.y + arena_half_width)
+		player.position = _side_scroll_find_clear_position(start_position)
+		side_scroll_lane_y = player.position.y
+		side_scroll_lane_base_y = side_scroll_lane_y
+		side_scroll_lane_target_y = side_scroll_lane_y
+	else:
+		side_scroll_start_x = 15.0 * Game.TS
+		side_scroll_goal_x = (Game.MW - 15.0) * Game.TS
+		side_scroll_start_y = 15.0 * Game.TS
+		side_scroll_goal_y = (Game.MH - 15.0) * Game.TS
+		player.position = Vector2(30.0 * Game.TS, side_scroll_lane_y)
 	player.face = Vector2.RIGHT
 	player.aim_world = player.position + Vector2.RIGHT * 80.0
 	player.lock = null
@@ -3562,6 +3758,21 @@ func _side_scroll_start() -> void:
 	side_scroll_spawn_count = 0
 	side_scroll_enemies.clear()
 	side_scroll_pickups.clear()
+	side_scroll_drops.clear()
+	side_scroll_ufo = null
+	side_scroll_bubble = null
+	side_scroll_ufo_t = 0.0
+	side_scroll_temporal_shots.clear()
+	side_scroll_laser_target = player.position / Game.TS
+	side_scroll_laser_charge = 0.0
+	side_scroll_laser_t = 0.0
+	side_scroll_laser_cd = TEMPORAL_LASER_FIRST_DELAY
+	side_scroll_laser_damage_cd = 0.0
+	side_scroll_weapon_family = ""
+	side_scroll_weapon_t = 0.0
+	side_scroll_weapon_cd = 0.0
+	side_scroll_ufo_hits = 0
+	side_scroll_ufo_escape_t = 0.0
 	side_scroll_suspended_nodes.clear()
 	var suspended_ids := {}
 	for list in [enemies, villagers, allies, critters, pickups, props]:
@@ -3582,19 +3793,410 @@ func _side_scroll_start() -> void:
 			node.set_physics_process(false)
 			if node is Enemy:
 				node.awake = false
-	for i in 3:
-		var pickup := Pickup.new()
-		pickup.setup(self, "soul", 0)
-		pickup.position = Vector2(lerpf(side_scroll_start_x, side_scroll_goal_x, 0.25 + float(i) * 0.25), side_scroll_lane_y)
-		pickup.vel = Vector2.ZERO
-		pickup.age = 1.0
-		pickup.set_meta("side_powerup", ["speed", "damage", "shield"][i])
-		pickup.spr.modulate = [Color(0.35, 1.0, 0.7), Color(1.0, 0.45, 0.3), Color(0.45, 0.75, 1.0)][i]
-		ents.add_child(pickup)
-		pickups.append(pickup)
-		side_scroll_pickups.append(pickup)
+	if mode == "temporal_clearing":
+		var arena_center_x := (side_scroll_start_x + side_scroll_goal_x) * 0.5
+		var arena_center_y := (side_scroll_start_y + side_scroll_goal_y) * 0.5
+		side_scroll_temporal_center = Vector2(arena_center_x / Game.TS, arena_center_y / Game.TS)
+		if skin is W3DSkin:
+			var skin3d := skin as W3DSkin
+			skin3d.side_scroll_temporal_begin(side_scroll_temporal_center)
+			side_scroll_ufo = skin3d.side_scroll_temporal_ufo
+			side_scroll_bubble = skin3d.side_scroll_temporal_bubble
+		side_scroll_spawn_t = 1.8
+		say("RADURA TEMPORALE: MUOVITI NELLA RADURA, SCHIVA LE CADUTE E USA LE ARMI CONTRO L'UFO")
+	else:
+		for i in 3:
+			var pickup := Pickup.new()
+			pickup.setup(self, "soul", 0)
+			pickup.position = Vector2(lerpf(side_scroll_start_x, side_scroll_goal_x, 0.25 + float(i) * 0.25), side_scroll_lane_y)
+			pickup.vel = Vector2.ZERO
+			pickup.age = 1.0
+			pickup.set_meta("side_powerup", ["speed", "damage", "shield"][i])
+			pickup.spr.modulate = [Color(0.35, 1.0, 0.7), Color(1.0, 0.45, 0.3), Color(0.45, 0.75, 1.0)][i]
+			ents.add_child(pickup)
+			pickups.append(pickup)
+			side_scroll_pickups.append(pickup)
+		say("SIDE SCROLLING: USA FRECCE SINISTRA/DESTRA O A/D PER MUOVERTI. RAGGIUNGI LA CATTEDRALE IN ROVINA")
 	player.cam.reset_smoothing()
-	say("SIDE SCROLLING: USA FRECCE SINISTRA/DESTRA O A/D PER MUOVERTI. RAGGIUNGI LA CATTEDRALE IN ROVINA")
+
+
+func _try_restart_temporal_clearing() -> bool:
+	if not temporal_clearing_restart_pending or side_scroll_active or state != "play" or area != temporal_clearing_restart_area or player == null:
+		return false
+	if player.position.distance_to(temporal_clearing_restart_position) > TEMPORAL_CLEARING_RESTART_RADIUS:
+		return false
+	_side_scroll_start("temporal_clearing")
+	return true
+
+
+func _side_scroll_reset_temporal_clearing_after_death() -> bool:
+	if side_scroll_mode != "temporal_clearing":
+		return false
+	temporal_clearing_restart_pending = true
+	_side_scroll_stop()
+	return true
+
+
+func _side_scroll_find_clear_position(origin: Vector2) -> Vector2:
+	if not skin is W3DSkin:
+		return origin
+	var skin3d := skin as W3DSkin
+	var clamped_origin := origin.clamp(
+		Vector2(side_scroll_start_x + player.radius, side_scroll_start_y + player.radius),
+		Vector2(side_scroll_goal_x - player.radius, side_scroll_goal_y - player.radius)
+	)
+	if skin3d.world_free(clamped_origin, player.radius):
+		return clamped_origin
+	for ring in range(1, 21):
+		for i in 16:
+			var candidate := clamped_origin + Vector2.from_angle(float(i) * TAU / 16.0) * float(ring * 8)
+			candidate = candidate.clamp(
+				Vector2(side_scroll_start_x + player.radius, side_scroll_start_y + player.radius),
+				Vector2(side_scroll_goal_x - player.radius, side_scroll_goal_y - player.radius)
+			)
+			if skin3d.world_free(candidate, player.radius):
+				return candidate
+	return clamped_origin
+
+
+func _side_scroll_pick_impact_target() -> Vector2:
+	var min_pos := Vector2(side_scroll_start_x + 32.0, side_scroll_start_y + 32.0) / Game.TS
+	var max_pos := Vector2(side_scroll_goal_x - 32.0, side_scroll_goal_y - 32.0) / Game.TS
+	var player_pos := player.position / Game.TS
+	var skin3d := skin as W3DSkin
+	for attempt in 14:
+		var angle := randf_range(0.0, TAU)
+		var distance := randf_range(3.0, 8.0)
+		var candidate := (player_pos + Vector2.from_angle(angle) * distance).clamp(min_pos, max_pos)
+		var too_close := false
+		for existing in side_scroll_drops:
+			if not bool(existing.get("landed", false)) and Vector2(existing.get("target", Vector2.ZERO)).distance_to(candidate) < 2.8:
+				too_close = true
+				break
+		if too_close or not skin3d.world_free(candidate * Game.TS, player.radius + 8.0):
+			continue
+		var start_ground: float = skin3d.elev_at(side_scroll_temporal_center.x, side_scroll_temporal_center.y)
+		var target_ground: float = skin3d.elev_at(candidate.x, candidate.y)
+		var fall_height: float = start_ground + W3DSkin.TEMPORAL_UFO_HEIGHT - target_ground - 0.45
+		if fall_height >= 2.0:
+			return candidate
+	return player_pos
+
+
+func _side_scroll_spawn_drop(force_kind: String = "") -> void:
+	if not is_instance_valid(side_scroll_ufo) or not (skin is W3DSkin):
+		return
+	var is_weapon := false
+	var weapon_family := ""
+	var kind := force_kind
+	if force_kind.is_empty():
+		kind = TEMPORAL_DROP_KINDS[randi() % TEMPORAL_DROP_KINDS.size()]
+		if randf() < 0.18:
+			is_weapon = true
+			weapon_family = ["rocket", "shotgun", "plasma"][randi_range(0, 2)]
+			kind = {"rocket": "bazooka", "shotgun": "pompa", "plasma": "fucileplasma"}[weapon_family]
+	var target: Vector2 = _side_scroll_pick_impact_target()
+	var drop_visuals: Dictionary = (skin as W3DSkin).side_scroll_temporal_add_drop(kind, target, is_weapon)
+	var visual: Node3D = drop_visuals.get("visual")
+	var shadow: Node3D = drop_visuals.get("shadow")
+	var bubble: Node3D = drop_visuals.get("bubble")
+	if visual == null or shadow == null or bubble == null:
+		return
+	visual.scale = Vector3.ZERO
+	visual.position = Vector3(side_scroll_temporal_center.x, W3DSkin.TEMPORAL_UFO_HEIGHT - TEMPORAL_DROP_BELOW_UFO, side_scroll_temporal_center.y)
+	var start_ground := (skin as W3DSkin).elev_at(side_scroll_temporal_center.x, side_scroll_temporal_center.y)
+	var target_ground := (skin as W3DSkin).elev_at(target.x, target.y)
+	var gravity := 14.0
+	var fall_height := maxf(2.0, start_ground + W3DSkin.TEMPORAL_UFO_HEIGHT - TEMPORAL_DROP_BELOW_UFO - target_ground - 0.45)
+	side_scroll_drops.append({
+		"node": visual,
+		"shadow": shadow,
+		"bubble": bubble,
+		"kind": kind,
+		"weapon_family": weapon_family,
+		"is_weapon": is_weapon,
+		"start": side_scroll_temporal_center,
+		"target": target,
+		"start_world_y": start_ground + W3DSkin.TEMPORAL_UFO_HEIGHT - TEMPORAL_DROP_BELOW_UFO,
+		"start_ground_y": start_ground,
+		"target_ground_y": target_ground,
+		"gravity": gravity,
+		"flight_time": sqrt(2.0 * fall_height / gravity),
+		"flight_t": 0.0,
+		"materialize_t": 0.0,
+		"materialize_duration": TEMPORAL_MATERIALIZE_DURATION,
+		"scale": 0.7 if is_weapon else (0.95 if kind in ["drone", "golem"] else 1.25),
+		"radius": 24.0,
+		"landed": false,
+		"age": 0.0,
+		"explosive": not is_weapon and kind in TEMPORAL_EXPLOSIVE_KINDS,
+		"fuse": randf_range(0.9, 1.3) if not is_weapon and kind in TEMPORAL_EXPLOSIVE_KINDS else 0.0,
+	})
+	side_scroll_spawn_count += 1
+
+
+func _side_scroll_spawn_wave() -> int:
+	var count := randi_range(2, 4)
+	for _i in count:
+		_side_scroll_spawn_drop()
+	return count
+
+
+func _side_scroll_temporal_wave_interval_bounds(hit_count: int) -> Vector2:
+	var escalation := mini(floori(float(maxi(hit_count, 0)) / 2.0), 3)
+	var interval_min := maxf(1.0, 2.5 - escalation * 0.5)
+	var interval_max := maxf(interval_min + 0.25, 3.2 - escalation * 0.55)
+	return Vector2(interval_min, interval_max)
+
+
+func _side_scroll_remove_drop(index: int) -> void:
+	var drop: Dictionary = side_scroll_drops[index]
+	var visual = drop.get("node")
+	var shadow = drop.get("shadow")
+	if skin is W3DSkin:
+		(skin as W3DSkin).side_scroll_temporal_remove_drop(visual, shadow, drop.get("bubble"))
+	side_scroll_drops.remove_at(index)
+
+
+func _side_scroll_update_temporal(dt: float) -> void:
+	side_scroll_ufo_t += dt
+	if side_scroll_weapon_t > 0.0:
+		side_scroll_weapon_t = maxf(0.0, side_scroll_weapon_t - dt)
+		if side_scroll_weapon_t <= 0.0:
+			side_scroll_weapon_family = ""
+			say("L'ARMA TEMPORALE SI E' ESAURITA")
+	side_scroll_weapon_cd = maxf(0.0, side_scroll_weapon_cd - dt)
+	if side_scroll_ufo_escape_t > 0.0:
+		side_scroll_ufo_escape_t = maxf(0.0, side_scroll_ufo_escape_t - dt)
+		if skin is W3DSkin:
+			var escape_progress := 1.0 - side_scroll_ufo_escape_t / TEMPORAL_UFO_ESCAPE_DURATION
+			(skin as W3DSkin).side_scroll_temporal_update(side_scroll_ufo_t, true, escape_progress)
+		if side_scroll_ufo_escape_t <= 0.0:
+			_side_scroll_stop()
+			if mission_test_active:
+				_mission_test_restore()
+			say("L'UFO E' FUGGITO")
+			return
+	elif skin is W3DSkin:
+		(skin as W3DSkin).side_scroll_temporal_update(side_scroll_ufo_t)
+	_side_scroll_update_laser(dt)
+	if side_scroll_ufo_escape_t <= 0.0:
+		side_scroll_spawn_t -= dt
+		if side_scroll_spawn_t <= 0.0:
+			_side_scroll_spawn_wave()
+			var wave_interval := _side_scroll_temporal_wave_interval_bounds(side_scroll_ufo_hits)
+			side_scroll_spawn_t = randf_range(wave_interval.x, wave_interval.y)
+	for index in range(side_scroll_drops.size() - 1, -1, -1):
+		var drop: Dictionary = side_scroll_drops[index]
+		var visual = drop.get("node")
+		if visual == null or not is_instance_valid(visual):
+			_side_scroll_remove_drop(index)
+			continue
+		drop["age"] = float(drop["age"]) + dt
+		if bool(drop["landed"]):
+			var landed_target: Vector2 = drop["target"]
+			if bool(drop.get("is_weapon", false)):
+				var weapon_target: Vector2 = landed_target * Game.TS
+				if player.position.distance_to(weapon_target) < player.radius + 22.0:
+					side_scroll_weapon_family = str(drop["weapon_family"])
+					side_scroll_weapon_t = 12.0
+					side_scroll_weapon_cd = 0.0
+					var weapon_name: String = str(Rpg.FAM[side_scroll_weapon_family]["n"]).to_upper()
+					say("ARMA TEMPORALE: %s - ATTACCA PER COLPIRE L'UFO" % weapon_name)
+					_side_scroll_remove_drop(index)
+					continue
+				if float(drop["age"]) > 12.0:
+					_side_scroll_remove_drop(index)
+					continue
+			elif bool(drop.get("explosive", false)):
+				var fuse_progress := clampf(float(drop["age"]) / maxf(float(drop["fuse"]), 0.01), 0.0, 1.0)
+				if skin is W3DSkin:
+					(skin as W3DSkin).side_scroll_temporal_update_shadow(drop["shadow"], landed_target, 0.55 + fuse_progress * 0.45, side_scroll_ufo_t * lerpf(1.0, 2.8, fuse_progress))
+				visual.scale = Vector3.ONE * float(drop["scale"]) * (1.0 + sin(float(drop["age"]) * lerpf(10.0, 24.0, fuse_progress)) * 0.08 * fuse_progress)
+				if fuse_progress >= 1.0:
+					var explosion_position := Vector3(landed_target.x, float(drop["target_ground_y"]) + 0.45, landed_target.y)
+					if skin is W3DSkin:
+						(skin as W3DSkin).side_scroll_temporal_impact(explosion_position, 0.8)
+					var impact_position := landed_target * Game.TS
+					if player.position.distance_to(impact_position) < player.radius + 42.0:
+						player.hurt(26.0, (player.position - impact_position).normalized())
+					burst(impact_position, Color(1.0, 0.48, 0.16), 18, 56.0, 0.45)
+					snd("slam")
+					_side_scroll_remove_drop(index)
+			elif float(drop["age"]) > 4.0:
+				_side_scroll_remove_drop(index)
+			continue
+		drop["materialize_t"] = float(drop["materialize_t"]) + dt
+		var materialize_duration := float(drop["materialize_duration"])
+		var target: Vector2 = drop["target"]
+		var warning_progress := clampf(float(drop["materialize_t"]) / materialize_duration, 0.0, 1.0)
+		if skin is W3DSkin:
+			(skin as W3DSkin).side_scroll_temporal_update_shadow(drop["shadow"], target, warning_progress, side_scroll_ufo_t)
+		if float(drop["materialize_t"]) < materialize_duration:
+			var materialize := clampf(float(drop["materialize_t"]) / materialize_duration, 0.0, 1.0)
+			var start: Vector2 = drop["start"]
+			visual.position = Vector3(start.x, float(drop["start_world_y"]) - float(drop["start_ground_y"]), start.y)
+			visual.scale = Vector3.ONE * float(drop["scale"]) * smoothstep(0.12, 0.82, materialize)
+			visual.rotation.y = side_scroll_ufo_t * 1.6
+			var grow := 1.0 - pow(1.0 - clampf(materialize / 0.62, 0.0, 1.0), 3.0)
+			var close := clampf((materialize - 0.72) / 0.28, 0.0, 1.0)
+			var bubble_radius := 1.45 * grow * (1.0 - 0.85 * close * close)
+			if skin is W3DSkin:
+				var bubble_position: Vector3 = visual.position + Vector3(0.0, float(drop["start_ground_y"]), 0.0)
+				(skin as W3DSkin).side_scroll_temporal_update_bubble(drop["bubble"], bubble_position, bubble_radius, side_scroll_ufo_t, true)
+			continue
+		if skin is W3DSkin:
+			(skin as W3DSkin).side_scroll_temporal_update_bubble(drop["bubble"], visual.position, 0.0, side_scroll_ufo_t, false)
+		drop["flight_t"] = float(drop["flight_t"]) + dt
+		var flight_t := minf(float(drop["flight_t"]), float(drop["flight_time"]))
+		var progress := clampf(flight_t / float(drop["flight_time"]), 0.0, 1.0)
+		var start: Vector2 = drop["start"]
+		var flight_position := start.lerp(target, progress)
+		var world_height := float(drop["start_world_y"]) - 0.5 * float(drop["gravity"]) * flight_t * flight_t
+		var ground_height := (skin as W3DSkin).elev_at(flight_position.x, flight_position.y)
+		visual.position = Vector3(flight_position.x, world_height - ground_height, flight_position.y)
+		visual.scale = Vector3.ONE * float(drop["scale"])
+		visual.rotation += Vector3(dt * 2.5, dt * 3.2, dt * 1.8)
+		if progress >= 1.0:
+			visual.position = Vector3(target.x, 0.45, target.y)
+			visual.rotation.x = 0.0
+			visual.rotation.z = 0.0
+			drop["landed"] = true
+			drop["age"] = 0.0
+			if skin is W3DSkin:
+				(skin as W3DSkin).side_scroll_temporal_update_shadow(drop["shadow"], target, 0.0, side_scroll_ufo_t)
+			var impact_position := target * Game.TS
+			if bool(drop.get("is_weapon", false)):
+				if player.position.distance_to(impact_position) < player.radius + 22.0:
+					side_scroll_weapon_family = str(drop["weapon_family"])
+					side_scroll_weapon_t = 12.0
+					side_scroll_weapon_cd = 0.0
+					var weapon_name: String = str(Rpg.FAM[side_scroll_weapon_family]["n"]).to_upper()
+					say("ARMA TEMPORALE: %s - ATTACCA PER COLPIRE L'UFO" % weapon_name)
+					_side_scroll_remove_drop(index)
+			else:
+				burst(impact_position, Color(0.5, 0.85, 1.0), 8, 32.0, 0.25)
+				snd("slam")
+				if not bool(drop.get("explosive", false)) and player.position.distance_to(impact_position) < player.radius + float(drop["radius"]):
+					player.hurt(14.0, (player.position - impact_position).normalized())
+	for index in range(side_scroll_temporal_shots.size() - 1, -1, -1):
+		var shot: Dictionary = side_scroll_temporal_shots[index]
+		var shot_node: Node3D = shot.get("node")
+		if not is_instance_valid(shot_node):
+			side_scroll_temporal_shots.remove_at(index)
+			continue
+		shot["t"] = float(shot["t"]) + dt
+		var progress := clampf(float(shot["t"]) / float(shot["duration"]), 0.0, 1.0)
+		var start: Vector3 = shot["start"]
+		var target: Vector3 = shot["target"]
+		var shot_pos := start.lerp(target, progress) + Vector3(0, sin(progress * PI) * 1.8, 0)
+		if skin is W3DSkin:
+			(skin as W3DSkin).side_scroll_temporal_update_shot(shot_node, shot_pos, target - start)
+		if progress >= 1.0:
+			if skin is W3DSkin:
+				(skin as W3DSkin).side_scroll_temporal_impact(target)
+			if side_scroll_ufo_escape_t <= 0.0:
+				_side_scroll_register_ufo_hit()
+			if skin is W3DSkin:
+				(skin as W3DSkin).side_scroll_temporal_remove_shot(shot_node)
+			side_scroll_temporal_shots.remove_at(index)
+
+
+func _side_scroll_cancel_laser() -> void:
+	side_scroll_laser_charge = 0.0
+	side_scroll_laser_t = 0.0
+	side_scroll_laser_damage_cd = 0.0
+	side_scroll_laser_cd = TEMPORAL_LASER_COOLDOWN
+	if skin is W3DSkin:
+		(skin as W3DSkin).side_scroll_temporal_hide_laser()
+
+
+func _side_scroll_update_laser(dt: float) -> void:
+	if not is_instance_valid(side_scroll_ufo) or not (skin is W3DSkin):
+		return
+	if side_scroll_ufo_escape_t > 0.0:
+		_side_scroll_cancel_laser()
+		return
+	var hero_target := player.position / Game.TS
+	var bounds_min := Vector2(side_scroll_start_x, side_scroll_start_y) / Game.TS
+	var bounds_max := Vector2(side_scroll_goal_x, side_scroll_goal_y) / Game.TS
+	if side_scroll_laser_charge > 0.0:
+		side_scroll_laser_target = side_scroll_laser_target.move_toward(hero_target, TEMPORAL_LASER_TRACK_SPEED * 0.45 * dt).clamp(bounds_min, bounds_max)
+		side_scroll_laser_charge = maxf(0.0, side_scroll_laser_charge - dt)
+		if side_scroll_laser_charge <= 0.0:
+			side_scroll_laser_t = TEMPORAL_LASER_DURATION
+			side_scroll_laser_damage_cd = 0.0
+			snd("laser")
+	elif side_scroll_laser_t > 0.0:
+		side_scroll_laser_t = maxf(0.0, side_scroll_laser_t - dt)
+		side_scroll_laser_target = side_scroll_laser_target.move_toward(hero_target, TEMPORAL_LASER_TRACK_SPEED * dt).clamp(bounds_min, bounds_max)
+		side_scroll_laser_damage_cd = maxf(0.0, side_scroll_laser_damage_cd - dt)
+		var hit_radius := player.radius / Game.TS + 0.65
+		if side_scroll_laser_damage_cd <= 0.0 and side_scroll_laser_target.distance_to(hero_target) <= hit_radius:
+			var impact_position := side_scroll_laser_target * Game.TS
+			player.hurt(8.0, (player.position - impact_position).normalized())
+			burst(impact_position, Color(0.4, 0.9, 1.0), 8, 38.0, 0.3)
+			side_scroll_laser_damage_cd = TEMPORAL_LASER_DAMAGE_INTERVAL
+		if side_scroll_laser_t <= 0.0:
+			side_scroll_laser_cd = TEMPORAL_LASER_COOLDOWN
+	else:
+		side_scroll_laser_cd = maxf(0.0, side_scroll_laser_cd - dt)
+		if side_scroll_laser_cd <= 0.0:
+			side_scroll_laser_target = hero_target
+			side_scroll_laser_charge = TEMPORAL_LASER_CHARGE_DURATION
+			side_scroll_laser_damage_cd = 0.0
+			say("L'UFO CARICA IL LASER: SPOSTATI!")
+			snd("laser_charge")
+	var charging := side_scroll_laser_charge > 0.0
+	var active := side_scroll_laser_t > 0.0
+	if not charging and not active:
+		(skin as W3DSkin).side_scroll_temporal_hide_laser()
+		return
+	var ground := (skin as W3DSkin).elev_at(side_scroll_laser_target.x, side_scroll_laser_target.y)
+	var impact := Vector3(side_scroll_laser_target.x, ground + 0.12, side_scroll_laser_target.y)
+	var charge_progress := 1.0 - side_scroll_laser_charge / TEMPORAL_LASER_CHARGE_DURATION if charging else 1.0
+	(skin as W3DSkin).side_scroll_temporal_update_laser(side_scroll_ufo.position, impact, side_scroll_ufo_t, charge_progress, active)
+
+
+func _side_scroll_fire_temporal_weapon() -> void:
+	if side_scroll_ufo_escape_t > 0.0 or side_scroll_weapon_t <= 0.0 or side_scroll_weapon_family.is_empty() or side_scroll_weapon_cd > 0.0 or not side_scroll_temporal_shots.is_empty() or not is_instance_valid(side_scroll_ufo) or not (skin is W3DSkin):
+		return
+	var family := side_scroll_weapon_family
+	var start_x := player.position.x / Game.TS
+	var start_z := player.position.y / Game.TS
+	var start := Vector3(start_x, (skin as W3DSkin).elev_at(start_x, start_z) + 0.8, start_z)
+	var target := side_scroll_ufo.position
+	var shot_node := (skin as W3DSkin).side_scroll_temporal_add_shot(family, start)
+	if shot_node == null:
+		return
+	var projectile_speed := 20.0 if family == "rocket" else (25.0 if family == "shotgun" else 30.0)
+	side_scroll_temporal_shots.append({
+		"node": shot_node,
+		"family": family,
+		"start": start,
+		"target": target,
+		"t": 0.0,
+		"duration": start.distance_to(target) / projectile_speed,
+	})
+	side_scroll_weapon_cd = 0.0
+	side_scroll_weapon_t = 0.0
+	side_scroll_weapon_family = ""
+	snd("swing")
+
+
+func _side_scroll_register_ufo_hit() -> void:
+	if side_scroll_ufo_escape_t > 0.0 or side_scroll_ufo_hits >= TEMPORAL_UFO_HITS_TO_ESCAPE:
+		return
+	side_scroll_ufo_hits += 1
+	if side_scroll_ufo_hits >= TEMPORAL_UFO_HITS_TO_ESCAPE:
+		side_scroll_ufo_escape_t = TEMPORAL_UFO_ESCAPE_DURATION
+		side_scroll_spawn_t = INF
+		say("UFO COLPITO! SI DA' ALLA FUGA")
+	else:
+		if side_scroll_ufo_hits % 2 == 0:
+			var wave_interval := _side_scroll_temporal_wave_interval_bounds(side_scroll_ufo_hits)
+			side_scroll_spawn_t = minf(side_scroll_spawn_t, randf_range(wave_interval.x, wave_interval.y))
+		say("COLPO A SEGNO! UFO %d/%d" % [side_scroll_ufo_hits, TEMPORAL_UFO_HITS_TO_ESCAPE])
 
 
 func _side_scroll_spawn_enemy() -> void:
@@ -3674,6 +4276,9 @@ func _side_scroll_update_route(dt: float) -> void:
 func _side_scroll_update(dt: float) -> void:
 	if not side_scroll_active or state != "play":
 		return
+	if side_scroll_mode == "temporal_clearing":
+		_side_scroll_update_temporal(dt)
+		return
 	_side_scroll_update_route(dt)
 	side_scroll_spawn_t -= dt
 	if side_scroll_spawn_t <= 0.0:
@@ -3707,8 +4312,11 @@ func side_scroll_collect(kind: String) -> void:
 func _side_scroll_stop() -> void:
 	if side_scroll_active:
 		side_scroll_active = false
+	side_scroll_mode = "travel"
 	if skin is W3DSkin:
-		(skin as W3DSkin).side_scroll_props_restore()
+		var skin3d := skin as W3DSkin
+		skin3d.side_scroll_props_restore()
+		skin3d.side_scroll_temporal_clear()
 		RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4.ZERO)
 	for enemy in side_scroll_enemies:
 		if is_instance_valid(enemy):
@@ -3720,6 +4328,21 @@ func _side_scroll_stop() -> void:
 			pickups.erase(pickup)
 			pickup.queue_free()
 	side_scroll_pickups.clear()
+	side_scroll_drops.clear()
+	side_scroll_ufo = null
+	side_scroll_bubble = null
+	side_scroll_temporal_center = Vector2.ZERO
+	side_scroll_temporal_shots.clear()
+	side_scroll_laser_target = Vector2.ZERO
+	side_scroll_laser_charge = 0.0
+	side_scroll_laser_t = 0.0
+	side_scroll_laser_cd = 0.0
+	side_scroll_laser_damage_cd = 0.0
+	side_scroll_weapon_family = ""
+	side_scroll_weapon_t = 0.0
+	side_scroll_weapon_cd = 0.0
+	side_scroll_ufo_hits = 0
+	side_scroll_ufo_escape_t = 0.0
 	for saved in side_scroll_suspended_nodes:
 		var node = saved.get("node")
 		if node == null or not is_instance_valid(node):
@@ -6874,12 +7497,28 @@ func free_at(p: Vector2, r: float) -> bool:
 
 func move_body(o: Node2D, d: Vector2, r: float) -> void:
 	if side_scroll_active:
+		if side_scroll_mode == "temporal_clearing":
+			var bounds_min := Vector2(side_scroll_start_x + r, side_scroll_start_y + r)
+			var bounds_max := Vector2(side_scroll_goal_x - r, side_scroll_goal_y - r)
+			var target_position := (o.position + d).clamp(bounds_min, bounds_max)
+			var travel_vector := target_position - o.position
+			var steps := maxi(1, ceili(travel_vector.length() / maxf(r * 0.6, 4.0)))
+			for i in steps:
+				var next_position := o.position + travel_vector / float(steps)
+				if _side_scroll_obstacle_blocks(o.position, next_position, r):
+					break
+				if not (skin as W3DSkin).world_free(next_position, r):
+					break
+				o.position = next_position
+			return
 		var target_x := clampf(o.position.x + d.x, side_scroll_start_x, side_scroll_goal_x)
 		var travel := target_x - o.position.x
 		var steps := maxi(1, ceili(absf(travel) / maxf(r, 6.0)))
 		for i in steps:
 			var next_x := o.position.x + travel / float(steps)
 			var next_pos := Vector2(next_x, side_scroll_lane_y)
+			if _side_scroll_obstacle_blocks(o.position, next_pos, r):
+				break
 			if skin is W3DSkin and not (skin as W3DSkin).world_free(next_pos, r):
 				break
 			o.position.x = next_x
@@ -6889,6 +7528,26 @@ func move_body(o: Node2D, d: Vector2, r: float) -> void:
 		o.position.x += d.x
 	if free_at(o.position + Vector2(0, d.y), r):
 		o.position.y += d.y
+
+
+func _side_scroll_obstacle_blocks(from_position: Vector2, to_position: Vector2, radius: float) -> bool:
+	if side_scroll_mode != "temporal_clearing":
+		return false
+	for drop in side_scroll_drops:
+		if not bool(drop.get("landed", false)) or bool(drop.get("is_weapon", false)):
+			continue
+		var visual = drop.get("node")
+		if visual == null or not is_instance_valid(visual):
+			continue
+		var obstacle_position: Vector2 = Vector2(drop.get("target", Vector2.ZERO)) * Game.TS
+		var combined_radius := radius + float(drop.get("radius", 24.0))
+		var segment := to_position - from_position
+		var segment_length_squared := segment.length_squared()
+		var closest_t := clampf((obstacle_position - from_position).dot(segment) / maxf(segment_length_squared, 0.001), 0.0, 1.0)
+		var closest_point := from_position + segment * closest_t
+		if closest_point.distance_to(obstacle_position) < combined_radius:
+			return true
+	return false
 
 
 ## movimento dei mezzi evocati nel mondo aperto: l'ufo vola sopra tutto, il carrarmato abbatte gli ostacoli
@@ -7148,11 +7807,14 @@ func game_over(_win: bool) -> void:
 	if state == "dying":
 		return
 	if side_scroll_active:
-		state = "play"
-		_side_scroll_stop()
-		_mission_test_restore()
-		say("TEST SIDE SCROLLING INTERROTTO")
-		return
+		if _side_scroll_reset_temporal_clearing_after_death():
+			say("TORNA ALLA RADURA DOPO IL RISVEGLIO PER RIPROVARE")
+		else:
+			state = "play"
+			_side_scroll_stop()
+			_mission_test_restore()
+			say("TEST SIDE SCROLLING INTERROTTO")
+			return
 	state = "dying"
 	death_area = area
 	death_pos = player.position
@@ -8235,6 +8897,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			var selected: String = str(debug_list[debug_sel][0])
 			if selected.begins_with("debug_action:"):
 				_debug_activate_function(selected.trim_prefix("debug_action:"))
+			elif selected.begins_with("debug_mode:"):
+				_debug_activate_mode(selected.trim_prefix("debug_mode:"))
 			elif selected.begins_with("mission_test:"):
 				mission_test_sel = int(selected.trim_prefix("mission_test:"))
 				_mission_test_launch_selected()
@@ -8495,9 +9159,11 @@ func _selftest() -> void:
 		30:
 			print("T world props=", props.size(), " spawns=", spawns.size(), " enemies=", enemies.size())
 			_debug_build_list()
-			assert(debug_list.size() == 1 + DUNS.size() + DEBUG_FUNCTION_ACTIONS.size() + MISSION_TEST_STORY.size() + quest_defs.size() + 1, "Il menu debug non include tutte le voci")
+			assert(debug_list.size() == 1 + DUNS.size() + DEBUG_FUNCTION_ACTIONS.size() + MISSION_TEST_STORY.size() + quest_defs.size() + 3, "Il menu debug non include tutte le voci")
 			var mission_rows := debug_list.filter(func(row): return str(row[0]).begins_with("mission_test:"))
-			assert(mission_rows.size() == MISSION_TEST_STORY.size() + quest_defs.size() + 1, "Il menu debug non include tutte le missioni e modalita' generate")
+			assert(mission_rows.size() == MISSION_TEST_STORY.size() + quest_defs.size() + 2, "Il menu debug non include tutte le missioni e modalita' generate")
+			var direct_mode_rows := debug_list.filter(func(row): return str(row[0]) == "debug_mode:temporal_clearing")
+			assert(direct_mode_rows.size() == 1, "La Radura Temporale non e' avviabile direttamente dal menu debug")
 			var function_rows := debug_list.filter(func(row): return str(row[0]).begins_with("debug_action:"))
 			assert(function_rows.size() == DEBUG_FUNCTION_ACTIONS.size(), "Il menu debug non include tutte le funzioni dei tasti")
 			var debug_key := InputEventKey.new()
@@ -9358,16 +10024,20 @@ var ai_hp := 0.0
 var ai_base := Vector2.ZERO
 var run_test_base := Vector2.ZERO
 var side_scroll_test_run_mode := false
+var temporal_clearing_test_results: Dictionary = {}
 
 
 func _process(_dt: float) -> void:
 	if mission_test_active and not mission_test_pending.is_empty() and state == "play" and area == "world":
 		_mission_test_begin_pending()
 	if side_scroll_active and state == "dying":
-		_side_scroll_stop()
-		state = "play"
-		_mission_test_restore()
-		say("TEST SIDE SCROLLING INTERROTTO")
+		if not _side_scroll_reset_temporal_clearing_after_death():
+			_side_scroll_stop()
+			state = "play"
+			_mission_test_restore()
+			say("TEST SIDE SCROLLING INTERROTTO")
+	if _try_restart_temporal_clearing():
+		return
 	if state == "map":   # la mappa si scorre con il movimento (stick, croce, WASD)
 		map_pan += Input.get_vector("move_left", "move_right", "move_up", "move_down") * _dt * (260.0 if map_zoom == 1 else 120.0)
 	if OS.get_cmdline_user_args().has("--gateshot"):
@@ -11021,6 +11691,277 @@ func _process(_dt: float) -> void:
 			var few_casters := early_mages == 1
 			print("BARN richiesta=", started, " auto_fire_off=", automatic_fire_disabled, " nemici_onda=", horde_count, " visibili=", horde_within_view, " deboli_iniziali=", horde_early_weak and early_roster_weak, " incantatori_su_20=", early_mages, " difficolta_progressiva=", staged_difficulty, " anime_ridotte=", reduced_souls, " camera=", camera_height_reasonable, " conto_alla_rovescia=", countdown_active, " conclusa=", completed, " auto_fire_ripristinato=", automatic_fire_restored, " progresso=", advanced, " avvicinamento=", steps, " obiettivo=", objective())
 			assert(started and automatic_fire_disabled and limited_waves and horde_within_view and horde_early_weak and early_roster_weak and few_casters and staged_difficulty and reduced_souls and camera_height_reasonable and countdown_active and completed and automatic_fire_restored and advanced, "Assalto al fienile non completato correttamente")
+			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--temporalclearingtest"):
+		tgs += 1
+		if tgs == 5:
+			if area != "world":
+				_do_change("world")
+			_debug_build_list()
+			var direct_mode_index := -1
+			for i in debug_list.size():
+				if str(debug_list[i][0]) == "debug_mode:temporal_clearing":
+					direct_mode_index = i
+					break
+			var registered := direct_mode_index >= 0 and mission_test_entries.filter(func(entry): return entry["kind"] == "mode" and entry["id"] == "temporal_clearing").size() == 1
+			debug_sel = maxi(0, direct_mode_index)
+			debug_return_state = "play"
+			state = "debug"
+			var accept_mode := InputEventAction.new()
+			accept_mode.action = "ui_accept"
+			accept_mode.pressed = true
+			_unhandled_input(accept_mode)
+			side_scroll_spawn_t = 100.0
+			side_scroll_laser_cd = 100.0
+			_side_scroll_spawn_drop("tostapane")
+			var drop_created := side_scroll_drops.size() == 1
+			var bubble_materialized := false
+			var bubble_closed := false
+			var ground_explosion_delayed := false
+			var nonexplosive_remains := false
+			var laser_charge_ok := false
+			var laser_duration_ok := false
+			var laser_tracking_ok := false
+			var laser_damage_ok := false
+			var laser_end_ok := false
+			var ground_fuse := 0.0
+			var varied_roster := TEMPORAL_DROP_KINDS.size() >= 24 and TEMPORAL_DROP_KINDS.all(func(kind): return W3DChrono.has(str(kind)))
+			var logical_explosives := TEMPORAL_EXPLOSIVE_KINDS.has("tostapane") and TEMPORAL_EXPLOSIVE_KINDS.has("mina") and not TEMPORAL_EXPLOSIVE_KINDS.has("racchetta") and not TEMPORAL_EXPLOSIVE_KINDS.has("stivali")
+			var fisheye_active := is_equal_approx(float((skin as W3DSkin).post_mat.get_shader_parameter("fisheye")), W3DSkin.TEMPORAL_FISHEYE)
+			if drop_created:
+				var impact_target: Vector2 = side_scroll_drops[0]["target"]
+				var drop_visual: Node3D = side_scroll_drops[0]["node"]
+				var drop_shadow: Node3D = side_scroll_drops[0]["shadow"]
+				var drop_bubble: Node3D = side_scroll_drops[0]["bubble"]
+				var spawned_at_ufo := Vector2(drop_visual.position.x, drop_visual.position.z).distance_to(Vector2(side_scroll_ufo.position.x, side_scroll_ufo.position.z)) < 0.1
+				var shadow_created := is_instance_valid(drop_shadow)
+				var shadow_is_round_large_translucent := false
+				if shadow_created and drop_shadow.get_child_count() >= 2:
+					var test_fill := drop_shadow.get_child(0) as MeshInstance3D
+					var test_ring := drop_shadow.get_child(1) as MeshInstance3D
+					var test_fill_mesh := test_fill.mesh as CylinderMesh
+					var test_ring_mesh := test_ring.mesh as TorusMesh
+					var test_fill_material := test_fill.material_override as StandardMaterial3D
+					var test_ring_material := test_ring.material_override as StandardMaterial3D
+					shadow_is_round_large_translucent = test_fill_mesh.radial_segments >= 96 and is_equal_approx(test_fill_mesh.top_radius, 1.6) and test_ring_mesh.rings >= 32 and test_ring_mesh.ring_segments >= 96 and is_equal_approx(test_ring_mesh.outer_radius, 2.25) and test_fill_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA and test_ring_material.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA
+				(skin as W3DSkin).side_scroll_temporal_update_shadow(drop_shadow, impact_target, 0.5, 0.0)
+				if shadow_is_round_large_translucent:
+					var updated_test_ring_material := (drop_shadow.get_child(1) as MeshInstance3D).material_override as StandardMaterial3D
+					shadow_is_round_large_translucent = updated_test_ring_material.albedo_color.a <= 0.08
+				temporal_clearing_test_results["shadow_is_round_large_translucent"] = shadow_is_round_large_translucent
+				_side_scroll_update_temporal(0.25)
+				bubble_materialized = is_instance_valid(drop_bubble) and drop_bubble.visible and drop_bubble.get_child_count() >= 20 and drop_visual.scale.length() > 0.1
+				if OS.get_cmdline_user_args().has("--temporalbubbleshot"):
+					return
+				_side_scroll_update_temporal(TEMPORAL_MATERIALIZE_DURATION)
+				bubble_closed = is_instance_valid(drop_bubble) and not drop_bubble.visible
+				_side_scroll_update_temporal(float(side_scroll_drops[0]["flight_time"]) + 0.02)
+				ground_fuse = float(side_scroll_drops[0]["fuse"])
+				ground_explosion_delayed = side_scroll_drops.size() == 1 and bool(side_scroll_drops[0]["landed"]) and float(side_scroll_drops[0]["age"]) < ground_fuse
+				temporal_clearing_test_results["spawned_at_ufo"] = spawned_at_ufo
+				temporal_clearing_test_results["drop_below_ufo"] = is_equal_approx(side_scroll_ufo.position.y - float(side_scroll_drops[0]["start_world_y"]), TEMPORAL_DROP_BELOW_UFO)
+				temporal_clearing_test_results["landing_shadow"] = shadow_created
+			var landed := drop_created and bool(side_scroll_drops[0]["landed"])
+			var blocked := false
+			var can_evade := false
+			var moves_in_depth := false
+			var skin3d := skin as W3DSkin
+			var saved_position := player.position
+			for depth_step in [Vector2(0, -16), Vector2(0, 16)]:
+				var depth_target: Vector2 = player.position + depth_step
+				if depth_target.y < side_scroll_start_y + player.radius or depth_target.y > side_scroll_goal_y - player.radius or not skin3d.world_free(depth_target, player.radius):
+					continue
+				move_body(player, depth_step, player.radius)
+				moves_in_depth = absf(player.position.y - saved_position.y) > 0.1
+				player.position = saved_position
+				if moves_in_depth:
+					break
+			if landed:
+				var obstacle_position: Vector2 = side_scroll_drops[0]["target"] * Game.TS
+				var combined_radius := player.radius + float(side_scroll_drops[0]["radius"])
+				var approach_direction := Vector2.ZERO
+				var found_approach := false
+				for direction in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
+					var candidate: Vector2 = obstacle_position + direction * (combined_radius + 18.0)
+					if candidate.x < side_scroll_start_x + player.radius or candidate.x > side_scroll_goal_x - player.radius or candidate.y < side_scroll_start_y + player.radius or candidate.y > side_scroll_goal_y - player.radius:
+						continue
+					if skin3d.world_free(candidate, player.radius):
+						approach_direction = direction
+						player.position = candidate
+						found_approach = true
+						break
+				if found_approach:
+					var approach_start := player.position
+					move_body(player, -approach_direction * 80.0, player.radius)
+					var stopped_distance := player.position.distance_to(obstacle_position)
+					blocked = player.position.distance_to(approach_start) > 0.001 and stopped_distance >= combined_radius and stopped_distance <= combined_radius + player.radius + 8.0
+					var stopped_position := player.position
+					var evade_step := approach_direction.orthogonal() * 16.0
+					move_body(player, evade_step, player.radius)
+					can_evade = player.position.distance_to(stopped_position) > 0.1 and player.position.distance_to(obstacle_position) > stopped_distance
+			player.position = saved_position
+			if landed:
+				_side_scroll_update_temporal(ground_fuse + 0.02)
+				ground_explosion_delayed = ground_explosion_delayed and side_scroll_drops.is_empty()
+				var ground_explosion_visible := false
+				for child in (skin as W3DSkin).vp.get_children():
+					if child is CPUParticles3D and str(child.name).begins_with("TemporalUfoImpact_"):
+						ground_explosion_visible = true
+						break
+				ground_explosion_delayed = ground_explosion_delayed and ground_explosion_visible
+			var explosions_before_racket := 0
+			for child in (skin as W3DSkin).vp.get_children():
+				if child is CPUParticles3D and str(child.name).begins_with("TemporalUfoImpact_"):
+					explosions_before_racket += 1
+			_side_scroll_spawn_drop("racchetta")
+			if side_scroll_drops.size() == 1:
+				var racket_flight_time := float(side_scroll_drops[0]["flight_time"])
+				_side_scroll_update_temporal(TEMPORAL_MATERIALIZE_DURATION + racket_flight_time + 0.1)
+				_side_scroll_update_temporal(1.5)
+				var explosions_after_racket := 0
+				for child in (skin as W3DSkin).vp.get_children():
+					if child is CPUParticles3D and str(child.name).begins_with("TemporalUfoImpact_"):
+						explosions_after_racket += 1
+				nonexplosive_remains = side_scroll_drops.size() == 1 and str(side_scroll_drops[0]["kind"]) == "racchetta" and bool(side_scroll_drops[0]["landed"]) and float(side_scroll_drops[0]["age"]) > 1.3 and not (side_scroll_drops[0]["shadow"] as Node3D).visible and explosions_after_racket == explosions_before_racket
+				_side_scroll_remove_drop(0)
+			side_scroll_laser_cd = 0.0
+			_side_scroll_update_temporal(0.02)
+			var laser_node := (skin as W3DSkin).side_scroll_temporal_laser_root
+			laser_charge_ok = side_scroll_laser_charge > 0.0 and side_scroll_laser_t <= 0.0 and is_instance_valid(laser_node) and laser_node.visible
+			player.position += Vector2(48.0, 0.0)
+			_side_scroll_update_temporal(TEMPORAL_LASER_CHARGE_DURATION + 0.02)
+			laser_duration_ok = side_scroll_laser_charge <= 0.0 and side_scroll_laser_t >= 2.0 and side_scroll_laser_t <= TEMPORAL_LASER_DURATION and is_instance_valid(laser_node) and laser_node.visible
+			if OS.get_cmdline_user_args().has("--temporallasershot"):
+				return
+			var laser_target_before := side_scroll_laser_target
+			player.position += Vector2(64.0, 0.0)
+			_side_scroll_update_temporal(0.4)
+			var laser_travel := side_scroll_laser_target.distance_to(laser_target_before)
+			laser_tracking_ok = laser_travel > 0.1 and laser_travel <= TEMPORAL_LASER_TRACK_SPEED * 0.4 + 0.05
+			player.position = side_scroll_laser_target * Game.TS
+			player.inv = 0.0
+			var hp_before_laser := player.hp
+			_side_scroll_update_temporal(0.05)
+			laser_damage_ok = player.hp < hp_before_laser
+			_side_scroll_update_temporal(TEMPORAL_LASER_DURATION)
+			laser_end_ok = side_scroll_laser_t <= 0.0 and side_scroll_laser_charge <= 0.0 and side_scroll_laser_cd > 0.0 and is_instance_valid(laser_node) and not laser_node.visible
+			player.position = saved_position
+			player.hp = player.max_hp
+			player.inv = 0.0
+			var wave_start_count := side_scroll_drops.size()
+			var wave_count := _side_scroll_spawn_wave()
+			var wave_spawned := wave_count >= 2 and wave_count <= 4 and side_scroll_drops.size() - wave_start_count == wave_count
+			side_scroll_weapon_family = "rocket"
+			side_scroll_weapon_t = 5.0
+			_side_scroll_fire_temporal_weapon()
+			var shot_fired := side_scroll_temporal_shots.size() == 1
+			var weapon_consumed_after_shot := shot_fired and side_scroll_weapon_t <= 0.0 and side_scroll_weapon_family.is_empty()
+			_side_scroll_fire_temporal_weapon()
+			var only_one_projectile := side_scroll_temporal_shots.size() == 1
+			var shot_node: Node3D = side_scroll_temporal_shots[0]["node"] if shot_fired else null
+			var shot_aims_at_ufo := shot_fired and Vector3(side_scroll_temporal_shots[0]["target"]).distance_to(side_scroll_ufo.position) < 0.01
+			var weapon_projectile_is_3d := shot_fired and shot_node.get_child_count() >= 4
+			var shot_duration := float(side_scroll_temporal_shots[0]["duration"]) + 0.01 if shot_fired else 0.0
+			_side_scroll_update_temporal(shot_duration)
+			var shot_hit_ufo := side_scroll_ufo_hits == 1
+			var impact_explosion_visible := false
+			for child in (skin as W3DSkin).vp.get_children():
+				if child is CPUParticles3D and str(child.name).begins_with("TemporalUfoImpact_"):
+					impact_explosion_visible = true
+					break
+			for _hit in range(6 - side_scroll_ufo_hits):
+				_side_scroll_register_ufo_hit()
+			var ufo_stays_after_six_hits := side_scroll_ufo_hits == 6 and side_scroll_ufo_escape_t <= 0.0
+			_side_scroll_register_ufo_hit()
+			var ufo_stays_after_seven_hits := side_scroll_ufo_hits == 7 and side_scroll_ufo_escape_t <= 0.0
+			_side_scroll_register_ufo_hit()
+			var ufo_escaped := side_scroll_ufo_hits == TEMPORAL_UFO_HITS_TO_ESCAPE and side_scroll_ufo_escape_t > 0.0 and is_instance_valid(side_scroll_ufo)
+			var ufo_not_destroyed := is_instance_valid(side_scroll_ufo) and side_scroll_ufo.is_inside_tree()
+			(skin as W3DSkin).side_scroll_temporal_update(side_scroll_ufo_t + 0.2, true, 0.2)
+			var escape_smoke_visible := false
+			for child in (skin as W3DSkin).side_scroll_temporal_root.get_children():
+				if child.name == "TemporalEscapeSmoke" and child is CPUParticles3D and (child as CPUParticles3D).one_shot:
+					escape_smoke_visible = true
+					break
+			var ufo_is_original := side_scroll_ufo is MeshInstance3D and (side_scroll_ufo as MeshInstance3D).mesh == W3DCine.ufo_mesh()
+			var clearing_anchor := temporal_clearing_restart_position
+			var death_reset := _side_scroll_reset_temporal_clearing_after_death()
+			var death_reset_ok := death_reset and temporal_clearing_restart_pending and not side_scroll_active
+			player.position = clearing_anchor + Vector2(TEMPORAL_CLEARING_RESTART_RADIUS + 1.0, 0.0)
+			var restart_waits_for_attack_point := not _try_restart_temporal_clearing() and not side_scroll_active
+			player.position = clearing_anchor
+			var restarted_at_attack_point := _try_restart_temporal_clearing() and side_scroll_active and side_scroll_mode == "temporal_clearing" and side_scroll_ufo_hits == 0
+			var wave_interval_0 := _side_scroll_temporal_wave_interval_bounds(0)
+			var wave_interval_2 := _side_scroll_temporal_wave_interval_bounds(2)
+			var wave_interval_4 := _side_scroll_temporal_wave_interval_bounds(4)
+			var wave_interval_6 := _side_scroll_temporal_wave_interval_bounds(6)
+			var materialization_frequency_escalates := wave_interval_0.x > wave_interval_2.x and wave_interval_2.x > wave_interval_4.x and wave_interval_4.x > wave_interval_6.x and wave_interval_0.y > wave_interval_2.y and wave_interval_2.y > wave_interval_4.y and wave_interval_4.y > wave_interval_6.y
+			temporal_clearing_test_results = {
+				"registered": registered,
+				"mode_started": side_scroll_active and side_scroll_mode == "temporal_clearing",
+				"visuals_created": is_instance_valid(side_scroll_ufo) and side_scroll_bubble == null and ufo_is_original,
+				"no_bubble": side_scroll_bubble == null,
+				"drop_landed": landed,
+				"obstacle_blocks": blocked,
+				"player_can_evade": can_evade,
+				"drop_spawned_at_ufo": bool(temporal_clearing_test_results.get("spawned_at_ufo", false)),
+				"drop_below_ufo": bool(temporal_clearing_test_results.get("drop_below_ufo", false)),
+				"landing_shadow": bool(temporal_clearing_test_results.get("landing_shadow", false)),
+				"shadow_is_round_large_translucent": bool(temporal_clearing_test_results.get("shadow_is_round_large_translucent", false)),
+				"bubble_materialized": bubble_materialized,
+				"bubble_closed": bubble_closed,
+				"ground_explosion_delayed": ground_explosion_delayed,
+				"nonexplosive_remains": nonexplosive_remains,
+				"laser_charge": laser_charge_ok,
+				"laser_duration": laser_duration_ok,
+				"laser_tracking": laser_tracking_ok,
+				"laser_damage": laser_damage_ok,
+				"laser_end": laser_end_ok,
+				"varied_roster": varied_roster,
+				"logical_explosives": logical_explosives,
+				"fisheye_active": fisheye_active,
+				"moves_in_depth": moves_in_depth,
+				"wave_has_two_to_four_drops": wave_spawned,
+				"weapon_shot_hits_ufo": shot_fired and shot_hit_ufo and weapon_projectile_is_3d and only_one_projectile and shot_aims_at_ufo,
+				"weapon_consumed_after_shot": weapon_consumed_after_shot,
+				"impact_explosion_visible": impact_explosion_visible,
+				"ufo_escapes_without_destruction": ufo_escaped and ufo_not_destroyed and escape_smoke_visible,
+				"ufo_waits_until_eight_hits": ufo_stays_after_six_hits and ufo_stays_after_seven_hits and ufo_escaped,
+				"materialization_frequency_escalates": materialization_frequency_escalates,
+				"death_resets_clearing": death_reset_ok,
+				"restart_waits_for_attack_point": restart_waits_for_attack_point,
+				"restart_at_attack_point": restarted_at_attack_point,
+			}
+		if tgs == 6:
+			if OS.get_cmdline_user_args().has("--temporallasershot"):
+				var laser_shot_result := get_viewport().get_texture().get_image().save_png("user://temporal_laser_test.png")
+				print("TEMPORAL LASER screenshot=", laser_shot_result)
+				get_tree().quit()
+				return
+			if OS.get_cmdline_user_args().has("--temporalbubbleshot"):
+				var bubble_shot_result := get_viewport().get_texture().get_image().save_png("user://temporal_bubble_test.png")
+				print("TEMPORAL BUBBLE screenshot=", bubble_shot_result)
+				get_tree().quit()
+				return
+			if OS.get_cmdline_user_args().has("--temporalshot"):
+				var shot_result := get_viewport().get_texture().get_image().save_png("user://temporal_clearing_test.png")
+				print("TEMPORAL CLEARING screenshot=", shot_result)
+			var temporal_camera: Camera3D = (skin as W3DSkin).cam
+			var camera_focus := side_scroll_temporal_center.lerp(player.position / Game.TS, 0.5)
+			var camera_tracks_subject := Vector2(temporal_camera.position.x, temporal_camera.position.z).distance_to(Vector2(camera_focus.x, camera_focus.y + 24.0)) < 2.0
+			var camera_framed := temporal_camera.projection == Camera3D.PROJECTION_PERSPECTIVE and is_equal_approx(temporal_camera.fov, 38.6) and camera_tracks_subject and absf(absf(temporal_camera.rotation_degrees.x) - 34.5) < 8.0
+			var clearing_is_wide := side_scroll_goal_x - side_scroll_start_x >= 30.0 * Game.TS and side_scroll_goal_y - side_scroll_start_y >= 30.0 * Game.TS
+			temporal_clearing_test_results["camera_framed"] = camera_framed
+			temporal_clearing_test_results["clearing_is_wide"] = clearing_is_wide
+			_mission_test_restore()
+			var cleaned := not mission_test_active and not side_scroll_active and side_scroll_drops.is_empty() and side_scroll_ufo == null and side_scroll_bubble == null and side_scroll_laser_t <= 0.0 and side_scroll_laser_charge <= 0.0 and not is_instance_valid((skin as W3DSkin).side_scroll_temporal_laser_root)
+			temporal_clearing_test_results["cleanup"] = cleaned
+			temporal_clearing_test_results["fisheye_restored"] = is_zero_approx(float((skin as W3DSkin).post_mat.get_shader_parameter("fisheye")))
+			print("TEMPORAL LASER charge=", temporal_clearing_test_results.get("laser_charge", false), " duration=", temporal_clearing_test_results.get("laser_duration", false), " tracking=", temporal_clearing_test_results.get("laser_tracking", false), " damage=", temporal_clearing_test_results.get("laser_damage", false), " end=", temporal_clearing_test_results.get("laser_end", false))
+			print("TEMPORAL CLEARING new effects bubble=", temporal_clearing_test_results.get("bubble_materialized", false), " bubble_closed=", temporal_clearing_test_results.get("bubble_closed", false), " delayed_explosion=", temporal_clearing_test_results.get("ground_explosion_delayed", false), " racket_no_explosion=", temporal_clearing_test_results.get("nonexplosive_remains", false), " varied_roster=", temporal_clearing_test_results.get("varied_roster", false), " fisheye=", temporal_clearing_test_results.get("fisheye_active", false), " fisheye_restored=", temporal_clearing_test_results.get("fisheye_restored", false))
+			print("TEMPORAL CLEARING effects no_bubble=", temporal_clearing_test_results.get("no_bubble", false), " one_shot_per_weapon=", temporal_clearing_test_results.get("weapon_consumed_after_shot", false), " impact_explosion=", temporal_clearing_test_results.get("impact_explosion_visible", false), " escape_smoke=", temporal_clearing_test_results.get("ufo_escapes_without_destruction", false), " camera_fov=", temporal_camera.fov)
+			print("TEMPORAL CLEARING test menu=", temporal_clearing_test_results.get("registered", false), " modalita=", temporal_clearing_test_results.get("mode_started", false), " radura_ampia=", clearing_is_wide, " camera_3_4=", camera_framed, " cleanup=", cleaned)
+			assert(temporal_clearing_test_results.values().all(func(value): return bool(value)), "Test Radura Temporale non valido: %s" % str(temporal_clearing_test_results))
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--sidescrolltest"):
 		tgs += 1

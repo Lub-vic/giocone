@@ -3,6 +3,7 @@ shader_type canvas_item;
 uniform float outline = 0.32;
 uniform vec2 px = vec2(480.0, 270.0);
 uniform float glitch = 0.0;
+uniform float fisheye = 0.0;
 
 float luma(vec3 c) {
 	return dot(c, vec3(0.3, 0.59, 0.11));
@@ -10,6 +11,8 @@ float luma(vec3 c) {
 
 void fragment() {
 	vec2 uv = UV;
+	vec2 fish_q = uv - 0.5;
+	uv = 0.5 + fish_q * (1.0 + fisheye * dot(fish_q, fish_q) * 2.0);
 	vec2 o = 1.0 / px;
 	// intrusioni del futuro: bande che slittano e colori che si separano, a scatti
 	float tk = floor(TIME * 7.0);
@@ -43,5 +46,7 @@ void fragment() {
 	vec2 q = uv - 0.5;
 	c *= 1.0 - smoothstep(0.28, 0.82, length(q * vec2(1.0, 0.9))) * 0.75;
 	c = floor(c * 40.0 + 0.5) / 40.0;
+	vec2 inside = step(vec2(0.0), uv) * step(uv, vec2(1.0));
+	c *= inside.x * inside.y;
 	COLOR = vec4(c, 1.0);
 }

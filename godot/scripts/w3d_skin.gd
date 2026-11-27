@@ -11,6 +11,8 @@ const KNOWN := ["goblin", "goblin_archer", "skeleton", "skel_archer", "ghoul", "
 const CAM_H_ROOM := 22.0
 const CAM_H_WORLD := 28.0
 const CAM_H_WORLD_FAR := 36.0
+const TEMPORAL_UFO_HEIGHT := 12.0
+const TEMPORAL_FISHEYE := 0.14
 
 var gm                           # Main
 var static_root: Node3D
@@ -42,6 +44,10 @@ var side_scroll_dirty_chunks: Dictionary = {}
 
 func _ready() -> void:
 	W3D.add_globals()
+	# Ensure w3d_side_cut is initialized to zero to prevent black screen on startup
+	RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4.ZERO)
+	# Ensure elevation starts flat (z=0) until _world_init() builds real terrain
+	RenderingServer.global_shader_parameter_set("w3d_elev_info", Vector4(0, 0, 0, 0))
 	want_shot = OS.get_cmdline_user_args().has("--skinshot")
 	ed = W3DEdit.new()
 	ed.sk = self
@@ -56,6 +62,11 @@ func _ready() -> void:
 	fade_a = 48.0
 	cam_h = CAM_H_ROOM
 	_build_view()
+	# Position camera at player spawn to avoid black screen (camera starts at 0,0 inside terrain)
+	if gm != null and gm.player != null:
+		var player_position: Vector2 = gm.player.position
+		var p3d: Vector2 = player_position / Game.TS
+		cam.position = Vector3(p3d.x, cam_h + 10.0, p3d.y)  # well above ground
 	vp.size = Vector2i(960, 540)
 	post_mat.set_shader_parameter("px", Vector2(960, 540))
 	static_root = Node3D.new()
@@ -1392,48 +1403,27 @@ func _bub_mi(parent: Node3D, key: String, col: Color) -> MeshInstance3D:
 	return mi
 
 
-func _sync_bubble(n: ChronoBubble) -> void:
-	var id: int = n.get_instance_id()
-	if not bub_nodes.has(id):
-		var root := Node3D.new()
-		vp.add_child(root)
-		var col: Color = n.col
-		var nd := {"root": root, "seen": 0.0, "src": weakref(n)}
-		nd["disc"] = _bub_mi(root, "disc", col)
-		nd["ring"] = _bub_mi(root, "ring", col)
-		nd["ring2"] = _bub_mi(root, "arc", Color(1, 1, 1))
-		nd["ring3"] = _bub_mi(root, "arc", col)
-		nd["arms"] = _bub_mi(root, "arms", col)
-		nd["hand"] = _bub_mi(root, "hand", Color(1, 1, 1))
-		nd["hand2"] = _bub_mi(root, "hand", col)
-		var ticks: Array = []
-		for i in 12:
-			ticks.append(_bub_mi(root, "tick", Color(1, 1, 1)))
-		nd["ticks"] = ticks
-		var sparks: Array = []
-		for i in 6:
-			sparks.append(_bub_mi(root, "spark", Color(1, 1, 1)))
-		nd["sparks"] = sparks
-		var item := Node3D.new()
-		var imi := MeshInstance3D.new()
-		var iid := str(n.res["id"])
-		imi.mesh = W3DChrono.mesh(iid) if W3DChrono.has(iid) else W3DChrono.mesh("generic")
-		imi.material_override = mat_prop
-		item.add_child(imi)
-		root.add_child(item)
-		nd["item"] = item
-		bub_nodes[id] = nd
-	var d: Dictionary = bub_nodes[id]
-	d["seen"] = lamp_t
-	var root3: Node3D = d["root"]
-	root3.position = Vector3(n.position.x / 16.0, 0.12, n.position.y / 16.0)
-	var t: float = n.t
-	var grow := 1.0 - pow(1.0 - clampf(t / ChronoBubble.T_OPEN, 0.0, 1.0), 3.0)
-	var tf := t - ChronoBubble.T_OPEN - ChronoBubble.T_HOLD
-	var kfly := clampf(tf / ChronoBubble.T_FLY, 0.0, 1.0)
-	var r := n.radius / 16.0 * grow * (1.0 - 0.85 * kfly * kfly) * 1.15
-	var fw: float = n.fwd
-	root3.visible = r > 0.03
+func _make_bubble_rig(parent: Node3D, col: Color) -> Dictionary:
+	var d := {}
+	d["disc"] = _bub_mi(parent, "disc", col)
+	d["ring"] = _bub_mi(parent, "ring", col)
+	d["ring2"] = _bub_mi(parent, "arc", Color(1, 1, 1))
+	d["ring3"] = _bub_mi(parent, "arc", col)
+	d["arms"] = _bub_mi(parent, "arms", col)
+	d["hand"] = _bub_mi(parent, "hand", Color(1, 1, 1))
+	d["hand2"] = _bub_mi(parent, "hand", col)
+	var ticks: Array = []
+	for i in 12:
+		ticks.append(_bub_mi(parent, "tick", Color(1, 1, 1)))
+	d["ticks"] = ticks
+	var sparks: Array = []
+	for i in 6:
+		sparks.append(_bub_mi(parent, "spark", Color(1, 1, 1)))
+	d["sparks"] = sparks
+	return d
+
+
+func _animate_bubble_rig(d: Dictionary, r: float, t: float, fw: float) -> void:
 	(d["disc"] as Node3D).scale = Vector3(r, 1, r)
 	(d["ring"] as Node3D).scale = Vector3(r, 1, r)
 	(d["ring"] as Node3D).position.y = 0.04
@@ -1465,6 +1455,39 @@ func _sync_bubble(n: ChronoBubble) -> void:
 		var a2 := fw * t * 2.4 + i * TAU / 6.0
 		var rr := r * (1.15 + 0.2 * sin(t * 3.0 + i))
 		(sps[i] as Node3D).position = Vector3(cos(a2) * rr, 0.3 + 0.25 * sin(t * 4.0 + i), sin(a2) * rr)
+
+
+func _sync_bubble(n: ChronoBubble) -> void:
+	var id: int = n.get_instance_id()
+	if not bub_nodes.has(id):
+		var root := Node3D.new()
+		vp.add_child(root)
+		var col: Color = n.col
+		var nd := _make_bubble_rig(root, col)
+		nd["root"] = root
+		nd["seen"] = 0.0
+		nd["src"] = weakref(n)
+		var item := Node3D.new()
+		var imi := MeshInstance3D.new()
+		var iid := str(n.res["id"])
+		imi.mesh = W3DChrono.mesh(iid) if W3DChrono.has(iid) else W3DChrono.mesh("generic")
+		imi.material_override = mat_prop
+		item.add_child(imi)
+		root.add_child(item)
+		nd["item"] = item
+		bub_nodes[id] = nd
+	var d: Dictionary = bub_nodes[id]
+	d["seen"] = lamp_t
+	var root3: Node3D = d["root"]
+	root3.position = Vector3(n.position.x / 16.0, 0.12, n.position.y / 16.0)
+	var t: float = n.t
+	var grow := 1.0 - pow(1.0 - clampf(t / ChronoBubble.T_OPEN, 0.0, 1.0), 3.0)
+	var tf := t - ChronoBubble.T_OPEN - ChronoBubble.T_HOLD
+	var kfly := clampf(tf / ChronoBubble.T_FLY, 0.0, 1.0)
+	var r := n.radius / 16.0 * grow * (1.0 - 0.85 * kfly * kfly) * 1.15
+	var fw: float = n.fwd
+	root3.visible = r > 0.03
+	_animate_bubble_rig(d, r, t, fw)
 	var item3: Node3D = d["item"]
 	item3.visible = t > ChronoBubble.T_OPEN * 0.6
 	var k := float(n.spr.get_meta("k")) * 16.0 / 22.0 * 1.15
@@ -2577,6 +2600,15 @@ var ed: W3DEdit                  # editor del mondo (F12)
 var fut: W3DFuture               # intrusioni del futuro (cambiano con Chrono.tech)
 var near_props: Array = []       # prop funzionali vicini al giocatore (ricalcolati ogni pochi fotogrammi)
 var near_props_t := 0
+var side_scroll_temporal_root: Node3D
+var side_scroll_temporal_ufo: Node3D
+var side_scroll_temporal_bubble: Node3D
+var side_scroll_temporal_drops: Array[Node3D] = []
+var side_scroll_temporal_center := Vector2.ZERO
+var side_scroll_temporal_ground := 0.0
+var side_scroll_temporal_smoke_next := 0.0
+var side_scroll_temporal_laser_root: Node3D
+var side_scroll_temporal_laser_parts: Dictionary = {}
 var perf_on := OS.get_cmdline_user_args().has("--perf")
 var perf_n := 0
 var lamp_n := 0.0
@@ -2722,6 +2754,364 @@ func side_scroll_props_restore() -> void:
 		_run_jobs(3.0)
 	side_scroll_prop_changes.clear()
 	side_scroll_dirty_chunks.clear()
+
+
+func side_scroll_temporal_begin(center: Vector2) -> void:
+	side_scroll_temporal_clear()
+	side_scroll_temporal_center = center
+	side_scroll_temporal_ground = elev_at(center.x, center.y)
+	side_scroll_temporal_root = Node3D.new()
+	side_scroll_temporal_root.name = "TemporalClearing"
+	vp.add_child(side_scroll_temporal_root)
+	side_scroll_temporal_bubble = null
+	side_scroll_temporal_smoke_next = 0.0
+	post_mat.set_shader_parameter("fisheye", TEMPORAL_FISHEYE)
+	var ufo_mesh_instance := MeshInstance3D.new()
+	ufo_mesh_instance.mesh = W3DCine.ufo_mesh()
+	ufo_mesh_instance.material_override = _side_scroll_temporal_material(mat_prop)
+	ufo_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	ufo_mesh_instance.scale = Vector3.ONE * 0.8
+	ufo_mesh_instance.position = Vector3(center.x, side_scroll_temporal_ground + TEMPORAL_UFO_HEIGHT, center.y)
+	side_scroll_temporal_root.add_child(ufo_mesh_instance)
+	side_scroll_temporal_ufo = ufo_mesh_instance
+
+
+func _side_scroll_temporal_material(source: ShaderMaterial) -> ShaderMaterial:
+	var material := source.duplicate() as ShaderMaterial
+	material.set_shader_parameter("side_cut_exempt", 1.0)
+	return material
+
+
+func side_scroll_temporal_add_drop(kind: String, target: Vector2, is_weapon: bool) -> Dictionary:
+	if side_scroll_temporal_root == null or not W3DChrono.has(kind):
+		return {}
+	var visual := Node3D.new()
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.mesh = W3DChrono.mesh(kind)
+	mesh_instance.material_override = _side_scroll_temporal_material(mat_prop)
+	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	visual.add_child(mesh_instance)
+	visual.position = Vector3(side_scroll_temporal_center.x, 8.2, side_scroll_temporal_center.y)
+	side_scroll_temporal_root.add_child(visual)
+	side_scroll_temporal_drops.append(visual)
+	var bubble := Node3D.new()
+	bubble.name = "TemporalDropBubble"
+	bubble.position = visual.position
+	bubble.visible = false
+	bubble.set_meta("rig", _make_bubble_rig(bubble, Color(0.5, 0.85, 1.0)))
+	side_scroll_temporal_root.add_child(bubble)
+	side_scroll_temporal_drops.append(bubble)
+	var shadow := Node3D.new()
+	var shadow_color := Color(0.25, 1.0, 0.5) if is_weapon else Color(1.0, 0.14, 0.1)
+	var fill_mesh := CylinderMesh.new()
+	fill_mesh.top_radius = 1.6
+	fill_mesh.bottom_radius = 1.6
+	fill_mesh.height = 0.025
+	fill_mesh.radial_segments = 96
+	var fill := MeshInstance3D.new()
+	fill.mesh = fill_mesh
+	var fill_material := StandardMaterial3D.new()
+	fill_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fill_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fill_material.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	fill_material.albedo_color = Color(shadow_color.r, shadow_color.g, shadow_color.b, 0.035)
+	fill_material.emission_enabled = true
+	fill_material.emission = shadow_color
+	fill_material.emission_energy_multiplier = 0.08
+	fill.material_override = fill_material
+	fill.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shadow.add_child(fill)
+	var ring_mesh := TorusMesh.new()
+	ring_mesh.inner_radius = 0.08
+	ring_mesh.outer_radius = 2.25
+	ring_mesh.rings = 32
+	ring_mesh.ring_segments = 96
+	var ring := MeshInstance3D.new()
+	ring.mesh = ring_mesh
+	var ring_material := fill_material.duplicate() as StandardMaterial3D
+	ring_material.albedo_color = Color(shadow_color.r, shadow_color.g, shadow_color.b, 0.16)
+	ring_material.emission_energy_multiplier = 0.18
+	ring.material_override = ring_material
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shadow.add_child(ring)
+	shadow.set_meta("fill_material", fill_material)
+	shadow.set_meta("ring_material", ring_material)
+	shadow.set_meta("is_weapon", is_weapon)
+	shadow.position = Vector3(target.x, elev_at(target.x, target.y) + 0.05, target.y)
+	shadow.visible = false
+	side_scroll_temporal_root.add_child(shadow)
+	side_scroll_temporal_drops.append(shadow)
+	return {"visual": visual, "shadow": shadow, "bubble": bubble}
+
+
+func side_scroll_temporal_update_bubble(bubble: Node3D, at: Vector3, radius: float, time: float, shown: bool) -> void:
+	if not is_instance_valid(bubble):
+		return
+	bubble.position = at
+	bubble.visible = shown and radius > 0.03
+	var rig: Dictionary = bubble.get_meta("rig", {})
+	if not rig.is_empty():
+		_animate_bubble_rig(rig, radius, time, 1.0)
+
+
+func side_scroll_temporal_remove_drop(visual: Node3D, shadow: Node3D, bubble: Node3D = null) -> void:
+	for node in [visual, shadow, bubble]:
+		side_scroll_temporal_drops.erase(node)
+		if is_instance_valid(node):
+			node.queue_free()
+
+
+func side_scroll_temporal_update_shadow(shadow: Node3D, target: Vector2, warning: float, time: float) -> void:
+	if not is_instance_valid(shadow):
+		return
+	shadow.position = Vector3(target.x, elev_at(target.x, target.y) + 0.05, target.y)
+	shadow.visible = warning >= 0.3
+	var pulse := 0.55 + absf(sin(time * 8.0)) * 0.45
+	var alpha := lerpf(0.03, 0.22, warning) * pulse
+	var fill_material := shadow.get_meta("fill_material") as StandardMaterial3D
+	var ring_material := shadow.get_meta("ring_material") as StandardMaterial3D
+	var color := Color(0.25, 1.0, 0.5) if bool(shadow.get_meta("is_weapon")) else Color(1.0, 0.14, 0.1)
+	fill_material.albedo_color = Color(color.r, color.g, color.b, alpha * 0.2)
+	ring_material.albedo_color = Color(color.r, color.g, color.b, alpha)
+	shadow.scale = Vector3.ONE * (1.05 + pulse * 0.15)
+
+
+func side_scroll_temporal_add_shot(family: String, start: Vector3) -> Node3D:
+	if side_scroll_temporal_root == null:
+		return null
+	var shot := Node3D.new()
+	shot.position = start
+	var body_material := _temporal_projectile_material(Color(0.24, 0.29, 0.22), Color(0.0, 0.0, 0.0))
+	var metal_material := _temporal_projectile_material(Color(0.75, 0.7, 0.47), Color(0.0, 0.0, 0.0))
+	match family:
+		"rocket":
+			_temporal_projectile_piece(shot, _temporal_cylinder(0.18, 0.9), Vector3.ZERO, Vector3(-PI * 0.5, 0.0, 0.0), body_material)
+			_temporal_projectile_piece(shot, _temporal_cone(0.19, 0.35), Vector3(0.0, 0.0, -0.61), Vector3(-PI * 0.5, 0.0, 0.0), metal_material)
+			_temporal_projectile_piece(shot, _temporal_cone(0.11, 0.42), Vector3(0.0, 0.0, 0.62), Vector3(PI * 0.5, 0.0, 0.0), _temporal_projectile_material(Color(1.0, 0.34, 0.08), Color(1.0, 0.16, 0.025)))
+			for side in [-1.0, 1.0]:
+				_temporal_projectile_piece(shot, _temporal_box(Vector3(0.32, 0.035, 0.22)), Vector3(side * 0.18, 0.0, 0.28), Vector3.ZERO, body_material)
+		"shotgun":
+			_temporal_projectile_piece(shot, _temporal_cylinder(0.13, 0.52), Vector3.ZERO, Vector3(-PI * 0.5, 0.0, 0.0), _temporal_projectile_material(Color(0.68, 0.12, 0.08), Color(0.32, 0.025, 0.01)))
+			_temporal_projectile_piece(shot, _temporal_cylinder(0.14, 0.12), Vector3(0.0, 0.0, -0.24), Vector3(-PI * 0.5, 0.0, 0.0), metal_material)
+			_temporal_projectile_piece(shot, _temporal_cylinder(0.11, 0.09), Vector3(0.0, 0.0, 0.29), Vector3(-PI * 0.5, 0.0, 0.0), metal_material)
+		"plasma":
+			var plasma_material := _temporal_projectile_material(Color(0.28, 0.24, 0.72), Color(0.28, 0.12, 1.0))
+			var core_material := _temporal_projectile_material(Color(0.75, 0.96, 1.0), Color(0.24, 0.9, 1.0))
+			_temporal_projectile_piece(shot, _temporal_cylinder(0.16, 0.72), Vector3.ZERO, Vector3(-PI * 0.5, 0.0, 0.0), plasma_material)
+			_temporal_projectile_piece(shot, _temporal_cone(0.2, 0.38), Vector3(0.0, 0.0, -0.48), Vector3(-PI * 0.5, 0.0, 0.0), core_material)
+			_temporal_projectile_piece(shot, _temporal_box(Vector3(0.56, 0.045, 0.055)), Vector3.ZERO, Vector3.ZERO, core_material)
+			_temporal_projectile_piece(shot, _temporal_box(Vector3(0.045, 0.56, 0.055)), Vector3.ZERO, Vector3.ZERO, core_material)
+		_:
+			return null
+	side_scroll_temporal_root.add_child(shot)
+	side_scroll_temporal_drops.append(shot)
+	return shot
+
+
+func _temporal_projectile_piece(parent: Node3D, mesh: Mesh, position: Vector3, rotation: Vector3, material: StandardMaterial3D) -> void:
+	var piece := MeshInstance3D.new()
+	piece.mesh = mesh
+	piece.position = position
+	piece.rotation = rotation
+	piece.material_override = material
+	piece.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(piece)
+
+
+func _temporal_projectile_material(color: Color, emission: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = color
+	if emission != Color(0.0, 0.0, 0.0):
+		material.emission_enabled = true
+		material.emission = emission
+		material.emission_energy_multiplier = 1.7
+	return material
+
+
+func _temporal_cylinder(radius: float, height: float) -> CylinderMesh:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = radius
+	mesh.bottom_radius = radius
+	mesh.height = height
+	mesh.radial_segments = 8
+	return mesh
+
+
+func _temporal_cone(radius: float, height: float) -> CylinderMesh:
+	var mesh := CylinderMesh.new()
+	mesh.bottom_radius = radius
+	mesh.top_radius = 0.0
+	mesh.height = height
+	mesh.radial_segments = 8
+	return mesh
+
+
+func _temporal_box(size: Vector3) -> BoxMesh:
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	return mesh
+
+
+func side_scroll_temporal_update_shot(shot: Node3D, position: Vector3, direction: Vector3) -> void:
+	if is_instance_valid(shot):
+		shot.position = position
+		if direction.length_squared() > 0.001:
+			var up := Vector3.FORWARD if absf(direction.normalized().dot(Vector3.UP)) > 0.95 else Vector3.UP
+			shot.look_at(position + direction, up)
+
+
+func side_scroll_temporal_remove_shot(shot: Node3D) -> void:
+	side_scroll_temporal_drops.erase(shot)
+	if is_instance_valid(shot):
+		shot.queue_free()
+
+
+func _temporal_laser_material(color: Color) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.albedo_color = color
+	material.emission_enabled = true
+	material.emission = Color(color.r, color.g, color.b)
+	material.emission_energy_multiplier = 1.8
+	return material
+
+
+func side_scroll_temporal_update_laser(start: Vector3, end: Vector3, time: float, charge: float, active: bool) -> void:
+	if not is_instance_valid(side_scroll_temporal_root):
+		return
+	if not is_instance_valid(side_scroll_temporal_laser_root):
+		side_scroll_temporal_laser_root = Node3D.new()
+		side_scroll_temporal_laser_root.name = "TemporalLaser"
+		side_scroll_temporal_root.add_child(side_scroll_temporal_laser_root)
+		var unit_beam := CylinderMesh.new()
+		unit_beam.top_radius = 1.0
+		unit_beam.bottom_radius = 1.0
+		unit_beam.height = 1.0
+		unit_beam.radial_segments = 48
+		for key in ["outer", "core"]:
+			var beam := MeshInstance3D.new()
+			beam.mesh = unit_beam
+			beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var material := _temporal_laser_material(Color(0.3, 0.85, 1.0, 0.7))
+			beam.material_override = material
+			side_scroll_temporal_laser_root.add_child(beam)
+			side_scroll_temporal_laser_parts[key] = beam
+			side_scroll_temporal_laser_parts[key + "_material"] = material
+		var impact := Node3D.new()
+		side_scroll_temporal_laser_root.add_child(impact)
+		side_scroll_temporal_laser_parts["impact"] = impact
+		var impact_material := _temporal_laser_material(Color(0.3, 0.85, 1.0, 0.35))
+		side_scroll_temporal_laser_parts["impact_material"] = impact_material
+		var disc_mesh := CylinderMesh.new()
+		disc_mesh.top_radius = 0.75
+		disc_mesh.bottom_radius = 0.75
+		disc_mesh.height = 0.025
+		disc_mesh.radial_segments = 48
+		var disc := MeshInstance3D.new()
+		disc.mesh = disc_mesh
+		disc.material_override = impact_material
+		disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		impact.add_child(disc)
+		var ring_mesh := TorusMesh.new()
+		ring_mesh.inner_radius = 0.06
+		ring_mesh.outer_radius = 1.1
+		ring_mesh.rings = 32
+		ring_mesh.ring_segments = 64
+		var ring := MeshInstance3D.new()
+		ring.mesh = ring_mesh
+		ring.material_override = impact_material
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		impact.add_child(ring)
+		var light := OmniLight3D.new()
+		light.omni_range = 4.0
+		impact.add_child(light)
+		side_scroll_temporal_laser_parts["light"] = light
+	side_scroll_temporal_laser_root.visible = true
+	var direction := end - start
+	var length := direction.length()
+	if length < 0.05:
+		side_scroll_temporal_laser_root.visible = false
+		return
+	var pulse := 0.9 + sin(time * 31.0) * 0.1
+	var outer_width := (0.20 * pulse) if active else lerpf(0.018, 0.045, charge)
+	var core_width := (0.065 * pulse) if active else lerpf(0.006, 0.014, charge)
+	var beam_color := Color(0.25, 0.85, 1.0) if active else Color(1.0, 0.38, 0.10)
+	for key in ["outer", "core"]:
+		var beam := side_scroll_temporal_laser_parts[key] as MeshInstance3D
+		beam.position = (start + end) * 0.5
+		beam.quaternion = Quaternion(Vector3.UP, direction / length)
+		var width := outer_width if key == "outer" else core_width
+		beam.scale = Vector3(width, length, width)
+		var material := side_scroll_temporal_laser_parts[key + "_material"] as StandardMaterial3D
+		var color := beam_color if key == "outer" or not active else Color(0.82, 0.98, 1.0)
+		material.albedo_color = Color(color.r, color.g, color.b, (0.28 if key == "outer" else 0.5) if active else 0.12 + charge * 0.28)
+		material.emission = color
+	var impact := side_scroll_temporal_laser_parts["impact"] as Node3D
+	impact.position = end
+	impact.scale = Vector3.ONE * ((0.55 + charge * 0.45) if not active else 1.0 + sin(time * 18.0) * 0.12)
+	var impact_material := side_scroll_temporal_laser_parts["impact_material"] as StandardMaterial3D
+	impact_material.albedo_color = Color(beam_color.r, beam_color.g, beam_color.b, 0.35 if active else 0.12 + charge * 0.3)
+	impact_material.emission = beam_color
+	var light := side_scroll_temporal_laser_parts["light"] as OmniLight3D
+	light.light_color = beam_color
+	light.light_energy = 2.2 * pulse if active else 0.3 + charge * 0.7
+
+
+func side_scroll_temporal_hide_laser() -> void:
+	if is_instance_valid(side_scroll_temporal_laser_root):
+		side_scroll_temporal_laser_root.visible = false
+
+
+func side_scroll_temporal_impact(position: Vector3, size_scale: float = 1.0) -> void:
+	if not is_instance_valid(side_scroll_temporal_root):
+		return
+	var explosion := W3DCine.new()
+	explosion.sk = self
+	explosion.explosion3d(position, 100, "TemporalUfoImpact", size_scale)
+	if gm != null:
+		gm.shake(2.5)
+
+
+func side_scroll_temporal_update(time: float, escaping := false, escape_progress := 0.0) -> void:
+	if is_instance_valid(side_scroll_temporal_ufo):
+		var progress := clampf(escape_progress, 0.0, 1.0) if escaping else 0.0
+		side_scroll_temporal_ufo.position = Vector3(
+			side_scroll_temporal_center.x + sin(time * 7.0) * progress * 3.2,
+			side_scroll_temporal_ground + TEMPORAL_UFO_HEIGHT + progress * 20.0 + sin(time * 9.0) * progress * 0.7,
+			side_scroll_temporal_center.y + progress * 12.0 + cos(time * 6.0) * progress * 1.8
+		)
+		side_scroll_temporal_ufo.rotation = Vector3(
+			cos(time * 5.0) * progress * 0.16,
+			time * 0.3 + progress * TAU,
+			sin(time * 7.0) * progress * 0.2
+		)
+		side_scroll_temporal_ufo.scale = Vector3.ONE * 0.8 * (1.0 - progress * 0.75)
+		if escaping and time >= side_scroll_temporal_smoke_next:
+			side_scroll_temporal_smoke_next = time + 0.2
+			var smoke := _make_smoke(Vector3.ZERO, true)
+			smoke.name = "TemporalEscapeSmoke"
+			smoke.position = side_scroll_temporal_ufo.position + Vector3(randf_range(-0.2, 0.2), -0.5, -0.7)
+			side_scroll_temporal_root.add_child(smoke)
+			smoke.finished.connect(smoke.queue_free)
+
+
+func side_scroll_temporal_clear() -> void:
+	if is_instance_valid(side_scroll_temporal_root):
+		side_scroll_temporal_root.queue_free()
+	side_scroll_temporal_root = null
+	side_scroll_temporal_ufo = null
+	side_scroll_temporal_bubble = null
+	side_scroll_temporal_drops.clear()
+	side_scroll_temporal_center = Vector2.ZERO
+	side_scroll_temporal_ground = 0.0
+	side_scroll_temporal_smoke_next = 0.0
+	side_scroll_temporal_laser_root = null
+	side_scroll_temporal_laser_parts.clear()
+	post_mat.set_shader_parameter("fisheye", 0.0)
+	if mat_chr != null:
+		mat_chr.set_shader_parameter("side_cut_exempt", 0.0)
 
 
 func _rebuild_world_chunk(k: Vector2i) -> void:
@@ -3671,15 +4061,29 @@ func _process_inner(dt: float) -> void:
 		if fpv:
 			fpv_set(false)
 		curve = 0.0
-		cam.projection = Camera3D.PROJECTION_ORTHOGONAL
+		var temporal_clearing := str(gm.side_scroll_mode) == "temporal_clearing"
+		cam.projection = Camera3D.PROJECTION_PERSPECTIVE if temporal_clearing else Camera3D.PROJECTION_ORTHOGONAL
 		cam.size = 10.0
+		cam.fov = 38.6
 		cam.near = 0.1
 		cam.far = 120.0
-		var side_ground := elev_at(pos.x, pos.y)
-		RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4(side_ground + 0.9, pos.y, 1.0, 0.12))
-		cam.position = Vector3(pos.x, side_ground + 6.0, pos.y + 24.0)
-		cam.look_at(Vector3(pos.x, side_ground + 0.9, pos.y), Vector3.UP)
+		if temporal_clearing:
+			var center: Vector2 = gm.side_scroll_temporal_center
+			var player_center: Vector2 = gm.player.position / Game.TS
+			var focus := center.lerp(player_center, 0.5)
+			var side_ground := elev_at(focus.x, focus.y)
+			mat_chr.set_shader_parameter("side_cut_exempt", 1.0)
+			RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4.ZERO)
+			cam.position = Vector3(focus.x, side_ground + 20.0, focus.y + 24.0)
+			cam.look_at(Vector3(focus.x, side_ground + 3.5, focus.y), Vector3.UP)
+		else:
+			mat_chr.set_shader_parameter("side_cut_exempt", 0.0)
+			var side_ground := elev_at(pos.x, pos.y)
+			RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4(side_ground + 0.9, pos.y, 1.0, 0.12))
+			cam.position = Vector3(pos.x, side_ground + 6.0, pos.y + 24.0)
+			cam.look_at(Vector3(pos.x, side_ground + 0.9, pos.y), Vector3.UP)
 	else:
+		mat_chr.set_shader_parameter("side_cut_exempt", 0.0)
 		RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4.ZERO)
 		if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
 			cam.projection = Camera3D.PROJECTION_PERSPECTIVE

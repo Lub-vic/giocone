@@ -281,6 +281,17 @@ func _draw() -> void:
 	for ln in olines:
 		_txt(ln, Vector2(5, oy + 7.0), Color(0.95, 0.8, 0.45, oa))
 		oy += 9.0
+	if main.side_scroll_active and main.side_scroll_mode == "temporal_clearing":
+		var ufo_bar_x := size.x * 0.5 - 55.0
+		_txt("UFO  %d/%d" % [main.side_scroll_ufo_hits, main.TEMPORAL_UFO_HITS_TO_ESCAPE], Vector2(ufo_bar_x, 69), Color(0.72, 0.9, 1.0), 8)
+		_bar(Vector2(ufo_bar_x, 73), 110, 4, float(main.side_scroll_ufo_hits) / float(main.TEMPORAL_UFO_HITS_TO_ESCAPE), Color(0.28, 0.8, 1.0))
+		if not main.side_scroll_temporal_shots.is_empty():
+			_txt("PROIETTILE IN VOLO", Vector2(0, size.y - 20), Color(1.0, 0.78, 0.42), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		elif main.side_scroll_weapon_t > 0.0:
+			var weapon_name: String = str(Rpg.FAM[main.side_scroll_weapon_family]["n"]).to_upper()
+			_txt("%s  %.0f s" % [weapon_name, ceilf(main.side_scroll_weapon_t)], Vector2(0, size.y - 20), Color(0.42, 1.0, 0.62), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		else:
+			_txt("CERCA UN'ARMA TEMPORALE", Vector2(0, size.y - 20), Color(0.88, 0.82, 0.62), 8, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 	var ql: Array = main.quest_lines()
 	if ql.size() > 0 and _obj_t > 0.0:
 		var qs: Array = _wrap(str(ql[0]), 30)

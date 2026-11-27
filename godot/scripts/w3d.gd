@@ -5,7 +5,7 @@ static var gp_added := false
 ## i bordi della bolla sprofondano nel buio, il mondo si piega come un pianetino.
 ## Il mondo e' fatto di campi di densita' (erba, sassi, cespugli, alberi) e di lotti allineati alle strade:
 ## niente e' messo a caso, tutto segue le stesse regole della natura e del villaggio.
-## Comandi: WASD muovi · F2/F3 curvatura · F4/F5 bolla · F6 filtro · F7 nuovo villaggio · F8 pixel · C personaggi · Esc esci.
+## Comandi: WASD muovi Â· F2/F3 curvatura Â· F4/F5 bolla Â· F6 filtro Â· F7 nuovo villaggio Â· F8 pixel Â· C personaggi Â· Esc esci.
 
 const CHS := 24                 # lato di un blocco (unita' = 16 px del vecchio gioco)
 const GS := 0.4                 # lato di una cella del terreno
@@ -99,6 +99,12 @@ var bonfires: Array = []
 var boss_pos := Vector2.ZERO
 var lineup := false
 var cam_h := CAM_H
+# UFO Camera System
+var ufo_cam_active := false          # true quando fase UFO attiva
+var ufo_cam_target_rot_x := -90.0    # rotazione X target (gradi)
+var ufo_cam_target_h := 48.0         # altezza target
+var ufo_cam_target_fov := 38.6       # FOV target
+var ufo_cam_transition_speed := 3.0  # velocitÃ  transizione (lerp factor)
 
 
 ## parametri globali degli shader: giocatore, quote del terreno (texture + scala), curvatura
@@ -116,6 +122,8 @@ static func add_globals() -> void:
 
 func _ready() -> void:
 	add_globals()
+	# Ensure w3d_side_cut is initialized to zero to prevent black screen on startup
+	RenderingServer.global_shader_parameter_set("w3d_side_cut", Vector4.ZERO)
 	get_window().content_scale_size = Vector2i(960, 540)   # piu' pixel logici: meno pixellato (l'interfaccia viene scalata x2)
 	for arg in OS.get_cmdline_user_args():
 		if str(arg).begins_with("--shots="):
@@ -203,6 +211,8 @@ func _build_view() -> void:
 	cam.near = 2.0
 	cam.far = 120.0
 	cam.rotation_degrees = Vector3(-90, 0, 0)
+	# Set initial camera position above ground to avoid near-plane clipping on first frame
+	cam.position = Vector3(pos.x, cam_h, pos.y)
 	vp.add_child(cam)
 	cam.current = true
 	mat = ShaderMaterial.new()
@@ -2508,7 +2518,7 @@ func _process(dt: float) -> void:
 	mat.set_shader_parameter("patt", 1.0 if patterns else 0.0)
 	mat_chr.set_shader_parameter("patt", 0.0)
 	post_rect.material = null if nofx else post_mat
-	hud.text = "WASD muovi  SPAZIO colpo  L pesante  SHIFT rotolata  Q fiala  E falo'  ESC esci   |   F2/F3 curva %.3f  F4/F5 bolla  F6 filtro  F7 nuovo  F8 pixel  T trame  C personaggi   %d FPS" % [curve, Engine.get_frames_per_second()]
+	hud.text = "WASD muovi  SPAZIO colpo  L pesante  SHIFT rotolata  Q fiala  E falo'  ESC esci   |   F2/F3 curva %.3f  F4/F5 bolla  F6 filtro  F7 nuovo  F8 pixel  F9 UFO-cam  T trame  C personaggi   %d FPS" % [curve, Engine.get_frames_per_second()]
 	if not shots.is_empty():
 		_shot_step()
 
@@ -2528,7 +2538,24 @@ var elev_y := 0.0          # quota del terreno sotto il giocatore (la camera la 
 
 
 func _update_cam() -> void:
-	cam.position = Vector3(pos.x + randf_range(-shake, shake) * 0.25, cam_h + elev_y, pos.y + randf_range(-shake, shake) * 0.25)
+	# UFO Camera Transition System
+	if ufo_cam_active:
+		ufo_cam_target_rot_x = -75.0
+		ufo_cam_target_h = 55.0
+		ufo_cam_target_fov = 45.0
+	else:
+		ufo_cam_target_rot_x = -90.0
+		ufo_cam_target_h = cam_h
+		ufo_cam_target_fov = 38.6
+
+	# Smooth interpolation
+	cam.rotation_degrees.x = lerp(cam.rotation_degrees.x, ufo_cam_target_rot_x, 1.0 - exp(-get_process_delta_time() * ufo_cam_transition_speed))
+	cam.position.y = lerp(cam.position.y, ufo_cam_target_h + elev_y, 1.0 - exp(-get_process_delta_time() * ufo_cam_transition_speed))
+	cam.fov = lerp(cam.fov, ufo_cam_target_fov, 1.0 - exp(-get_process_delta_time() * ufo_cam_transition_speed))
+
+	cam.position.x = pos.x + randf_range(-shake, shake) * 0.25
+
+	cam.position.z = pos.y + randf_range(-shake, shake) * 0.25
 
 
 func _update_lamps() -> void:
@@ -2571,6 +2598,14 @@ func _unhandled_input(ev: InputEvent) -> void:
 				res_i = (res_i + 1) % RES.size()
 				vp.size = RES[res_i]
 				post_mat.set_shader_parameter("px", Vector2(RES[res_i]))
+			KEY_F9:
+				ufo_cam_active = not ufo_cam_active
+				print("UFO Camera Mode: ", "ON" if ufo_cam_active else "OFF")
+			KEY_F10:
+				if combat and not combat.ufo_wave_active:
+					combat.start_ufo_wave()
+				elif combat and combat.ufo_wave_active:
+					combat._end_ufo_wave()
 			KEY_T:
 				patterns = not patterns
 			KEY_C:
@@ -3099,7 +3134,7 @@ var smoke_curve: Curve
 var smoke_ramp: Gradient
 
 
-func _make_smoke(p: Vector3) -> CPUParticles3D:
+func _make_smoke(p: Vector3, one_shot: bool = false) -> CPUParticles3D:
 	if smoke_mat == null:
 		smoke_mat = ShaderMaterial.new()
 		smoke_mat.shader = load("res://shaders/w3d_smoke.gdshader")
@@ -3115,9 +3150,10 @@ func _make_smoke(p: Vector3) -> CPUParticles3D:
 		smoke_ramp.colors = PackedColorArray([Color(1, 1, 1, 0.0), Color(1, 1, 1, 0.5), Color(1, 1, 1, 0.22), Color(1, 1, 1, 0.0)])
 	var ps := CPUParticles3D.new()
 	ps.mesh = smoke_mesh
-	ps.amount = 9
-	ps.lifetime = 4.5
-	ps.preprocess = 4.5
+	ps.amount = 6 if one_shot else 9
+	ps.lifetime = 1.8 if one_shot else 4.5
+	ps.preprocess = 0.0 if one_shot else 4.5
+	ps.one_shot = one_shot
 	ps.local_coords = true
 	ps.randomness = 0.6
 	ps.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE

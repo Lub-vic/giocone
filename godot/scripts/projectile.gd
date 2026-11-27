@@ -12,7 +12,8 @@ var style := "fire"
 var spin := 0.0
 
 const LIGHT := {"fire": Color(1.0, 0.35, 0.2), "arrow": Color(0.9, 0.8, 0.5), "knife": Color(0.8, 0.85, 0.95), "dark": Color(0.6, 0.25, 0.9),
-	"ice": Color(0.6, 0.9, 1.0), "poison": Color(0.45, 0.9, 0.3), "web": Color(0.9, 0.9, 0.95), "soul": Color(0.5, 0.95, 1.0), "blood": Color(0.8, 0.1, 0.15)}
+	"ice": Color(0.6, 0.9, 1.0), "poison": Color(0.45, 0.9, 0.3), "web": Color(0.9, 0.9, 0.95), "soul": Color(0.5, 0.95, 1.0), "blood": Color(0.8, 0.1, 0.15),
+	"bazooka_rocket": Color(1.0, 0.5, 0.15), "shotgun_pellet": Color(1.0, 0.85, 0.6), "plasma_bolt": Color(0.3, 0.7, 1.0)}
 
 
 func setup(m, dir: Vector2, spd: float, d: float, sl := 0.0, st := "fire") -> void:
@@ -83,6 +84,24 @@ func _draw() -> void:
 		"blood":
 			draw_colored_polygon(PackedVector2Array([Vector2(5, 0), Vector2(0, -2.8), Vector2(-3, 0), Vector2(0, 2.8)]), Color(0.55, 0.05, 0.1))
 			draw_circle(Vector2(0, 0), 1.4, Color(0.95, 0.3, 0.3))
+		"bazooka_rocket":
+			# Razzo con scia
+			draw_colored_polygon(PackedVector2Array([Vector2(8, 0), Vector2(0, -3), Vector2(-6, 0), Vector2(0, 3)]), Color(0.4, 0.25, 0.15))
+			draw_colored_polygon(PackedVector2Array([Vector2(4, 0), Vector2(0, -1.5), Vector2(-2, 0), Vector2(0, 1.5)]), Color(1.0, 0.6, 0.1))
+			# Scia
+			for i in 5:
+				draw_circle(Vector2(-4 - i * 3, sin(t * 20.0 + i) * 0.8), 2.0 - i * 0.3, Color(1.0, 0.5, 0.1, 0.6 - i * 0.1))
+		"shotgun_pellet":
+			# Pallino shotgun
+			draw_circle(Vector2.ZERO, 2.5, Color(1.0, 0.85, 0.6))
+			draw_circle(Vector2.ZERO, 1.5, Color(1.0, 0.95, 0.8))
+		"plasma_bolt":
+			# Bolt al plasma
+			draw_colored_polygon(PackedVector2Array([Vector2(6, 0), Vector2(0, -3), Vector2(-4, 0), Vector2(0, 3)]), Color(0.4, 0.7, 1.0))
+			draw_colored_polygon(PackedVector2Array([Vector2(4, 0), Vector2(0, -1.5), Vector2(-2, 0), Vector2(0, 1.5)]), Color(0.8, 0.95, 1.0))
+			draw_circle(Vector2(1, 0), 0.8, Color(1.0, 1.0, 1.0, 0.8))
+			for i in 3:
+				draw_circle(Vector2(-2 - i * 2, sin(t * 15.0 + i) * 1.0), 1.5 - i * 0.4, Color(0.3, 0.7, 1.0, 0.5 - i * 0.15))
 		_:
 			draw_circle(Vector2.ZERO, 3.0, Color(0.6, 0.1, 0.15))
 			draw_circle(Vector2.ZERO, 2.0, Color(1.0, 0.45, 0.15))

@@ -340,6 +340,7 @@ func update(dt: float) -> void:
 	_bolts_update(dt)
 	_effects(dt)
 	_spawner(dt)
+	update_ufo_wave(dt)
 	_hud(dt)
 	w.shake = shake
 
@@ -1027,6 +1028,12 @@ func _projectiles(dt: float) -> void:
 		if not gone and not dead and p.distance_to(w.pos) < 0.75:
 			hurt(float(pr["dmg"]), (pr["vel"] as Vector2).normalized())
 			gone = true
+		# Check UFO collision
+		if not gone and ufo_wave_active and ufo_node:
+			var ufo_2d_pos := Vector2(ufo_node.position.x, ufo_node.position.z)
+			if p.distance_to(ufo_2d_pos) < 6.0:  # UFO hitbox radius
+				hurt_ufo(float(pr["dmg"]))
+				gone = true
 		if gone:
 			nd.queue_free()
 			projs.erase(pr)
@@ -1141,3 +1148,471 @@ func _selftest(just: Dictionary) -> void:
 	if t > 14.0:
 		get_viewport().get_texture().get_image().save_png("user://combat_b.png")
 		get_tree().quit()
+
+
+# ==================================================================== SISTEMA UFO WAVE
+## UFO che vola sopra la mappa, lancia oggetti da 3 bolle temporali (passato/presente/futuro)
+## Gli oggetti cadono velocemente ed esplodono all'impatto
+
+# Tipi di bolle temporali
+const UFO_RIFT_PAST := "rift_past"
+const UFO_RIFT_PRESENT := "rift_present"
+const UFO_RIFT_FUTURE := "rift_future"
+
+# Config UFO
+const UFO_SPEED := 25.0
+const UFO_HEIGHT := 45.0
+const UFO_PATH_POINTS := [Vector2(-60, -20), Vector2(0, -30), Vector2(60, -20), Vector2(0, -10)]
+const RIFT_SPAWN_INTERVAL := 0.8
+const FALL_SPEED := 55.0
+const IMPACT_RADIUS := 3.5
+const IMPACT_DAMAGE := 35.0
+const UFO_HP_MAX := 500.0
+
+# Prefabs oggetti per tipo bolla
+const PAST_OBJECTS := [
+	{"name": "crate_ancient", "color": Color(0.55, 0.35, 0.15), "glow": Color(1.0, 0.85, 0.2), "shape": "cube", "hp": 1.0},
+	{"name": "armor_piece", "color": Color(0.4, 0.3, 0.2), "glow": Color(1.0, 0.7, 0.1), "shape": "cube_flat", "hp": 1.0},
+	{"name": "relic", "color": Color(0.3, 0.25, 0.15), "glow": Color(1.0, 0.9, 0.3), "shape": "sphere", "hp": 0.5},
+	{"name": "scroll", "color": Color(0.45, 0.35, 0.2), "glow": Color(1.0, 0.8, 0.2), "shape": "cylinder", "hp": 0.5},
+]
+
+const PRESENT_OBJECTS := [
+	{"name": "tech_container", "color": Color(0.15, 0.35, 0.5), "glow": Color(0.0, 1.0, 1.0), "shape": "cube", "hp": 1.5},
+	{"name": "energy_cell", "color": Color(0.1, 0.4, 0.6), "glow": Color(0.2, 1.0, 1.0), "shape": "cylinder", "hp": 1.0},
+	{"name": "drone_part", "color": Color(0.2, 0.3, 0.5), "glow": Color(0.4, 0.9, 1.0), "shape": "pyramid", "hp": 1.0},
+	{"name": "capacitor", "color": Color(0.15, 0.5, 0.7), "glow": Color(0.0, 1.0, 0.8), "shape": "sphere", "hp": 0.8},
+]
+
+const FUTURE_OBJECTS := [
+	{"name": "energy_core", "color": Color(0.6, 0.8, 1.0), "glow": Color(0.8, 1.0, 1.0), "shape": "sphere", "hp": 1.0},
+	{"name": "plasma_shard", "color": Color(0.5, 0.7, 1.0), "glow": Color(0.7, 0.9, 1.0), "shape": "pyramid", "hp": 0.8},
+	{"name": "time_crystal", "color": Color(0.7, 0.9, 1.0), "glow": Color(0.9, 1.0, 1.0), "shape": "diamond", "hp": 0.6},
+	{"name": "void_essence", "color": Color(0.4, 0.6, 0.9), "glow": Color(0.6, 0.8, 1.0), "shape": "octahedron", "hp": 0.7},
+]
+
+# Stato UFO
+var ufo_wave_active := false
+var ufo_node: Node3D = null
+var ufo_pos := Vector2.ZERO
+var ufo_hp := UFO_HP_MAX
+var ufo_path_index := 0
+var ufo_target_pos := Vector2.ZERO
+var ufo_mesh: ArrayMesh
+
+var rifts: Array = []
+var falling_objects: Array = []
+var impact_explosions: Array = []
+
+func start_ufo_wave() -> void:
+	ufo_wave_active = true
+	ufo_hp = UFO_HP_MAX
+	ufo_path_index = 0
+	ufo_pos = UFO_PATH_POINTS[0]
+	ufo_target_pos = UFO_PATH_POINTS[1]
+	w.ufo_cam_active = true
+	_create_ufo()
+	_create_rifts()
+	say("ONDATA UFO INIZIATA! DISTRUGGI GLI OGGETTI PRIMA CHE IMPATTINO!")
+	_update_ufo_ui()
+
+func _create_ufo() -> void:
+	var b := W3DBuilder.new()
+	for i in 16:
+		var a0 := TAU * i / 16.0
+		var a1 := TAU * (i + 1) / 16.0
+		b.tri(Vector3(0, 0.5, 0), Vector3(cos(a0) * 4.0, 0.5, sin(a0) * 4.0), Vector3(cos(a1) * 4.0, 0.5, sin(a1) * 4.0), Color(0.2, 0.2, 0.3))
+		b.tri(Vector3(0, -0.5, 0), Vector3(cos(a1) * 4.0, -0.5, sin(a1) * 4.0), Vector3(cos(a0) * 4.0, -0.5, sin(a0) * 4.0), Color(0.15, 0.15, 0.25))
+	for i in 12:
+		var a0 := TAU * i / 12.0
+		var a1 := TAU * (i + 1) / 12.0
+		b.quad(Vector3(cos(a0) * 2.2, 1.8, sin(a0) * 2.2), Vector3(cos(a0) * 2.2, 1.8, sin(a0) * 2.2), Vector3(cos(a1) * 2.2, 1.8, sin(a1) * 2.2), Vector3(cos(a1) * 2.2, 1.8, sin(a1) * 2.2), Color(0.25, 0.25, 0.4))
+	for i in 8:
+		var a0 := TAU * i / 8.0
+		var a1 := TAU * (i + 1) / 8.0
+		b.tri(Vector3(0, 3.2, 0), Vector3(cos(a0) * 1.0, 2.0, sin(a0) * 1.0), Vector3(cos(a1) * 1.0, 2.0, sin(a1) * 1.0), Color(0.3, 0.3, 0.5))
+	b.shard(Vector3(0, 0.5, 3.5), Vector3(0, 0.5, 4.5), 0.4, 0.2, Color(0.0, 1.0, 1.0, 0.8), 0.5, 0.0, 0.0)
+	b.shard(Vector3(0, 0.5, -3.5), Vector3(0, 0.5, -4.5), 0.4, 0.2, Color(1.0, 0.0, 0.5, 0.8), 0.5, 0.0, 0.0)
+	b.shard(Vector3(3.5, 0.5, 0), Vector3(4.5, 0.5, 0), 0.4, 0.2, Color(1.0, 1.0, 0.0, 0.8), 0.5, 0.0, 0.0)
+	b.shard(Vector3(-3.5, 0.5, 0), Vector3(-4.5, 0.5, 0), 0.4, 0.2, Color(0.5, 1.0, 0.0, 0.8), 0.5, 0.0, 0.0)
+	for i in 5:
+		var scale := 1.0 - i * 0.15
+		b.cyl(Transform3D(Basis.IDENTITY, Vector3(0, -1.5 - i * 0.8, 0)), 1.2 * scale, 1.0 * scale, 0.3, 8, Color(0.0, 0.8, 1.0, 0.15 - i * 0.02), 0.0)
+	ufo_mesh = b.mesh()
+	ufo_node = Node3D.new()
+	var mi := MeshInstance3D.new()
+	mi.mesh = ufo_mesh
+	mi.material_override = w.mat_chr
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	ufo_node.add_child(mi)
+	var engine_particles := GPUParticles3D.new()
+	engine_particles.amount = 30
+	engine_particles.lifetime = 0.5
+	engine_particles.one_shot = false
+	engine_particles.process_material = ShaderMaterial.new()
+	engine_particles.process_material.shader = Shader.new()
+	engine_particles.process_material.shader.code = """
+		shader_type particles;
+		void start() {
+			VELOCITY = vec3(randf() * 2.0 - 1.0, -3.0 - randf() * 2.0, randf() * 2.0 - 1.0);
+			COLOR = vec4(0.0, 0.8, 1.0, 0.6);
+			MASS = 1.0;
+		}
+		void process() {
+			VELOCITY.y += 2.0 * delta;
+			COLOR.a = 1.0 - (AGE / LIFETIME);
+		}
+	"""
+	engine_particles.position = Vector3(0, -0.5, 0)
+	ufo_node.add_child(engine_particles)
+	var ufo_light := OmniLight3D.new()
+	ufo_light.light_color = Color(0.0, 0.8, 1.0)
+	ufo_light.light_energy = 2.0
+	ufo_light.omni_range = 15.0
+	ufo_light.position = Vector3(0, -2.0, 0)
+	ufo_light.shadow_enabled = false
+	ufo_node.add_child(ufo_light)
+	w.vp.add_child(ufo_node)
+	_update_ufo_position()
+
+func _create_rifts() -> void:
+	var rift_positions := [
+		{"pos": Vector2(-35, -5), "type": UFO_RIFT_PAST, "color": Color(1.0, 0.85, 0.2), "glow_color": Color(1.0, 0.6, 0.0)},
+		{"pos": Vector2(0, -15), "type": UFO_RIFT_PRESENT, "color": Color(0.0, 1.0, 1.0), "glow_color": Color(0.0, 0.6, 1.0)},
+		{"pos": Vector2(35, -5), "type": UFO_RIFT_FUTURE, "color": Color(0.7, 0.9, 1.0), "glow_color": Color(0.3, 0.5, 1.0)},
+	]
+	for rift_data in rift_positions:
+		var rift_node = Node3D.new()
+		rift_node.position = Vector3(rift_data.pos.x, 15.0, rift_data.pos.y)
+		var b := W3DBuilder.new()
+		for i in 12:
+			var a0 := TAU * i / 12.0
+			var a1 := TAU * (i + 1) / 12.0
+			b.tri(Vector3(cos(a0) * 4.0, 0.0, sin(a0) * 4.0), Vector3(cos(a1) * 4.0, 0.0, sin(a1) * 4.0), Vector3(0, 3.0, 0), rift_data.color * 0.3)
+			b.tri(Vector3(cos(a0) * 4.0, 0.0, sin(a0) * 4.0), Vector3(cos(a1) * 4.0, 0.0, sin(a1) * 4.0), Vector3(0, -3.0, 0), rift_data.color * 0.2)
+		var particles := GPUParticles3D.new()
+		particles.amount = 50
+		particles.lifetime = 2.0
+		particles.one_shot = false
+		particles.process_material = ShaderMaterial.new()
+		particles.process_material.shader = Shader.new()
+		particles.process_material.shader.code = """
+			shader_type particles;
+			uniform vec3 rift_color;
+			void start() {
+				var angle = randf() * 6.28;
+				var radius = 2.0 + randf() * 2.0;
+				POSITION = vec3(cos(angle) * radius, randf() * 3.0 - 1.5, sin(angle) * radius);
+				VELOCITY = vec3(cos(angle) * 0.5, randf() * 1.0 - 0.5, sin(angle) * 0.5);
+				COLOR = vec4(rift_color, 0.4);
+				MASS = 1.0;
+			}
+			void process() {
+				VELOCITY.y += 0.3 * delta;
+				COLOR.a = 0.4 * (1.0 - (AGE / LIFETIME));
+			}
+		"""
+		particles.process_material.set_shader_parameter("rift_color", Vector3(rift_data.glow_color.r, rift_data.glow_color.g, rift_data.glow_color.b))
+		rift_node.add_child(particles)
+		var rift_mi := MeshInstance3D.new()
+		rift_mi.mesh = b.mesh()
+		rift_mi.material_override = w.mat_chr
+		rift_mi.material_override.set_shader_parameter("boost", 2.0)
+		rift_node.add_child(rift_mi)
+		w.vp.add_child(rift_node)
+		rifts.append({
+			"node": rift_node,
+			"pos": rift_data.pos,
+			"type": rift_data.type,
+			"color": rift_data.color,
+			"glow_color": rift_data.glow_color,
+			"spawn_timer": 0.0,
+			"particles": particles,
+			"mesh_instance": rift_mi,
+			"pulse_phase": randf() * TAU
+		})
+
+func _update_ufo_position() -> void:
+	if ufo_node:
+		ufo_node.position = Vector3(ufo_pos.x, UFO_HEIGHT, ufo_pos.y)
+		ufo_node.rotation.y += get_process_delta_time() * 0.5
+
+func _update_ufo_ui() -> void:
+	if lbl_obj:
+		lbl_obj.text = "UFO HP: %d  |  BOLLE ATTIVE: 3  |  DISTRUGGI OGGETTI IN CADUTA!" % [int(ufo_hp)]
+
+func update_ufo_wave(dt: float) -> void:
+	if not ufo_wave_active:
+		return
+	_move_ufo(dt)
+	_update_rifts(dt)
+	_update_falling_objects(dt)
+	_update_impact_explosions(dt)
+	_cleanup_falling_objects()
+	if ufo_hp <= 0.0:
+		_end_ufo_wave()
+
+func _move_ufo(dt: float) -> void:
+	var to_target = ufo_target_pos - ufo_pos
+	var dist = to_target.length()
+	if dist < 2.0:
+		ufo_path_index = (ufo_path_index + 1) % UFO_PATH_POINTS.size()
+		ufo_target_pos = UFO_PATH_POINTS[ufo_path_index]
+		to_target = ufo_target_pos - ufo_pos
+		dist = to_target.length()
+	if dist > 0.01:
+		var dir = to_target.normalized()
+		ufo_pos += dir * UFO_SPEED * dt
+		_update_ufo_position()
+
+func _update_rifts(dt: float) -> void:
+	for rift in rifts:
+		rift.pulse_phase += dt * 3.0
+		var pulse = sin(rift.pulse_phase) * 0.15 + 1.0
+		if rift.mesh_instance:
+			rift.mesh_instance.scale = Vector3(pulse, pulse * 0.8, pulse)
+		rift.spawn_timer += dt
+		if rift.spawn_timer >= RIFT_SPAWN_INTERVAL:
+			rift.spawn_timer = 0.0
+			_spawn_falling_object(rift)
+
+func _spawn_falling_object(rift: Dictionary) -> void:
+	var objects_pool: Array
+	match rift.type:
+		UFO_RIFT_PAST: objects_pool = PAST_OBJECTS
+		UFO_RIFT_PRESENT: objects_pool = PRESENT_OBJECTS
+		UFO_RIFT_FUTURE: objects_pool = FUTURE_OBJECTS
+	var obj_data = objects_pool[randi() % objects_pool.size()]
+	var obj_node = _create_object_mesh(obj_data, rift.color, rift.glow_color)
+	var spawn_offset = Vector2(randf_range(-2.0, 2.0), randf_range(-2.0, 2.0))
+	var spawn_pos = rift.pos + spawn_offset
+	obj_node.position = Vector3(spawn_pos.x, 20.0, spawn_pos.y)
+	w.vp.add_child(obj_node)
+	var trail = _create_trail_particles(rift.glow_color)
+	obj_node.add_child(trail)
+	falling_objects.append({
+		"node": obj_node,
+		"pos": Vector2(spawn_pos.x, spawn_pos.y),
+		"vel": Vector2(0, -FALL_SPEED),
+		"type": obj_data.name,
+		"rift_type": rift.type,
+		"color": rift.color,
+		"glow_color": rift.glow_color,
+		"hp": obj_data.hp,
+		"trail": trail,
+		"rotation_speed": randf_range(-2.0, 2.0),
+		"mesh_instance": obj_node.get_child(0) as MeshInstance3D
+	})
+
+func _create_object_mesh(obj_data: Dictionary, base_color: Color, glow_color: Color) -> Node3D:
+	var n := Node3D.new()
+	var b := W3DBuilder.new()
+	match obj_data.shape:
+		"cube": b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.5, 0)), Vector3(1.2, 1.0, 1.2), base_color, 0.15)
+		"cube_flat": b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0.3, 0)), Vector3(1.5, 0.6, 1.5), base_color, 0.15)
+		"cylinder": b.cyl(Transform3D(Basis.IDENTITY, Vector3(0, 0.6, 0)), 0.7, 0.7, 1.2, 8, base_color, 0.15)
+		"sphere":
+			for i in 10:
+				var a0 := TAU * i / 10.0
+				var a1 := TAU * (i + 1) / 10.0
+				b.tri(Vector3(0, 1.0, 0), Vector3(cos(a0) * 0.8, 0.2, sin(a0) * 0.8), Vector3(cos(a1) * 0.8, 0.2, sin(a1) * 0.8), base_color)
+				b.tri(Vector3(0, -1.0, 0), Vector3(cos(a1) * 0.8, -0.2, sin(a1) * 0.8), Vector3(cos(a0) * 0.8, -0.2, sin(a0) * 0.8), base_color)
+			for i in 8:
+				var a0 := TAU * i / 8.0
+				var a1 := TAU * (i + 1) / 8.0
+				b.quad(Vector3(cos(a0) * 0.8, 0.2, sin(a0) * 0.8), Vector3(cos(a0) * 0.8, -0.2, sin(a0) * 0.8), Vector3(cos(a1) * 0.8, -0.2, sin(a1) * 0.8), Vector3(cos(a1) * 0.8, 0.2, sin(a1) * 0.8), base_color)
+		"pyramid":
+			for i in 4:
+				var a0 := TAU * i / 4.0 + PI/4
+				var a1 := TAU * (i + 1) / 4.0 + PI/4
+				b.tri(Vector3(0, 1.2, 0), Vector3(cos(a0) * 0.9, 0.0, sin(a0) * 0.9), Vector3(cos(a1) * 0.9, 0.0, sin(a1) * 0.9), base_color)
+			b.quad(Vector3(0.9, 0.0, 0.9), Vector3(-0.9, 0.0, 0.9), Vector3(-0.9, 0.0, -0.9), Vector3(0.9, 0.0, -0.9), base_color)
+		"diamond":
+			var pts := [Vector3(0, 1.2, 0), Vector3(0, -1.2, 0), Vector3(1.0, 0, 0), Vector3(-1.0, 0, 0), Vector3(0, 0, 1.0), Vector3(0, 0, -1.0)]
+			var faces := [[0,2,4], [0,4,3], [0,3,5], [0,5,2], [1,4,2], [1,3,4], [1,5,3], [1,2,5]]
+			for face in faces:
+				b.tri(pts[face[0]], pts[face[1]], pts[face[2]], base_color)
+		"octahedron":
+			for i in 4:
+				var a0 := TAU * i / 4.0
+				var a1 := TAU * (i + 1) / 4.0
+				b.tri(Vector3(0, 1.0, 0), Vector3(cos(a0) * 0.8, 0.0, sin(a0) * 0.8), Vector3(cos(a1) * 0.8, 0.0, sin(a1) * 0.8), base_color)
+				b.tri(Vector3(0, -1.0, 0), Vector3(cos(a1) * 0.8, 0.0, sin(a1) * 0.8), Vector3(cos(a0) * 0.8, 0.0, sin(a0) * 0.8), base_color)
+	b.shard(Vector3(0, 0, 0), Vector3(0, 0.3, 0), 0.3, 0.15, glow_color, 0.6, 0.0, 0.0)
+	b.shard(Vector3(0, 0, 0), Vector3(0, -0.3, 0), 0.3, 0.15, glow_color, 0.6, 0.0, 0.0)
+	var mi := MeshInstance3D.new()
+	mi.mesh = b.mesh()
+	mi.material_override = w.mat_chr
+	mi.material_override.set_shader_parameter("boost", 1.8)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	n.add_child(mi)
+	return n
+
+func _create_trail_particles(glow_color: Color) -> GPUParticles3D:
+	var trail := GPUParticles3D.new()
+	trail.amount = 20
+	trail.lifetime = 0.8
+	trail.one_shot = false
+	trail.process_material = ShaderMaterial.new()
+	trail.process_material.shader = Shader.new()
+	trail.process_material.shader.code = """
+		shader_type particles;
+		uniform vec3 trail_color;
+		void start() {
+			POSITION = vec3((randf() - 0.5) * 0.5, (randf() - 0.5) * 0.5, (randf() - 0.5) * 0.5);
+			VELOCITY = vec3((randf() - 0.5) * 1.0, -1.0 - randf() * 2.0, (randf() - 0.5) * 1.0);
+			COLOR = vec4(trail_color, 0.5);
+			MASS = 1.0;
+		}
+		void process() {
+			COLOR.a = 0.5 * (1.0 - (AGE / LIFETIME));
+		}
+	"""
+	trail.process_material.set_shader_parameter("trail_color", Vector3(glow_color.r, glow_color.g, glow_color.b))
+	return trail
+
+func _update_falling_objects(dt: float) -> void:
+	for obj in falling_objects.duplicate():
+		obj.pos += obj.vel * dt
+		obj.node.position = Vector3(obj.pos.x, obj.node.position.y + obj.vel.y * dt, obj.pos.y)
+		if obj.mesh_instance:
+			obj.mesh_instance.rotation.y += obj.rotation_speed * dt
+			obj.mesh_instance.rotation.x += obj.rotation_speed * dt * 0.5
+		var ground_y := w._height(obj.pos, 3.0)
+		if obj.node.position.y <= ground_y + 0.5:
+			_impact_object(obj, ground_y)
+
+func _impact_object(obj: Dictionary, ground_y: float) -> void:
+	obj.node.queue_free()
+	falling_objects.erase(obj)
+	_create_impact_explosion(Vector3(obj.pos.x, ground_y + 0.5, obj.pos.y), obj.rift_type, obj.color, obj.glow_color)
+	var dist_to_player: float = obj.pos.distance_to(w.pos)
+	if dist_to_player < IMPACT_RADIUS + 1.5:
+		var dmg := IMPACT_DAMAGE * (1.0 - dist_to_player / (IMPACT_RADIUS + 1.5))
+		hurt(dmg, (w.pos - obj.pos).normalized())
+
+func _create_impact_explosion(pos: Vector3, rift_type: String, base_color: Color, glow_color: Color) -> void:
+	var b := W3DBuilder.new()
+	for i in 16:
+		var a0 := TAU * i / 16.0
+		var a1 := TAU * (i + 1) / 16.0
+		b.tri(pos, pos + Vector3(cos(a0) * 0.5, 0.2, sin(a0) * 0.5), pos + Vector3(cos(a1) * 0.5, 0.2, sin(a1) * 0.5), base_color * 0.8)
+		b.tri(pos, pos + Vector3(cos(a1) * 0.5, -0.2, sin(a1) * 0.5), pos + Vector3(cos(a0) * 0.5, -0.2, sin(a0) * 0.5), base_color * 0.6)
+	var exp_node = Node3D.new()
+	var mi := MeshInstance3D.new()
+	mi.mesh = b.mesh()
+	mi.material_override = w.mat_chr
+	mi.material_override.set_shader_parameter("boost", 2.5)
+	exp_node.add_child(mi)
+	w.vp.add_child(exp_node)
+	var particles := GPUParticles3D.new()
+	particles.amount = 60
+	particles.lifetime = 1.2
+	particles.one_shot = true
+	particles.process_material = ShaderMaterial.new()
+	particles.process_material.shader = Shader.new()
+	particles.process_material.shader.code = """
+		shader_type particles;
+		uniform vec3 exp_color;
+		uniform vec3 exp_glow;
+		void start() {
+			var angle = randf() * 6.28;
+			var elevation = (randf() - 0.5) * 1.5;
+			var speed = 8.0 + randf() * 12.0;
+			VELOCITY = vec3(cos(angle) * cos(elevation), sin(elevation), sin(angle) * cos(elevation)) * speed;
+			POSITION = vec3((randf() - 0.5) * 0.5, (randf() - 0.5) * 0.5, (randf() - 0.5) * 0.5);
+			COLOR = vec4(mix(exp_color, exp_glow, randf()), 0.8);
+			MASS = 1.0;
+		}
+		void process() {
+			VELOCITY.y -= 15.0 * delta;
+			VELOCITY *= 0.98;
+			COLOR.a = 0.8 * (1.0 - (AGE / LIFETIME));
+		}
+	"""
+	particles.process_material.set_shader_parameter("exp_color", Vector3(base_color.r, base_color.g, base_color.b))
+	particles.process_material.set_shader_parameter("exp_glow", Vector3(glow_color.r, glow_color.g, glow_color.b))
+	exp_node.add_child(particles)
+	particles.emitting = true
+	var ring_b := W3DBuilder.new()
+	for i in 32:
+		var a0 := TAU * i / 32.0
+		var a1 := TAU * (i + 1) / 32.0
+		ring_b.quad(Vector3(cos(a0) * 1.0, 0.05, sin(a0) * 1.0), Vector3(cos(a0) * 1.5, 0.05, sin(a0) * 1.5), Vector3(cos(a1) * 1.5, 0.05, sin(a1) * 1.5), Vector3(cos(a1) * 1.0, 0.05, sin(a1) * 1.0), glow_color * 0.5)
+	var ring_node = Node3D.new()
+	ring_node.position = pos
+	var ring_mi := MeshInstance3D.new()
+	ring_mi.mesh = ring_b.mesh()
+	ring_mi.material_override = w.mat_chr
+	ring_mi.material_override.set_shader_parameter("boost", 3.0)
+	ring_node.add_child(ring_mi)
+	w.vp.add_child(ring_node)
+	impact_explosions.append({
+		"node": exp_node,
+		"ring": ring_node,
+		"particles": particles,
+		"ring_mesh": ring_mi,
+		"pos": pos,
+		"timer": 0.0,
+		"radius": 1.0,
+		"max_radius": IMPACT_RADIUS,
+		"color": base_color,
+		"glow_color": glow_color,
+		"ring_scale": 1.0
+	})
+	shake = maxf(shake, 1.2)
+
+func _update_impact_explosions(dt: float) -> void:
+	for exp in impact_explosions.duplicate():
+		exp.timer += dt
+		exp.ring_scale += dt * 8.0
+		if exp.ring:
+			exp.ring.scale = Vector3(exp.ring_scale, 0.5, exp.ring_scale)
+			var alpha = 1.0 - exp.timer / 1.5
+			if exp.ring_mesh:
+				exp.ring_mesh.material_override.set_shader_parameter("boost", 3.0 * alpha)
+		if exp.node:
+			var alpha = 1.0 - exp.timer / 1.5
+			if exp.node.get_child_count() > 0:
+				var mi := exp.node.get_child(0) as MeshInstance3D
+				if mi and mi.material_override:
+					mi.material_override.set_shader_parameter("boost", 2.5 * alpha)
+		if exp.timer >= 1.5:
+			if exp.node: exp.node.queue_free()
+			if exp.ring: exp.ring.queue_free()
+			impact_explosions.erase(exp)
+
+func _cleanup_falling_objects() -> void:
+	for obj in falling_objects.duplicate():
+		if obj.node.position.y < -10.0 or obj.pos.distance_to(w.pos) > w.fade_a + 20.0:
+			obj.node.queue_free()
+			falling_objects.erase(obj)
+
+func _end_ufo_wave() -> void:
+	ufo_wave_active = false
+	if ufo_node:
+		ufo_node.queue_free()
+		ufo_node = null
+	for rift in rifts:
+		rift.node.queue_free()
+	rifts.clear()
+	for obj in falling_objects:
+		obj.node.queue_free()
+	falling_objects.clear()
+	w.ufo_cam_active = false
+	say("ONDATA UFO SCONFITTA!")
+	_update_ufo_ui()
+
+func hurt_ufo(dmg: float) -> void:
+	if not ufo_wave_active:
+		return
+	ufo_hp -= dmg
+	ufo_hp = maxf(0.0, ufo_hp)
+	_update_ufo_ui()
+	if ufo_node and ufo_node.get_child_count() > 0:
+		var mi := ufo_node.get_child(0) as MeshInstance3D
+		if mi:
+			mi.material_override.set_shader_parameter("boost", 3.0)
+			var tw := create_tween()
+			tw.tween_property(mi.material_override, "shader_parameter/boost", 1.9, 0.1)
+	shake = maxf(shake, 0.8)

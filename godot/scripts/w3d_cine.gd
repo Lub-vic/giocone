@@ -10,6 +10,7 @@ extends RefCounted
 const FLAG := "ufo_cine"
 const FILES := ["user://cutscenes.json", "res://data/cutscenes.json"]
 const BASE_SC := {"ufo": 0.8, "device": 1.5, "hero": 1.0}
+static var ufo_mesh_cache: ArrayMesh
 
 var sk                      # W3DSkin
 var gm                      # Main
@@ -293,7 +294,9 @@ func skip() -> void:
 		finish()
 
 
-func _mk_ufo_mesh() -> ArrayMesh:
+static func ufo_mesh() -> ArrayMesh:
+	if ufo_mesh_cache != null:
+		return ufo_mesh_cache
 	var b := W3DBuilder.new()
 	var hull := Color(0.50, 0.55, 0.62)
 	var dark := Color(0.20, 0.22, 0.27)
@@ -306,7 +309,8 @@ func _mk_ufo_mesh() -> ArrayMesh:
 		var lc := Color(1.0, 0.75, 0.25, 0.18) if i % 2 == 0 else Color(0.4, 1.0, 0.7, 0.18)
 		b.box(Transform3D(Basis(Vector3.UP, -a), Vector3(cos(a) * 4.75, 0.1, sin(a) * 4.75)), Vector3(0.55, 0.4, 0.55), lc, 0.0)
 	b.cyl(Transform3D(Basis.IDENTITY, Vector3(0.6, 1.8, 0.3)), 0.06, 0.04, 1.4, 5, hull, 0.0)
-	return b.mesh()
+	ufo_mesh_cache = b.mesh()
+	return ufo_mesh_cache
 
 
 func _mk_device_mesh() -> ArrayMesh:
@@ -367,7 +371,7 @@ func _make_actor(kind: String) -> Node3D:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	match kind:
 		"ufo":
-			mi.mesh = _mk_ufo_mesh()
+			mi.mesh = W3DCine.ufo_mesh()
 			mi.material_override = sk.mat_prop
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			n.add_child(mi)
@@ -730,9 +734,15 @@ func _dialog_show(txt: String, dur: float) -> void:
 	dlg_until = t + dur
 
 
-func _boom3d(p: Vector3, n: int) -> void:
-	for cfg in [[Color(1.0, 0.85, 0.4, 1.0), Color(0.6, 0.1, 0.04, 0.0), 1.3, 7.0, 17.0, 0.8, 2.4, true], [Color(0.15, 0.13, 0.14, 0.9), Color(0.2, 0.2, 0.22, 0.0), 2.4, 3.0, 9.0, 1.2, 3.2, false]]:
-		var e := _emitter(cfg[0], cfg[1], n, cfg[2], cfg[3], cfg[4], cfg[5], cfg[6], cfg[7], -1.5)
+func explosion3d(p: Vector3, n: int, label: String = "CinematicExplosion", size_scale: float = 1.0) -> void:
+	var emitters := [
+		[Color(1.0, 0.85, 0.4, 1.0), Color(0.6, 0.1, 0.04, 0.0), 1.3, 7.0, 17.0, 0.8, 2.4, true],
+		[Color(0.15, 0.13, 0.14, 0.9), Color(0.2, 0.2, 0.22, 0.0), 2.4, 3.0, 9.0, 1.2, 3.2, false],
+	]
+	for index in emitters.size():
+		var cfg: Array = emitters[index]
+		var e := _emitter(cfg[0], cfg[1], n, cfg[2], cfg[3] * size_scale, cfg[4] * size_scale, cfg[5] * size_scale, cfg[6] * size_scale, cfg[7], -1.5)
+		e.name = "%s_%s" % [label, "Fire" if index == 0 else "Smoke"]
 		e.one_shot = true
 		e.explosiveness = 1.0
 		e.spread = 180.0
@@ -740,8 +750,6 @@ func _boom3d(p: Vector3, n: int) -> void:
 		sk.vp.add_child(e)
 		e.emitting = true
 		sk.get_tree().create_timer(4.0).timeout.connect(e.queue_free)
-
-
 func _music_stop(fade: float) -> void:
 	if mus == null or not is_instance_valid(mus):
 		return
@@ -768,7 +776,7 @@ func _fire(ev: Dictionary) -> void:
 			_dialog_show(str(ev.get("x", "????")), float(ev.get("d", 3.0)))
 		"boom":
 			var bq: Vector3 = ref(str(ev.get("a", "ufo")))["p"]
-			_boom3d(bq, int(ev.get("n", 100)))
+			explosion3d(bq, int(ev.get("n", 100)))
 		"musicstop":
 			_music_stop(float(ev.get("fade", 1.5)))
 		"say":

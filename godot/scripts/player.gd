@@ -501,7 +501,7 @@ func _process(dt: float) -> void:
 		regen_t -= dt
 		hp = min(max_hp, hp + regen_rate * dt)
 	var dir := Vector2.ZERO if main.inv_open else Input.get_vector("move_left", "move_right", "move_up", "move_down")
-	if main.side_scroll_active:
+	if main.side_scroll_active and main.side_scroll_mode != "temporal_clearing":
 		dir.y = 0.0
 	var fsk = main.skin
 	var in_fpv: bool = fsk is W3DSkin and (fsk as W3DSkin).fpv
@@ -540,7 +540,10 @@ func _process(dt: float) -> void:
 		face = Vector2(-sin(fy), -cos(fy))       # si colpisce dove si guarda
 		aim_world = position + face * 80.0
 	if main.side_scroll_active:
-		if absf(dir.x) > 0.1:
+		if main.side_scroll_mode == "temporal_clearing":
+			if dir.length() > 0.1:
+				face = dir.normalized()
+		elif absf(dir.x) > 0.1:
 			face = Vector2(signf(dir.x), 0.0)
 		else:
 			face = Vector2.LEFT if face.x < 0.0 else Vector2.RIGHT
@@ -620,9 +623,13 @@ func _process(dt: float) -> void:
 	# attacchi
 	var w := weapon()
 	var f: Dictionary = Rpg.FAM[w["f"]]
-	if (act_held("attack") or (not barn_horde and auto_fire(f))) and atk_cd <= 0.0 and idle() and st > 0.0 and (zmode == 0 or barn_horde) and veh.is_empty():
+	var temporal_clearing: bool = main.side_scroll_active and main.side_scroll_mode == "temporal_clearing"
+	if temporal_clearing:
+		if act("attack") and atk_cd <= 0.0 and idle() and st > 0.0 and veh.is_empty():
+			main._side_scroll_fire_temporal_weapon()
+	elif (act_held("attack") or (not barn_horde and auto_fire(f))) and atk_cd <= 0.0 and idle() and st > 0.0 and (zmode == 0 or barn_horde) and veh.is_empty():
 		attack()
-	if act("heavy") and idle() and st > 0.0 and (zmode == 0 or barn_horde) and veh.is_empty() and spend(float(f["hc"]) * Rpg.st_mult(w)):
+	if not temporal_clearing and act("heavy") and idle() and st > 0.0 and (zmode == 0 or barn_horde) and veh.is_empty() and spend(float(f["hc"]) * Rpg.st_mult(w)):
 		heavy_t = f["hw"]
 		var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
 		if near != null and not bool(main.settings["aim_manual"]):
