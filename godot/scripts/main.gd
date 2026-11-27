@@ -209,6 +209,7 @@ const FOG_BIO := [0.30, 0.52, 0.42, 0.58, 0.32, 0.26, 0.10]
 var fade: ColorRect
 var phase := 0                      # indice in PHASE_TITLES
 var loading_since := 0
+var story_clearing := false         # la Radura in corso fa parte della storia (la vittoria va salvata)
 var deferred_chunks := {}           # blocchi "eager" non ancora completati: si completano quando ci si avvicina
 var area_nodes: Array = []
 var flick: Array = []              # [luce, energia base, fase]
@@ -405,6 +406,8 @@ var world_ready := false            # il mondo aperto e' popolato: i blocchi si 
 
 
 func _ready() -> void:
+	if OS.get_cmdline_user_args().has("--sequencetest"):
+		StoryTest.run.call_deferred(self)
 	Game.setup_input()
 	Keybinds.init()
 	if OS.get_cmdline_user_args().size() == 0:
@@ -3158,14 +3161,15 @@ func world_event_update(dt: float) -> void:
 
 
 ## IL CAMMINO: catena di tappe guidate dopo le Celle (parlare, scoprire, liberare, crescere, raggiungere un luogo)
-const JOURNEY_N := 5
+const JOURNEY_N := 11              # numero di tappe: la tabella e' in missions.gd
 const MISSION_TEST_STORY := [
 	{"id": "story:invasion", "label": "STORIA - LIBERA IL VILLAGGIO"},
 	{"id": "journey:0", "label": "STORIA - PARLA CON L'ANZIANO"},
 	{"id": "journey:1", "label": "STORIA - CERCA UNA PAGINA"},
 	{"id": "story:barn", "label": "STORIA - ASSALTO AL FIENILE"},
 	{"id": "journey:3", "label": "STORIA - RAGGIUNGI IL LIVELLO 3"},
-	{"id": "journey:4", "label": "STORIA - RAGGIUNGI LA CAMPANA"},
+	{"id": "journey:9", "label": "STORIA - LA RADURA DELL'UFO"},
+	{"id": "journey:10", "label": "STORIA - RAGGIUNGI LA CAMPANA"},
 ]
 const DEBUG_FUNCTION_ACTIONS := [
 	["close_debug", "F2 - CHIUDI MENU DEBUG"],
@@ -3184,60 +3188,25 @@ const DEBUG_FUNCTION_ACTIONS := [
 
 
 func journey_step() -> int:
+	Missions.migrate(persist)
 	if not persist.has("journey") and (persist["bosses"].has("boss_wraith") or guardians > 0):
 		return JOURNEY_N  # salvataggi gia' avanzati: niente tappe iniziali
 	return int(persist.get("journey", 0))
 
 
 func journey_target() -> Variant:
-	if area != "world" or journey_step() >= JOURNEY_N or not persist["bosses"].has("boss_jailer"):
+	if journey_step() >= JOURNEY_N:
 		return null
-	match journey_step():
-		0:
-			for p in props:
-				if p.kind == "elder":
-					return p.position
-			return cell_pos(SEEDS[0] + Vector2i(-3, -1))
-		1:
-			var best: Variant = null
-			for p in props:
-				if p.kind == "page" and (best == null or p.position.distance_to(player.position) < (best as Vector2).distance_to(player.position)):
-					best = p.position
-			return best
-		3:
-			var bb: Variant = null
-			for p in props:
-				if p.kind == "bonfire" and (bb == null or p.position.distance_to(player.position) < (bb as Vector2).distance_to(player.position)):
-					bb = p.position
-			return bb
-		4:
-			for a in arenas:
-				if a["def"]["id"] == "a_vil":
-					return a["pos"]
-	return null
+	return Missions.target(self)
 
 
 func journey_text() -> String:
-	var t := ""
-	match journey_step():
-		0:
-			t = "PARLA CON L'ANZIANO DEL VILLAGGIO"
-		1:
-			t = "CERCA UNA PAGINA DI DIARIO NEL VILLAGGIO"
-		2:
-			t = "DIFENDI LE RISERVE DI CIBO AL FIENILE"
-		3:
-			t = "SALI A LIVELLO 3 AI FALO'"
-		4:
-			t = "RAGGIUNGI LA CAMPANA DEI CONDANNATI"
-	var tg: Variant = journey_target()
-	if tg != null:
-		t += " (%s, %d M)" % [dir_hint(tg), int((tg as Vector2).distance_to(player.position) / 16.0)]
-	return t
+	return Missions.text(self)
 
 
 func journey_advance(msg: String, souls: int, relics: int, weapon: int) -> void:
 	persist["journey"] = journey_step() + 1
+	persist["journey_v"] = Missions.VERSION
 	player.add_souls(souls)
 	popup(player.position + Vector2(0, -22), "+%d ANIME" % souls, Color(0.6, 1.0, 0.85))
 	for i in relics:
@@ -3257,25 +3226,14 @@ func journey_update() -> void:
 		Story.update(self, get_process_delta_time())
 	if journey_step() >= JOURNEY_N or area != "world" or not persist["bosses"].has("boss_jailer"):
 		return
-	match journey_step():
-		0:
-			var tg: Variant = journey_target()
-			if tg != null and Story.village_free(self) and (tg as Vector2).distance_to(player.position) < 30.0:
-				journey_advance("L'ANZIANO: FUORI C'E' PIU' DI QUEL CHE VEDI. CERCA I DIARI: RACCONTANO COME FINI' TUTTO", 60, 0, 0)
-		1:
-			if pages_found >= 1:
-				journey_advance("UNA PAGINA RITROVATA. UN CONTADINO CHIEDE AIUTO: DIFENDI LE SCORTE DEL FIENILE", 80, 1, 0)
-		2:
-			if Story.barn_done(self):
-				journey_advance("FIENILE SALVO! LE SCORTE BASTERANNO PER L'INVERNO", 120, 1, 0)
-				add_item("arrosto", 2)
-		3:
-			if player.lv >= 3:
-				journey_advance("PIU' FORTE. ORA ANDRAI ANCORA PIU' LONTANO", 100, 1, 0)
-		4:
-			var tg2: Variant = journey_target()
-			if tg2 != null and (tg2 as Vector2).distance_to(player.position) < 110.0:
-				journey_advance("LA CAMPANA TACE. IL CUSTODE DEL CIMITERO TI ASPETTA A EST", 150, 1, 2)
+	Missions.update(self)
+
+
+## la Radura Temporale come tappa della storia: si apre nel mondo, nel luogo scelto dalla missione
+func start_story_clearing(centre: Vector2) -> void:
+	player.position = centre
+	_side_scroll_start("temporal_clearing")
+	story_clearing = true
 
 
 func door_lock_msg(dest: String) -> String:
@@ -3587,6 +3545,7 @@ func _mission_test_restore() -> void:
 func _mission_test_start_story(id: String) -> void:
 	var story_flags := Story.flags(self)
 	persist["bosses"]["boss_jailer"] = true
+	persist["journey_v"] = Missions.VERSION
 	if id == "story:invasion":
 		persist["journey"] = 0
 		story_flags.erase(Story.INV)
@@ -3614,7 +3573,7 @@ func _mission_test_start_story(id: String) -> void:
 			if page != null:
 				player.position = page.position + Vector2(24, 0)
 		"story:barn":
-			persist["journey"] = 2
+			persist["journey"] = Missions.BARN_STAGE
 			story_flags.erase(Story.BARN_ASSAULT)
 			Story.barn_runner = null
 			Story.barn_t = 0.0
@@ -3632,7 +3591,13 @@ func _mission_test_start_story(id: String) -> void:
 				if prop.kind == "bonfire":
 					player.position = prop.position + Vector2(0, 20)
 					break
-		"journey:4":
+		"journey:9":
+			story_flags.erase("radura_done")
+			var spot := Missions.radura_cell(self)
+			if spot.x >= 0:
+				ensure_area(cell_pos(spot), 2)
+				player.position = cell_pos(spot + Vector2i(0, 12))
+		"journey:10":
 			for arena in arenas:
 				if arena["def"]["id"] == "a_vil":
 					player.position = arena["pos"]
@@ -3650,6 +3615,7 @@ func _mission_test_begin_pending() -> void:
 	elif str(entry["kind"]) == "mode" and str(entry["id"]) == "side_scroll":
 		_side_scroll_start("travel")
 	elif str(entry["kind"]) == "mode" and str(entry["id"]) == "temporal_clearing":
+		story_clearing = false
 		_side_scroll_start("temporal_clearing")
 	else:
 		var qid := str(entry["id"])
@@ -3659,6 +3625,7 @@ func _mission_test_begin_pending() -> void:
 			return
 		var definition: Dictionary = quest_defs[qid]
 		persist["journey"] = JOURNEY_N
+		persist["journey_v"] = Missions.VERSION
 		Story.flags(self)[Story.INV] = true
 		Story.flags(self).erase(Story.BARN_ASSAULT)
 		qp().erase(qid)
@@ -3935,6 +3902,10 @@ func _side_scroll_update_temporal(dt: float) -> void:
 			(skin as W3DSkin).side_scroll_temporal_update(side_scroll_ufo_t, true, escape_progress)
 		if side_scroll_ufo_escape_t <= 0.0:
 			_side_scroll_stop()
+			if story_clearing:
+				story_clearing = false
+				Story.flags(self)["radura_done"] = true
+				save_game()
 			if mission_test_active:
 				_mission_test_restore()
 			say("L'UFO E' FUGGITO")
@@ -6415,10 +6386,10 @@ func obj_targets() -> Array:
 	var green := Color(0.45, 1.0, 0.7)
 	if area == "world":
 		var jt: Variant = journey_target()
-		if barn_pos.x >= 0.0 and Story.barn_status(self) in ["active", "final"]:
+		if barn_pos.x >= 0.0 and Story.barn_status(self) in ["march", "active", "final"]:
 			out.append({"p": barn_pos * 16.0, "c": Color(1.0, 0.8, 0.4), "n": "FIENILE"})
 		var dvc: Variant = Story.device_cell(self)
-		if journey_step() == 2 and Story.barn_status(self) == "approach":
+		if journey_step() == Missions.BARN_STAGE and Story.barn_status(self) == "approach":
 			for p in props:
 				if p.kind == "npc" and p.npc_id == "contadino_assalto":
 					out.append({"p": p.position, "c": gold, "n": "IL CONTADINO"})
@@ -6428,7 +6399,8 @@ func obj_targets() -> Array:
 		elif persist["bosses"].has("boss_jailer") and not Story.village_free(self):
 			out.append({"p": cell_pos(SEEDS[0]), "c": gold, "n": "VILLAGGIO"})      # la freccia guida al villaggio invaso
 		elif jt != null:
-			out.append({"p": jt, "c": gold, "n": "OBIETTIVO"})
+			if not (Story.barn_status(self) in ["march", "active", "final"]):      # il fienile ha gia' la sua freccia
+				out.append({"p": jt, "c": gold, "n": "OBIETTIVO"})
 		elif journey_step() >= JOURNEY_N:
 			var g := main_gate()
 			if g != "" and ENTR.has(g):
@@ -7739,13 +7711,10 @@ func respawn_fix_update(dt: float) -> void:
 
 
 func respawn() -> void:
-	# prima dell'ufo (uscito dalle celle) si risorge nel punto in cui si e' morti, non al falo' ne' al villaggio
-	var here := false
-	if death_area == "world" and persist["bosses"].has("boss_jailer") and not Story.is_done(self, W3DCine.FLAG):
-		last_fire = {"area": "world", "cell": Vector2i(floori(death_pos.x / 16.0), floori(death_pos.y / 16.0))}
-		ensure_area(death_pos, 2)
-		last_fire["cell"] = free_near(last_fire["cell"])
-		here = true
+	# finche' il villaggio e' invaso si risorge accanto al suo falo' spento (chi muore nelle celle resta nelle celle)
+	var by_village: bool = not run_mode and death_area != "d0" and persist["bosses"].has("boss_jailer") and not Story.village_free(self)
+	if by_village:
+		last_fire = {"area": "world", "cell": SEEDS[0] + Story.FIRE_OFF}
 	var lf_area: String = last_fire["area"]
 	if lf_area != area:
 		build_area(lf_area)
@@ -7766,8 +7735,9 @@ func respawn() -> void:
 	respawn_fix = 2.0
 	player.cam.reset_smoothing()
 	spawn_all()
-	if here:
-		say("TI RIALZI DOVE SEI CADUTO")
+	if by_village:
+		player.inv = 4.0      # i mostri sono a due passi: qualche istante per rialzarsi
+		say("TI RIALZI ACCANTO AL FALO' SPENTO DEL VILLAGGIO")
 		return
 	say("TI SVEGLI ALL'ACCAMPAMENTO" if stain_data.get("relics", {}).size() == 0 else "TI SVEGLI ALL'ACCAMPAMENTO: LE RELIQUIE SONO NELLA MACCHIA")
 
@@ -7789,9 +7759,18 @@ func sleep_skip() -> void:
 			v.st_t = randf_range(0.5, 4.0)
 
 
+## falo', letti e accampamenti servono solo dopo la liberazione del villaggio
+func camps_locked() -> bool:
+	return not run_mode and not Story.village_free(self)
+
+
 func rest(p: Prop) -> void:
 	if Story.blocks_fire(self, p):
 		say("IL FALO' E' SPENTO: I MOSTRI HANNO INVASO IL VILLAGGIO")
+		snd("hurt")
+		return
+	if camps_locked():
+		say("NON PUOI ACCAMPARTI FINCHE' IL VILLAGGIO E' INVASO")
 		snd("hurt")
 		return
 	if p.kind == "bonfire":
@@ -11506,7 +11485,8 @@ func _process(_dt: float) -> void:
 		tgs += 1
 		if tgs == 5:
 			persist["bosses"]["boss_jailer"] = true
-			persist["journey"] = 2
+			persist["journey"] = Missions.BARN_STAGE
+			persist["journey_v"] = Missions.VERSION
 			var story_flags := Story.flags(self)
 			story_flags[Story.INV] = true
 			story_flags.erase(Story.BARN_ASSAULT)
@@ -11525,11 +11505,15 @@ func _process(_dt: float) -> void:
 			state = "play"
 			Story.update(self, 0.05)
 			var steps := 0
-			while steps < 400 and Story.barn_status(self) != "active":
+			while steps < 400 and Story.barn_status(self) != "march":
 				Story.update(self, 0.05)
 				steps += 1
-			Story.update(self, 0.05)
-			var started := Story.barn_status(self) == "active" and player.zmode == 1 and state == "dialog"
+			var asked := Story.barn_status(self) == "march" and player.zmode == 0 and state == "dialog"
+			state = "play"
+			if barn_pos.x >= 0.0:
+				player.position = barn_pos * 16.0 + Vector2(0, 5 * 16)
+			Story.update(self, 0.05)      # arrivando al fienile l'assalto comincia (questo passo non consuma tempo)
+			var started := asked and Story.barn_status(self) == "active" and player.zmode == 1
 			var automatic_fire_disabled := not bool(settings["auto_fire"])
 			var camera_height_reasonable := skin is W3DSkin and is_equal_approx((skin as W3DSkin).cam_extra, Story.BARN_CAM) and Story.BARN_CAM <= 10.0
 			state = "play"
@@ -11581,7 +11565,7 @@ func _process(_dt: float) -> void:
 			var completed := Story.barn_done(self) and player.zmode == 0
 			var automatic_fire_restored := bool(settings["auto_fire"])
 			journey_update()
-			var advanced := journey_step() == 3 and int(player.items.get("arrosto", 0)) == 2
+			var advanced := journey_step() == Missions.BARN_STAGE + 1 and int(player.items.get("arrosto", 0)) == 2
 			var limited_waves := horde_count > 0 and horde_count <= 3
 			var few_casters := early_mages == 1
 			print("BARN richiesta=", started, " auto_fire_off=", automatic_fire_disabled, " nemici_onda=", horde_count, " visibili=", horde_within_view, " deboli_iniziali=", horde_early_weak and early_roster_weak, " incantatori_su_20=", early_mages, " difficolta_progressiva=", staged_difficulty, " anime_ridotte=", reduced_souls, " camera=", camera_height_reasonable, " conto_alla_rovescia=", countdown_active, " conclusa=", completed, " auto_fire_ripristinato=", automatic_fire_restored, " progresso=", advanced, " avvicinamento=", steps, " obiettivo=", objective())
@@ -12240,6 +12224,8 @@ func _process(_dt: float) -> void:
 					prompt = "E  DORMI QUI" if near_obj.lit else "E  ALLESTISCI IL CAMPO"
 					if Story.blocks_fire(self, near_obj):
 						prompt = "FALO' SPENTO: IL VILLAGGIO E' INVASO"
+					elif camps_locked():
+						prompt = "PRIMA LIBERA IL VILLAGGIO"
 				"dig":
 					prompt = "E  SCAVA"
 				"bed_top":

@@ -14,7 +14,9 @@ const CHRONO := "chrono_found"     # l'eroe ha raccolto l'apparecchio caduto dal
 const ESCAPE_INTRO := "escape_intro"
 const BARN_ASSAULT := "barn_assault"
 const BARN_TIME := 120.0           # durata dell'assalto al fienile (secondi)
-const BARN_DELAY := 150.0          # il contadino arriva solo dopo tanti secondi di gioco da quando la missione si sblocca
+const BARN_DELAY := 8.0            # il ritmo lo danno le tappe precedenti (missions.gd): il contadino arriva quasi subito
+const BARN_START := 9.0            # celle: l'assalto comincia solo arrivando al fienile
+const BARN_LEASH := 24.0           # celle: allontanandosi di piu' il conto alla rovescia si ferma
 const BARN_CAM := 8.0              # di quanto si alza la vista durante l'assalto
 const BARN_WEAK_ENEMIES := ["rat", "goblin", "kobold", "skel_runner", "crow"]
 const FIRE_OFF := Vector2i(3, 0)           # il falo' del villaggio e' a SEEDS[0] + questo
@@ -174,15 +176,35 @@ static func _start_barn_assault(m, p) -> void:
 	var f := flags(m)
 	if str(f.get(BARN_ASSAULT, "")) != "approach":
 		return
-	f[BARN_ASSAULT] = "active"
+	f[BARN_ASSAULT] = "march"
 	if p != null and is_instance_valid(p):
 		m.block.erase(p.cell)
 		m.props.erase(p)
 		p.queue_free()
 	barn_runner = null
-	_ensure_barn_mode(m)
-	m.dlg = {"head": "IL CONTADINO", "text": "AIUTO! I MOSTRI STANNO ASSALTANDO IL FIENILE. SE DISTRUGGONO LE SCORTE, IL VILLAGGIO NON AVRA' CIBO PER L'INVERNO!", "opts": ["..."], "sel": 0, "qs": "story", "qid": ""}
+	m.dlg = {"head": "IL CONTADINO", "text": "AIUTO! I MOSTRI VANNO VERSO IL FIENILE, APPENA FUORI DAL VILLAGGIO. SE DISTRUGGONO LE SCORTE NON AVREMO CIBO PER L'INVERNO. SEGUI LA FRECCIA!", "opts": ["..."], "sel": 0, "qs": "story", "qid": ""}
 	m.state = "dialog"
+	m.save_game()
+
+
+static func barn_distance(m) -> float:
+	if m.barn_pos.x < 0.0:
+		return 0.0      # senza un fienile nel mondo (vista non ancora pronta) l'assalto vale dove ci si trova
+	return (m.player.position / 16.0).distance_to(m.barn_pos)
+
+
+static func _barn_hint(m) -> String:
+	if m.barn_pos.x < 0.0 or m.area != "world":
+		return ""
+	var at: Vector2 = (m.barn_pos as Vector2) * 16.0
+	return " (%s, %d M)" % [m.dir_hint(at), int(barn_distance(m))]
+
+
+static func _begin_assault(m) -> void:
+	flags(m)[BARN_ASSAULT] = "active"
+	_ensure_barn_mode(m)
+	_barn_cam(m)
+	m.popup(m.player.position + Vector2(0, -30), "L'ASSALTO AL FIENILE!", Color(1.0, 0.7, 0.4))
 	m.snd("roar")
 	m.shake(3.0)
 	m.save_game()
@@ -225,7 +247,7 @@ static func _barn_cam(m) -> void:
 
 static func _barn_update(m, dt: float) -> void:
 	_barn_cam(m)
-	if m.run_mode or not village_free(m) or m.journey_step() != 2:
+	if m.run_mode or not village_free(m) or m.journey_step() != Missions.BARN_STAGE:
 		return
 	var f := flags(m)
 	var status := str(f.get(BARN_ASSAULT, ""))
@@ -245,6 +267,10 @@ static func _barn_update(m, dt: float) -> void:
 		if m.area == "world" and m.state == "play":
 			_run_to_hero_barn(m, dt)
 		return
+	if status == "march":
+		if m.area == "world" and m.state == "play" and barn_distance(m) <= BARN_START:
+			_begin_assault(m)
+		return
 	if status != "active":
 		return
 	if m.area != "world":
@@ -254,7 +280,7 @@ static func _barn_update(m, dt: float) -> void:
 	_ensure_barn_mode(m)
 	if m.state != "play":
 		return
-	if status == "active":
+	if status == "active" and barn_distance(m) <= BARN_LEASH:
 		barn_t = maxf(0.0, barn_t - dt)
 		if barn_t <= 0.0:
 			m.clear_horde()
@@ -505,11 +531,15 @@ static func complete_invasion(m) -> void:
 
 ## testo dell'obiettivo (vuoto se nessun evento di storia e' in corso)
 static func objective(m) -> String:
-	if not m.run_mode and village_free(m) and m.journey_step() == 2:
+	if not m.run_mode and village_free(m) and m.journey_step() == Missions.BARN_STAGE:
 		match barn_status(m):
 			"approach":
 				return "IL CONTADINO STA ARRIVANDO"
+			"march":
+				return "RAGGIUNGI IL FIENILE" + _barn_hint(m)
 			"active":
+				if barn_distance(m) > BARN_LEASH:
+					return "TORNA AL FIENILE" + _barn_hint(m)
 				return "DIFENDI IL FIENILE: %d S" % maxi(1, ceili(barn_t))
 			"final":
 				return "SCONFIGGI IL CAPOBRANCO AL FIENILE"
