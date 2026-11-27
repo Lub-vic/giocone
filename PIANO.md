@@ -56,7 +56,7 @@ Obiettivo: **circa 1 ora** per le prime 3 missioni, **circa 10 ore** per la stor
 - Tappe di esplorazione e raccolta fra fienile e radura.
 - Grado di storia (0 prima del fienile, 1 dopo, 2 dopo la radura, 3 dopo il primo custode) che limita armi, alleati
   e ricette del futuro. Durante la singolarità escono solo cose a tempo.
-- Registro di partita: `%APPDATA%\Godotpp_userdata\Crypt of Embersegistro_partita.csv`.
+- Registro di partita: `%APPDATA%\Godot\app_userdata\Crypt of Embers\registro_partita.csv`.
   Dopo una partita, con quel file si correggono costi e quantità.
 - Ancora da fare: per arrivare a 10 ore servono quasi certamente **contenuti nuovi dopo la campana**, non solo
   numeri più alti.
