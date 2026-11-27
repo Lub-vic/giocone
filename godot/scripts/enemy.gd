@@ -131,6 +131,9 @@ var recover_t := 0.0
 var blink_cd := 3.0
 var dive_pos := Vector2.ZERO
 var phase_n := 0
+var shield_state := 0      # scudo temporale (temporal_locks.gd): 0 nessuno, 1 alzato, 2 abbassato
+var shield_t := 0.0
+var shield_told := false
 var pat_seen := {}
 var col = null   # Colossus a cui appartiene questa parte (null per i nemici normali)
 var last_hit_t := -99.0
@@ -173,9 +176,11 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 			scl = d[7]
 			nm = d[8]
 			souls_mult = 1.0
-			var bmul := 2.1 if kind == "boss_jailer" else 1.5
+			var bmul := 2.35 if kind == "boss_jailer" else 2.0
 			hp *= bmul
-			dmg *= 1.25 if kind == "boss_jailer" else 1.15
+			dmg *= 1.3 if kind == "boss_jailer" else 1.25
+			if kind == TemporalLocks.SHIELDED_BOSS and TemporalLocks.active(m):
+				shield_state = 1
 			speed *= 1.12
 	if LUNGE.has(k):
 		tel_wait = LUNGE[k][0]
@@ -548,6 +553,8 @@ func _process(dt: float) -> void:
 		"champ":
 			_champ_ai(dt, u, d)
 		"boss":
+			if shield_state > 0:
+				TemporalLocks.boss_tick(self, dt)
 			if recover_t > 0.0:
 				recover_t -= dt
 			elif tel > 0.0:
@@ -575,12 +582,13 @@ func _process(dt: float) -> void:
 						main.say("%s: FURIA!" % nm)
 						main.shake(9.0)
 						main.snd("roar")
+						_phase_burst()
 					pattern = randi() % (3 + pn * 1 + (1 if pn >= 1 else 0))
 					if randf() < (0.3 + 0.2 * pn):
 						pattern = 6   # mossa firma del boss
 					pat_seen[pattern] = int(pat_seen.get(pattern, 0)) + 1
 					tel = 0.6 if pn == 0 else 0.5
-					cd = 1.8 if pn == 0 else (1.4 if pn == 1 else 1.05)
+					cd = 1.5 if pn == 0 else (1.15 if pn == 1 else 0.9)
 	var bob_base := -12.0 if is_boss else -8.0
 	if kind == "skeleton" or kind == "skel_archer" or kind == "boss_forge":
 		bob_base -= (spr.texture.get_height() - 20) * 0.5  # sprite piu' alti: i piedi restano allo stesso punto
@@ -742,6 +750,15 @@ func _boss_attack(u: Vector2) -> void:
 				_shoot(p, u.rotated(i * 0.2 + 0.1), 105.0, dmg)
 
 
+## cambio di fase: onda d'urto annunciata (si schiva allontanandosi) e due rinforzi
+func _phase_burst() -> void:
+	main.spawn_hazard(position, 64.0, 0.95, 0.2, dmg * 1.25, 0.0, Color(1.0, 0.35, 0.15))
+	for i in 2:
+		var minion: Enemy = main.spawn_enemy("skeleton", position + Vector2.from_angle(randf() * TAU) * 30.0, 1.0, false, Color.WHITE)
+		minion.awake = true
+		minion.set_process(true)
+
+
 ## mossa firma: ogni boss ha un attacco tutto suo
 func _boss_signature(u: Vector2) -> void:
 	var pl: Node2D = main.player
@@ -835,6 +852,9 @@ func hurt(d: float, dir: Vector2, force: float, heavy := false) -> void:
 		if d <= 0.0:
 			return
 	last_hit_t = t
+	if shield_state == 1:
+		d *= TemporalLocks.SHIELD_FACTOR
+		heavy = false
 	var crit: bool = randf() < main.player.crit_now()
 	if crit:
 		d *= 2.0

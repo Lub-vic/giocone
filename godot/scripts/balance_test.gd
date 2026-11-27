@@ -35,5 +35,53 @@ static func run(m) -> void:
 		if lv + 1 in [3, 6, 10]:
 			line += " livello %d=%d anime in totale;" % [lv + 1, total]
 	print("BILANCIO costi:", line)
+	await _locks(m, errors)
 	print("BILANCIO ESITO=", "OK" if errors.is_empty() else "FALLITO " + str(errors.slice(0, 5)))
 	m.get_tree().quit(0 if errors.is_empty() else 1)
+
+
+## i due lucchetti temporali: chiusi senza evocazione, aperti con un'evocazione qualsiasi
+static func _locks(m, errors: Array[String]) -> void:
+	m.build_area("world")
+	m.persist["bosses"]["boss_jailer"] = true
+	Story.flags(m)[Story.INV] = true
+	Story.flags(m)[Story.CHRONO] = true
+	for i in 10:
+		m.state = "play"
+		await m.get_tree().process_frame
+	if not TemporalLocks.door_sealed(m, "d1"):
+		errors.append("la cripta non e' sigillata")
+	m.player.chrono = 0.0
+	TemporalLocks.touch_door(m)
+	if m.player.chrono < Chrono.COST:
+		errors.append("la carica per il sigillo non e' garantita")
+	m.player.position = m.cell_pos(m.ENTR["d1"]) + Vector2(0, 150)
+	m.state = "play"
+	TemporalLocks.on_summon(m)
+	if not TemporalLocks.door_sealed(m, "d1"):
+		errors.append("il sigillo si spezza anche da lontano")
+	m.player.position = m.cell_pos(m.ENTR["d1"]) + Vector2(0, 24)
+	m.state = "play"
+	m.summon()
+	if TemporalLocks.door_sealed(m, "d1"):
+		errors.append("evocando accanto il sigillo resta")
+	var boss: Enemy = m.spawn_enemy("boss_wraith", m.player.position + Vector2(60, 0), 1.0, false, Color.WHITE)
+	boss.awake = true
+	if boss.shield_state != 1:
+		errors.append("il custode non ha lo scudo")
+	var before := boss.hp
+	boss.hurt(200.0, Vector2.RIGHT, 0.0, false)
+	var through := before - boss.hp
+	TemporalLocks.boss_tick(boss, 0.1)
+	if m.player.chrono < Chrono.COST:
+		errors.append("la carica per lo scudo non e' garantita")
+	TemporalLocks.on_summon(m)
+	before = boss.hp
+	boss.hurt(200.0, Vector2.RIGHT, 0.0, false)
+	var open := before - boss.hp
+	if not (boss.shield_state == 2 and open > through * 4.0):
+		errors.append("lo scudo non cade: %.0f / %.0f" % [through, open])
+	TemporalLocks.boss_tick(boss, TemporalLocks.SHIELD_DOWN + 1.0)
+	if boss.shield_state != 1 or m.player.chrono < Chrono.COST:
+		errors.append("lo scudo non si riforma con la carica garantita")
+	print("BILANCIO lucchetti: danno con scudo=", int(through), " senza scudo=", int(open), " vita custode=", int(boss.max_hp))

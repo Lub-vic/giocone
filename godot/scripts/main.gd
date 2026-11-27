@@ -4956,6 +4956,7 @@ func summon() -> void:
 	var r := Chrono.roll(player.lv, player.pity)
 	PlayLog.note(self, "evocazione", "%s %s" % [r["cls"], r["id"]])
 	player.pity = player.pity + 1 if str(r["cls"]) == "junk" else 0
+	TemporalLocks.on_summon(self)
 	ChronoBubble.spawn(self, r, str(r["cls"]) != "junk" and str(r["cls"]) != "use")   # la bolla si apre vicino a te; l'effetto parte quando l'oggetto ti raggiunge
 
 
@@ -8290,6 +8291,9 @@ func interact(p) -> void:
 		"portal":
 			if p.dest == "world" and area == "d0" and not persist["bosses"].has("boss_jailer"):
 				say("LA PORTA E' SBARRATA: IL CARCERIERE TIENE LA CHIAVE")
+				return
+			if TemporalLocks.door_sealed(self, p.dest):
+				TemporalLocks.touch_door(self)
 				return
 			if p.dest == "dF" and guardians < 3:
 				say("SIGILLATO: SCONFIGGI I TRE CUSTODI  (%d / 3)" % guardians)
@@ -12281,6 +12285,8 @@ func _process(_dt: float) -> void:
 					prompt = "E  TIRA LA LEVA"
 				"portal":
 					prompt = "E  ESCI" if near_obj.dest == "world" else ("E  ENTRA" if near_obj.dest != "dF" or guardians >= 3 else "E  SIGILLATO")
+					if TemporalLocks.door_sealed(self, near_obj.dest):
+						prompt = "E  SIGILLO TEMPORALE"
 			if use_pad and prompt.begins_with("E  "):
 				prompt = "A  " + prompt.substr(3)
 			if Input.is_action_just_pressed("interact"):
