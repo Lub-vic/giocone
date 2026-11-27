@@ -2481,6 +2481,22 @@ var road_guard := true
 const VILLAGE_KEEP := Vector2i(28, 22)
 
 
+## L'uscita dalle celle resta una collina senza strade. Oltre il raggio la strada della mappa affiora a tratti,
+## sempre piu' fitta, come un sentiero che si perde.
+const EXIT_KEEP := 24.0
+const EXIT_FADE := 10.0
+
+
+## celle in cui il 3D resta com'e': le strade della mappa non si vedono e non tolgono oggetti
+func _road_hidden(cell: Vector2i) -> bool:
+	if _in_village(cell):
+		return true
+	var from_exit := Vector2(cell - (gm.ENTR["d0"] as Vector2i)).length()
+	if from_exit >= EXIT_KEEP + EXIT_FADE:
+		return false
+	return from_exit < EXIT_KEEP or _hash2(cell.x / 2, cell.y / 2, 91) > (from_exit - EXIT_KEEP) / EXIT_FADE
+
+
 func _in_village(cell: Vector2i) -> bool:
 	var d: Vector2i = cell - gm.SEEDS[0]
 	return absi(d.x) <= VILLAGE_KEEP.x and absi(d.y) <= VILLAGE_KEEP.y
@@ -2495,7 +2511,7 @@ func _covers_game_road(cols: Array, from: int) -> bool:
 		for y in range(floori(gc.y - reach), floori(gc.y + reach) + 1):
 			for x in range(floori(gc.x - reach), floori(gc.x + reach) + 1):
 				var cell := Vector2i(x, y)
-				if not gm.inb(cell) or gm.road[y * Game.MW + x] == 0 or gm.bridge[y * Game.MW + x] == 1 or _in_village(cell):
+				if not gm.inb(cell) or gm.road[y * Game.MW + x] == 0 or gm.bridge[y * Game.MW + x] == 1 or _road_hidden(cell):
 					continue
 				if _col_hit(cl, Vector2(x + 0.5, y + 0.5) - world_off, GAME_ROAD_CLEAR):
 					return true
@@ -2620,7 +2636,7 @@ func _game_roads_build() -> void:
 	while i >= 0:
 		# sull'acqua e sui ponti non si disegna il sentiero (i ponti hanno le loro assi)
 		var cell := Vector2i(i % w, i / w)
-		if gm.water[i] == 0 and gm.bridge[i] == 0 and not _in_village(cell):
+		if gm.water[i] == 0 and gm.bridge[i] == 0 and not _road_hidden(cell):
 			cells.append(cell)
 		i = gm.road.find(1, i + 1)
 	village_links = _village_link_cells()
@@ -2794,7 +2810,7 @@ func _update_minimap() -> void:
 	for y in ch:
 		for x in cw:
 			var ri: int = gm.idx(Vector2i(ox + x, oy + y))
-			if gm.road[ri] == 1 and gm.water[ri] == 0 and not _in_village(Vector2i(ox + x, oy + y)):
+			if gm.road[ri] == 1 and gm.water[ri] == 0 and not _road_hidden(Vector2i(ox + x, oy + y)):
 				im.set_pixel(x, y, Color(0.5, 0.45, 0.36))
 	for key in house_doors:
 		var dv: Vector3 = house_doors[key]

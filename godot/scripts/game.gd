@@ -117,24 +117,6 @@ static func tex(n: String) -> Texture2D:
 	return _cache[n]
 
 
-## parametri del terreno fotografico per lo shader del suolo
-static func photo_ground(mat: ShaderMaterial) -> void:
-	if aiground and not photo and ResourceLoader.exists("res://assets/aiground/ground_a.png"):
-		mat.set_shader_parameter("photo_on", true)
-		mat.set_shader_parameter("ai_on", true)
-		for k in [["photo_ga", "ground_a"], ["photo_ma", "ground_b"], ["photo_path", "path"], ["photo_cob", "cobble"]]:
-			mat.set_shader_parameter(k[0], load("res://assets/aiground/%s.png" % k[1]))
-		return
-	mat.set_shader_parameter("ai_on", false)
-	var on := photo and ResourceLoader.exists("res://assets/photo/ground_a.png")
-	mat.set_shader_parameter("photo_on", on)
-	if on:
-		for k in [["photo_ga", "ground_a"], ["photo_ma", "ground_b"], ["photo_path", "path_cem"], ["photo_cob", "cobble"]]:
-			var path := "res://assets/photo/%s.png" % k[1]
-			if ResourceLoader.exists(path):
-				mat.set_shader_parameter(k[0], load(path))
-
-
 static func light_tex() -> Texture2D:
 	if _light == null:
 		var g := Gradient.new()

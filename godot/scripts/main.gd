@@ -174,7 +174,7 @@ var spawn_buckets := {}
 var spawn_indexed := 0
 var stream_pc := Vector2i(-9999, -9999)
 var world_cache := {}
-var fin_prof := [0, 0, 0, 0]
+var fin_prof := [0, 0]
 var stream_i := 0
 var stream_path: Array = []
 var stream_max := 0
@@ -197,8 +197,6 @@ var enemies: Array = []
 var props: Array = []
 var pickups: Array = []              # anime e monete a terra (la grafica 3D del mondo aperto le legge da qui)
 var boss: Enemy = null
-var floor_layer: TileMapLayer
-var wall_layer: TileMapLayer
 var ents: Node2D
 var fx: Node2D
 var hud: Hud
@@ -403,7 +401,7 @@ var cur_bio := -1
 var amb_target := Color(0.3, 0.25, 0.4)
 var elder_i := 0
 var tf := 0
-var wr_node: WorldRender = null
+var world_ready := false            # il mondo aperto e' popolato: i blocchi si possono completare
 
 
 func _ready() -> void:
@@ -1096,8 +1094,6 @@ func clear_area() -> void:
 	for c in ents.get_children():
 		if c != player:
 			c.queue_free()
-	if area == "world" and world_cache.is_empty() and wr_node != null and is_instance_valid(wr_node):
-		wr_node.queue_free()
 	for c in fx.get_children():
 		c.queue_free()
 	for n in area_nodes:
@@ -1116,7 +1112,7 @@ func clear_area() -> void:
 	boss = null
 	boss_kind = ""
 	stain = null
-	wr_node = null
+	world_ready = false
 	reserved.clear()
 	tent_cells.clear()
 	dest_cells.clear()
@@ -1132,17 +1128,16 @@ func clear_area() -> void:
 
 const WORLD_KEYS := ["grid", "biome", "road", "cobble", "water", "bridge", "outside", "reach", "ovr", "room_of", "gen_chunks",
 	"eager_chunks", "gn_nz", "gn_wz", "gn_cz", "spawn_buckets", "spawn_indexed", "props", "enemies", "block", "spawns", "critters",
-	"villagers", "arenas", "quest_items", "doors", "reserved", "furn", "flick", "area_nodes", "ents", "wr_node", "mm_img", "mm_tex",
+	"villagers", "arenas", "quest_items", "doors", "reserved", "furn", "flick", "area_nodes", "ents", "world_ready", "mm_img", "mm_tex",
 	"seen", "gate_cell", "road_paths", "road_links", "road_keep", "deferred_chunks", "passages", "nook_count", "pois", "poi_buckets", "dest_cells", "terr_dmg", "tent_cells"]
 
 
 func drop_world_cache() -> void:
 	if world_cache.is_empty():
 		return
-	for k in ["ents", "wr_node"]:
-		var n = world_cache.get(k)
-		if n != null and is_instance_valid(n):
-			n.queue_free()
+	var n = world_cache.get("ents")
+	if n != null and is_instance_valid(n):
+		n.queue_free()
 	world_cache = {}
 
 
@@ -1190,10 +1185,7 @@ func stash_world() -> void:
 	old_ents.remove_child(player)
 	old_ents.visible = false
 	old_ents.process_mode = Node.PROCESS_MODE_DISABLED
-	if wr_node != null:
-		wr_node.visible = false
-		wr_node.process_mode = Node.PROCESS_MODE_DISABLED
-	wr_node = null
+	world_ready = false
 	ents = Node2D.new()
 	ents.y_sort_enabled = true
 	add_child(ents)
@@ -1210,9 +1202,6 @@ func restore_world() -> void:
 	Game.MH = int(world_cache["MH"])
 	ents.visible = true
 	ents.process_mode = Node.PROCESS_MODE_INHERIT
-	if wr_node != null:
-		wr_node.visible = true
-		wr_node.process_mode = Node.PROCESS_MODE_INHERIT
 	ents.add_child(player)
 	world_cache = {}
 
@@ -1222,7 +1211,7 @@ func build_area(a: String) -> void:
 	var prev := area
 	area = a
 	var restoring: bool = (a == "world" and not world_cache.is_empty())
-	if prev == "world" and a != "world" and wr_node != null and world_cache.is_empty():
+	if prev == "world" and a != "world" and world_ready and world_cache.is_empty():
 		stash_world()
 	clear_area()
 	if restoring:
@@ -1274,36 +1263,6 @@ func build_area(a: String) -> void:
 	randomize()
 	if testing:
 		print("BUILD ", a, " ms=", Time.get_ticks_msec() - t0)
-
-
-func make_tileset() -> TileSet:
-	var ts := TileSet.new()
-	ts.tile_size = Vector2i(16, 16)
-	var src := TileSetAtlasSource.new()
-	var tex: Texture2D = load("res://assets/tiles/tiles.png")
-	if Game.photo and ResourceLoader.exists("res://assets/photo/tiles_photo.png"):
-		tex = load("res://assets/photo/tiles_photo.png")   # caselle fotografiche (interni)
-	src.texture = tex
-	src.texture_region_size = Vector2i(16, 16)
-	for x in 4:
-		for y in tex.get_height() / 16:
-			src.create_tile(Vector2i(x, y))
-	ts.add_source(src, 0)
-	return ts
-
-
-func new_layers(z: int) -> void:
-	var ts := make_tileset()
-	floor_layer = TileMapLayer.new()
-	floor_layer.tile_set = ts
-	floor_layer.z_index = z
-	add_child(floor_layer)
-	area_nodes.append(floor_layer)
-	wall_layer = TileMapLayer.new()
-	wall_layer.tile_set = ts
-	wall_layer.z_index = z + 1
-	add_child(wall_layer)
-	area_nodes.append(wall_layer)
 
 
 # ------------------------------------------------------------------ MONDO ESTERNO
@@ -1450,41 +1409,6 @@ func gen_temporal_clearing() -> void:
 				reach[idx] = 1
 				outside[idx] = 1
 
-	# Erba/terra semplice per l'arena
-	new_layers(0)
-	var ts := make_tileset()
-	for y in range(cy - radius_cells, cy + radius_cells + 1):
-		for x in range(cx - radius_cells, cx + radius_cells + 1):
-			var dx := x - cx
-			var dy := y - cy
-			if dx * dx + dy * dy <= radius_cells * radius_cells:
-				var idx := y * Game.MW + x
-				if grid[idx] == 1:
-					# Erba con variazione
-					var hv: float = _hash2(x, y)
-					var tile_x := 0
-					if hv < 0.3:
-						tile_x = 0
-					elif hv < 0.6:
-						tile_x = 1
-					else:
-						tile_x = 2
-					floor_layer.set_cell(Vector2i(x, y), 0, Vector2i(tile_x, 0))
-					# Bordo arena
-					var is_edge := false
-					for d: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-						var nx: int = x + d.x
-						var ny: int = y + d.y
-						if nx < 0 or ny < 0 or nx >= Game.MW or ny >= Game.MH:
-							is_edge = true
-							break
-						var nidx: int = ny * Game.MW + nx
-						if grid[nidx] == 0:
-							is_edge = true
-							break
-					if is_edge:
-						wall_layer.set_cell(Vector2i(x, y), 0, Vector2i(3, 0))
-
 
 func _hash2(x: int, y: int, s: int = 0) -> float:
 	return fposmod(sin(float(x) * 12.9898 + float(y) * 78.233 + float(s) * 37.719) * 43758.5453, 1.0)
@@ -1567,8 +1491,6 @@ func build_poi(po: Dictionary) -> void:
 		var qd: Dictionary = quest_defs[qid]
 		if qd.get("poi_id", -1) == int(po["id"]) and qd["type"] == "poi_fetch" and quest_state(qid) == "active":
 			spawn_quest_item(qid, true)
-	if wr_node != null:
-		wr_node.refresh_cells(Rect2i(c.x - rad - 2, c.y - rad - 2, rad * 2 + 5, rad * 2 + 5))
 
 
 func legacy_build(t: String, c: Vector2i, rare: bool) -> void:
@@ -1795,8 +1717,6 @@ func destroy_at(c: Vector2i, p: Prop, mat: String, kind: String, loot := true) -
 		terr_dmg.erase(c)
 		persist["broken"]["cut:" + key(c)] = true
 		cut_idx_n = -1
-		if wr_node != null:
-			wr_node.cut_cell(c.x, c.y)
 	burst(cp, Destruct.COL[mat], 18, 70.0, 0.55)
 	snd("kill")
 	shake(2.5)
@@ -1850,7 +1770,6 @@ func apply_cuts(cx: int, cy: int) -> void:
 		if inb(cc) and grid[idx(cc)] == 0:
 			grid[idx(cc)] = 1
 			reach[idx(cc)] = 1
-			wr_node.cut_cell(cc.x, cc.y)
 
 
 func fp_w(nm: String) -> int:
@@ -2376,7 +2295,7 @@ func carve_path(a: Vector2i, b: Vector2i) -> Array:
 
 
 func build_tiles_world() -> void:
-	pass  # il terreno del mondo e' disegnato da WorldRender (shader) a fine populate_world
+	pass  # il terreno del mondo lo disegna il motore 3D
 
 
 func populate_world() -> void:
@@ -2435,10 +2354,7 @@ func populate_world() -> void:
 	place_fauna()
 	prof("luoghi/abitanti/fauna")
 	place_npcs_and_pages()
-	wr_node = WorldRender.new()
-	add_child(wr_node)
-	area_nodes.append(wr_node)
-	wr_node.init_stream(self, Game.MW, Game.MH)
+	world_ready = true
 	deferred_chunks.clear()
 	if defer_far_chunks():
 		for k in eager_chunks:
@@ -2446,15 +2362,14 @@ func populate_world() -> void:
 	else:
 		for k in eager_chunks:
 			finalize_chunk(k, true)
-	wr_node.s_tex.update(wr_node.s_img)
-	prof("finalizza %d blocchi (scatter %d ms, nook/camp %d ms, render %d ms di cui veg+alberi %d ms)" % [eager_chunks.size(), fin_prof[0] / 1000, fin_prof[1] / 1000, fin_prof[2] / 1000, fin_prof[3] / 1000])
+	prof("finalizza %d blocchi (scatter %d ms, nook/camp %d ms)" % [eager_chunks.size() - deferred_chunks.size(), fin_prof[0] / 1000, fin_prof[1] / 1000])
 	if run_mode:
 		spawns.clear()
 	index_spawns()
 	spawn_all()
 
 
-## completa un blocco: oggetti sparsi, luoghi nascosti, accampamenti nemici, fauna, disegno del terreno
+## completa un blocco: oggetti sparsi, luoghi nascosti, accampamenti nemici, fauna, terreno abbattuto dal giocatore
 func finalize_chunk(key: Vector2i, eager := false) -> void:
 	if gen_chunks.get(key, false):
 		return
@@ -2482,11 +2397,9 @@ func finalize_chunk(key: Vector2i, eager := false) -> void:
 	if not eager:
 		fauna_chunk(key)
 	var tC := Time.get_ticks_usec()
-	wr_node.add_chunk(key.x, key.y, was_deferred or not eager)   # completato in corsa: la texture va aggiornata subito
-	var tD := Time.get_ticks_usec()
+	apply_cuts(key.x, key.y)
 	fin_prof[0] += tB - tA
 	fin_prof[1] += tC - tB
-	fin_prof[2] += tD - tC
 	gen_chunks[key] = true
 	index_spawns()
 	randomize()
@@ -2654,7 +2567,7 @@ func fauna_chunk(key: Vector2i) -> void:
 
 ## caricamento in corsa: il terreno intorno al giocatore viene generato a blocchi, con un piccolo budget per fotogramma
 func stream_update() -> void:
-	if area != "world" or player == null or wr_node == null:
+	if area != "world" or player == null or not world_ready:
 		return
 	var t0 := Time.get_ticks_usec()
 	var pc := Vector2i(floori(player.position.x / (CH * Game.TS)), floori(player.position.y / (CH * Game.TS)))
@@ -2689,7 +2602,7 @@ func stream_update() -> void:
 
 ## genera subito (in modo sincrono) l'area attorno a un punto: per viaggi rapidi, riprese, passaggi
 func ensure_area(pos: Vector2, rad := 2) -> void:
-	if area != "world" or wr_node == null:
+	if area != "world" or not world_ready:
 		return
 	var pc := Vector2i(floori(pos.x / (CH * Game.TS)), floori(pos.y / (CH * Game.TS)))
 	for dy in range(-rad - 1, rad + 2):
@@ -7175,36 +7088,13 @@ func carve(a: Vector2i, b: Vector2i) -> void:
 		y += 1 if y < b.y else -1
 
 
+## il pavimento e i muri li disegna il motore 3D dal reticolo; qui restano le torce, le cui luci usa anche il 3D
 func build_tiles() -> void:
-	var n := Game.MW * Game.MH
-	var theme := PackedByteArray()
-	theme.resize(n)
-	var carpet := PackedByteArray()
-	carpet.resize(n)
-	var codes := {Game.T_CRIPTA: 0, Game.T_RUNE: 2, Game.T_SANGUE: 1, Game.T_SCACCHI: 3, Game.T_LAVA: 5, 12: 6}
 	for y in Game.MH:
 		for x in Game.MW:
 			var c := Vector2i(x, y)
-			var i := idx(c)
-			if grid[i] == 1:
-				var ri := room_of[i]
-				if ri < 0 and area.begins_with("int|"):
-					theme[i] = codes.get(int(dun["rows"][0]), 0)
-				if ri >= 0:
-					theme[i] = codes.get(themes[ri], 0)
-					if themes[ri] == Game.T_RUNE or themes[ri] == Game.T_SANGUE:
-						pass
-				if has_carpet(c):
-					carpet[i] = 1
-			elif is_floor(c + Vector2i(0, 1)) and randf() < 0.13 and not is_floor(c + Vector2i(-1, 0)) and not is_floor(c + Vector2i(1, 0)):
+			if grid[idx(c)] != 1 and is_floor(c + Vector2i(0, 1)) and randf() < 0.13 and not is_floor(c + Vector2i(-1, 0)) and not is_floor(c + Vector2i(1, 0)):
 				add_torch(c)
-	wr_node = WorldRender.new()
-	add_child(wr_node)
-	area_nodes.append(wr_node)
-	var zero := PackedByteArray()
-	zero.resize(n)
-	var fb := 6 if str(dun["rows"][0]) == str(Game.T_LAVA) else 4
-	wr_node.build(grid, biome, zero, zero, zero, zero, Game.MW, Game.MH, theme, carpet, fb)
 
 
 func add_torch(c: Vector2i) -> void:
@@ -9481,7 +9371,6 @@ var tpf := 0
 var pf_t0 := 0
 var pf_lights: Array = []
 var pf_parts: Array = []
-var pf_ground: Array = []
 
 
 func _set_cfg(lights_on: bool, parts_on: bool, ground_on: bool) -> void:
@@ -9492,9 +9381,6 @@ func _set_cfg(lights_on: bool, parts_on: bool, ground_on: bool) -> void:
 		if is_instance_valid(p):
 			p.visible = parts_on
 			p.emitting = parts_on
-	for g in pf_ground:
-		if is_instance_valid(g):
-			g.visible = ground_on
 
 
 func _perf() -> void:
@@ -9504,9 +9390,7 @@ func _perf() -> void:
 		Engine.max_fps = 0
 		pf_lights = get_tree().root.find_children("*", "PointLight2D", true, false)
 		pf_parts = get_tree().root.find_children("*", "CPUParticles2D", true, false)
-		if wr_node != null:
-			pf_ground = wr_node.get_children().filter(func(c): return c is ColorRect)
-		print("PERF luci=", pf_lights.size(), " particelle=", pf_parts.size(), " chunk terreno=", pf_ground.size(), " nodi=", get_tree().get_node_count(), " nemici=", enemies.size())
+		print("PERF luci=", pf_lights.size(), " particelle=", pf_parts.size(), " nodi=", get_tree().get_node_count(), " nemici=", enemies.size())
 	var phases := [
 		["villaggio", 0, true, true, true],
 		["foresta", 2, true, true, true],
@@ -10955,7 +10839,6 @@ func _process(_dt: float) -> void:
 				var tc: Vector2i = SEEDS[3] + Vector2i(-60, 70)
 				ensure_area(cell_pos(tc), 2)
 				build_poi({"id": 700, "type": tt["type"], "tpl": tt["id"], "cell": tc, "n": tt["name"]})
-				wr_node.refresh_cells(Rect2i(tc.x - 20, tc.y - 20, 40, 40))
 				player.position = cell_pos(tc + Vector2i(0, 8))
 				day_t = 0.5
 			elif mode == "rain":
@@ -11134,7 +11017,7 @@ func _process(_dt: float) -> void:
 			print("CACHE dentro: area=", area, " MW=", Game.MW, " props=", props.size(), " (", Time.get_ticks_msec() - t0, " ms) cache=", not world_cache.is_empty())
 			t0 = Time.get_ticks_msec()
 			build_area("world")
-			print("CACHE ritorno: area=", area, " MW=", Game.MW, " props=", props.size(), " blocchi=", gen_chunks.size(), " (", Time.get_ticks_msec() - t0, " ms) ents visibili=", ents.visible, " wr=", wr_node != null and wr_node.visible, " giocatore nel nodo=", player.get_parent() == ents)
+			print("CACHE ritorno: area=", area, " MW=", Game.MW, " props=", props.size(), " blocchi=", gen_chunks.size(), " (", Time.get_ticks_msec() - t0, " ms) ents visibili=", ents.visible, " mondo pronto=", world_ready, " giocatore nel nodo=", player.get_parent() == ents)
 			print("CACHE uguale: ", props.size() == np and gen_chunks.size() == ng, " dest_cells=", dest_cells.size(), " (prima ", nd0, ")")
 			get_tree().quit()
 	if OS.get_cmdline_user_args().has("--streamtest"):
@@ -12331,8 +12214,6 @@ func _process(_dt: float) -> void:
 		tgt = Color.WHITE
 		cm.color = Color.WHITE
 	cm.color = cm.color.lerp(tgt, 1.0 - exp(-real * 1.6))
-	if wr_node != null and is_instance_valid(wr_node):
-		wr_node.set_boost(cm.color)
 	if player != null and state == "play" and not side_scroll_active:
 		prompt = ""
 		prompt2 = ""
