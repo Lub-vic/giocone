@@ -55,6 +55,11 @@ func _ready() -> void:
 	fut = W3DFuture.new()
 	fut.sk = self
 	add_child(fut)
+	era80 = W3DEighties.new()
+	era80.sk = self
+	add_child(era80)
+	if OS.get_cmdline_user_args().has("--anni80"):
+		Chrono.preview80 = true
 	var w := get_window()
 	w.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS   # il 3D si vede alla risoluzione reale, non a 480x270
 	w.content_scale_size = Vector2i(480, 270)
@@ -1695,8 +1700,59 @@ func _booms_update(dt: float) -> void:
 
 
 # ------------------------------------------------------------------ oggetti dinamici
+## nemico con arma moderna: pistola nel modello e raggio rosso di puntamento mentre mira
+func _sync_gun(e: Enemy, d: Dictionary, node3: Node3D) -> void:
+	if not d.has("gun"):
+		var gun := Node3D.new()
+		var body := StandardMaterial3D.new()
+		body.albedo_color = Color(0.5, 0.53, 0.6)
+		body.metallic = 0.4
+		body.roughness = 0.35
+		for part in [[Vector3(0.18, 0.2, 0.85), Vector3(0, 0, -0.2)], [Vector3(0.14, 0.34, 0.2), Vector3(0, -0.2, 0.12)]]:
+			var mi := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = part[0]
+			mi.mesh = bm
+			mi.material_override = body
+			mi.position = part[1]
+			gun.add_child(mi)
+		vp.add_child(gun)
+		var laser := MeshInstance3D.new()
+		var lm := BoxMesh.new()
+		lm.size = Vector3(0.07, 0.07, 1.0)
+		laser.mesh = lm
+		var red := StandardMaterial3D.new()
+		red.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		red.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		red.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		red.albedo_color = Color(1.0, 0.12, 0.08, 0.7)
+		laser.material_override = red
+		laser.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		vp.add_child(laser)
+		d["gun"] = gun
+		d["laser"] = laser
+	var dirv: Vector2 = e.gun_dir if (e.gun_aim > 0.0 or e.gun_burst > 0) else (gm.player.position - e.position).normalized()
+	var dir3 := Vector3(dirv.x, 0.0, dirv.y)
+	var base := Vector3(node3.position.x, node3.position.y, node3.position.z)
+	base.y += era80.world_lift(base)       # come il modello: terreno e curvatura del mondo
+	var side3 := Vector3(-dirv.y, 0.0, dirv.x)
+	var gun3: Node3D = d["gun"]
+	gun3.position = base + Vector3(0, 1.05, 0) + dir3 * 0.65 + side3 * 0.35
+	gun3.basis = Basis.looking_at(dir3, Vector3.UP)
+	gun3.visible = node3.visible
+	var laser3: MeshInstance3D = d["laser"]
+	laser3.visible = node3.visible and e.gun_aim > 0.0
+	if laser3.visible:
+		var reach := Enemy.GUN_MAX / 16.0
+		laser3.position = gun3.position + dir3 * (reach * 0.5 + 0.5)
+		laser3.basis = Basis.looking_at(dir3, Vector3.UP) * Basis.from_scale(Vector3(1.0 if e.gun_aim > 0.18 else 2.2, 1.0, reach))
+
+
 func _drop_dyn(id) -> void:
 	if dyn.has(id):
+		for extra in ["gun", "laser"]:
+			if dyn[id].has(extra) and is_instance_valid(dyn[id][extra]):
+				(dyn[id][extra] as Node).queue_free()
 		if dyn[id].has("trail"):
 			(dyn[id]["trail"] as W3DFx.Trail).release()
 		var n: Node3D = dyn[id]["node"]
@@ -2008,7 +2064,7 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 		_flow_anim(node3, float(d["flow"]), lamp_t + float(d["ph"]))
 		if is_player:
 			var p: Player = gm.player
-			node3.visible = (p.spr.visible or not (p.veh as Dictionary).is_empty()) and not fpv and not (cine != null and cine.active)
+			node3.visible = (p.spr.visible or not (p.veh as Dictionary).is_empty()) and not fpv and not (cine != null and cine.active and cine.stage == null)
 			if p.atk_t > 0.0 and p.atk_dur > 0.0 and str(Rpg.FAM[p.weapon()["f"]]["ranged"]) == "false":
 				var k := 1.0 - p.atk_t / p.atk_dur
 				node3.rotation.y += lerpf(-0.9, 0.9, k * k * (3.0 - 2.0 * k))
@@ -2038,6 +2094,8 @@ func _sync_node2d(n: Node, is_player := false) -> void:
 		if n is Prop and n.has_meta("ed_yaw"):
 			node3.rotation.y = float(n.get_meta("ed_yaw"))
 			node3.scale *= float(n.get_meta("ed_sc", 1.0))
+	if n is Enemy and (n as Enemy).armed:
+		_sync_gun(n as Enemy, d, node3)
 	var hit := false
 	if n is Enemy:
 		hit = float((n as Enemy).flash) > 0.0
@@ -2130,6 +2188,9 @@ func _sync_fx() -> void:
 			var pn: Node3D = dyn[id]["node"]
 			var n2 := n as Node2D
 			pn.position = Vector3(n2.position.x / 16.0, 0.9, n2.position.y / 16.0)
+			if n is PArrow and (n as PArrow).aimed3d:      # colpo in 3D: sale e scende davvero
+				pn.position.y = (n as PArrow).height
+				pn.rotation.x = (n as PArrow).pitch
 			if n is Projectile or n is PArrow:
 				pn.rotation.y = atan2(-(n as Node2D).transform.x.x, (n as Node2D).transform.x.y) if false else -n2.rotation - PI * 0.5
 			else:
@@ -2994,6 +3055,7 @@ var world_off := Vector2.ZERO
 var fixed_cam := false
 var ed: W3DEdit                  # editor del mondo (F12)
 var fut: W3DFuture               # intrusioni del futuro (cambiano con Chrono.tech)
+var era80: W3DEighties           # anni Ottanta: sostituzioni nel villaggio
 var near_props: Array = []       # prop funzionali vicini al giocatore (ricalcolati ogni pochi fotogrammi)
 var near_props_t := 0
 var side_scroll_temporal_root: Node3D
@@ -3123,11 +3185,16 @@ func _world_prop_key(p: Vector2) -> String:
 
 
 func side_scroll_props_begin() -> void:
+	if side_scroll_saved_curve < 0.0:
+		side_scroll_saved_curve = fpv_curve_saved if fpv else curve
 	side_scroll_prop_changes.clear()
 	side_scroll_dirty_chunks.clear()
 
 
 func side_scroll_props_restore() -> void:
+	if side_scroll_saved_curve >= 0.0:
+		curve = side_scroll_saved_curve
+		side_scroll_saved_curve = -1.0
 	if side_scroll_prop_changes.is_empty():
 		return
 	var broken: Dictionary = gm.persist.get("broken", {})
@@ -3169,7 +3236,11 @@ func side_scroll_temporal_begin(center: Vector2) -> void:
 	post_mat.set_shader_parameter("fisheye", TEMPORAL_FISHEYE)
 	var ufo_mesh_instance := MeshInstance3D.new()
 	ufo_mesh_instance.mesh = W3DCine.ufo_mesh()
-	ufo_mesh_instance.material_override = _side_scroll_temporal_material(mat_prop)
+	var ufo_material := _side_scroll_temporal_material(mat_prop) as ShaderMaterial
+	ufo_material.set_shader_parameter("curve", 0.0)
+	ufo_material.set_shader_parameter("fade_a", 90.0)
+	ufo_material.set_shader_parameter("fade_b", 110.0)
+	ufo_mesh_instance.material_override = ufo_material
 	ufo_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	ufo_mesh_instance.scale = Vector3.ONE * 0.8
 	ufo_mesh_instance.position = Vector3(center.x, side_scroll_temporal_ground + TEMPORAL_UFO_HEIGHT, center.y)
@@ -3475,7 +3546,35 @@ func side_scroll_temporal_impact(position: Vector3, size_scale: float = 1.0) -> 
 		gm.shake(2.5)
 
 
-func side_scroll_temporal_update(time: float, escaping := false, escape_progress := 0.0) -> void:
+## spostamento dell'ufo che volteggia (serve anche per sapere dove sara' fra un attimo)
+static func ufo_flight_offset(phase: float) -> Vector3:
+	return Vector3(sin(phase * 0.62) * 6.4 + sin(phase * 1.57) * 1.5, sin(phase * 0.93) * 1.7, cos(phase * 0.47) * 5.2 + sin(phase * 1.21) * 1.3)
+
+
+var side_scroll_ufo_hurt_t := 0.0
+var side_scroll_saved_curve := -1.0
+
+
+## colpito: sbanda e perde un filo di fumo
+func side_scroll_temporal_ufo_hurt() -> void:
+	side_scroll_ufo_hurt_t = 1.0
+	if is_instance_valid(side_scroll_temporal_ufo) and is_instance_valid(side_scroll_temporal_root):
+		var smoke := _make_smoke(Vector3.ZERO, true)
+		smoke.position = side_scroll_temporal_ufo.position
+		side_scroll_temporal_root.add_child(smoke)
+		smoke.finished.connect(smoke.queue_free)
+
+
+func side_scroll_temporal_update(time: float, escaping := false, escape_progress := 0.0, flight := 0.0, phase := 0.0) -> void:
+	if is_instance_valid(side_scroll_temporal_ufo) and not escaping:
+		side_scroll_ufo_hurt_t = maxf(0.0, side_scroll_ufo_hurt_t - get_process_delta_time())
+		var off := ufo_flight_offset(phase) * flight
+		var vel := (ufo_flight_offset(phase + 0.12) - ufo_flight_offset(phase - 0.12)) * flight / 0.24
+		var jolt := side_scroll_ufo_hurt_t * side_scroll_ufo_hurt_t
+		side_scroll_temporal_ufo.position = Vector3(side_scroll_temporal_center.x, side_scroll_temporal_ground + TEMPORAL_UFO_HEIGHT, side_scroll_temporal_center.y) + off + Vector3(sin(time * 40.0), cos(time * 33.0), sin(time * 29.0)) * jolt * 0.5
+		side_scroll_temporal_ufo.rotation = Vector3(vel.z * 0.045 + sin(time * 22.0) * jolt * 0.4, time * 0.3, -vel.x * 0.045 + cos(time * 19.0) * jolt * 0.4)
+		side_scroll_temporal_ufo.scale = Vector3.ONE * 0.8
+		return
 	if is_instance_valid(side_scroll_temporal_ufo):
 		var progress := clampf(escape_progress, 0.0, 1.0) if escaping else 0.0
 		side_scroll_temporal_ufo.position = Vector3(
@@ -3499,6 +3598,8 @@ func side_scroll_temporal_update(time: float, escaping := false, escape_progress
 
 
 func side_scroll_temporal_clear() -> void:
+	if ufo_show_active() and not cine.own_stage:
+		cine.finish(false)
 	if is_instance_valid(side_scroll_temporal_root):
 		side_scroll_temporal_root.queue_free()
 	side_scroll_temporal_root = null
@@ -4324,7 +4425,7 @@ func _process_inner(dt: float) -> void:
 	else:
 		elev_y = 0.0
 	if gm.side_scroll_active:
-		if fpv:
+		if fpv and str(gm.side_scroll_mode) != "temporal_clearing":
 			fpv_set(false)
 		curve = 0.0
 		var temporal_clearing := str(gm.side_scroll_mode) == "temporal_clearing"
@@ -4360,6 +4461,9 @@ func _process_inner(dt: float) -> void:
 	if fpv:
 		_fpv_look(dt)
 		_fpv_cam()
+	_fp_gun_update()
+	if gm.side_scroll_active and str(gm.side_scroll_mode) == "temporal_clearing" and not ufo_show_active():
+		post_mat.set_shader_parameter("fisheye", 0.0 if fpv else TEMPORAL_FISHEYE)
 	if OS.get_cmdline_user_args().has("--skintilt"):      # prova: camera inclinata per vedere il rilievo
 		cam.rotation_degrees = Vector3(-42, 0, 0)
 		cam.position.z += cam.position.y * 0.95
@@ -4542,6 +4646,11 @@ func fpv_set(on: bool) -> void:
 		var fc: Vector2 = gm.player.face
 		fpv_yaw = atan2(-fc.x, -fc.y)
 		fpv_pitch = -0.04
+		if gm.side_scroll_active and is_instance_valid(side_scroll_temporal_ufo):
+			var to_ufo := Vector2(side_scroll_temporal_ufo.position.x, side_scroll_temporal_ufo.position.z) - (gm.player.position as Vector2) / 16.0
+			if to_ufo.length() > 1.0:
+				fpv_yaw = atan2(-to_ufo.x, -to_ufo.y)
+			fpv_pitch = 0.3          # un invito ad alzare lo sguardo: la mira la fa il giocatore
 		fpv_curve_saved = curve
 		fpv_char_saved = char_mode
 		char_mode = 1            # in prima persona i personaggi sono a blocchi (pixel dello sprite -> cubi), in piedi e di fronte
@@ -4578,6 +4687,94 @@ func _fpv_cam() -> void:
 	env.fog_light_color = Color(0.07, 0.08, 0.12)
 
 
+# ------------------------------------------------------------------ arma in mano in prima persona
+const FP_GUNS := {"rocket": "bazooka", "shotgun": "pompa", "plasma": "fucileplasma"}
+const FP_GUN_POS := Vector3(0.46, -0.42, -1.15)      # rispetto alla camera
+const FP_GUN_LEN := 1.15
+var fp_gun: MeshInstance3D
+var fp_gun_kind := ""
+
+
+## nella radura, con un'arma temporale raccolta, in mano si vede QUELLA (in 3D), non l'arma di tutti i giorni
+func fp_temporal_family() -> String:
+	if fpv and gm.side_scroll_active and str(gm.side_scroll_mode) == "temporal_clearing" and float(gm.side_scroll_weapon_t) > 0.0:
+		return str(gm.side_scroll_weapon_family)
+	return ""
+
+
+func _fp_gun_update() -> void:
+	var family := fp_temporal_family()
+	if family == "" or not FP_GUNS.has(family):
+		if fp_gun != null:
+			fp_gun.visible = false
+		return
+	if fp_gun == null:
+		fp_gun = MeshInstance3D.new()
+		var m := mat_prop.duplicate() as ShaderMaterial
+		m.set_shader_parameter("curve", 0.0)
+		m.set_shader_parameter("fade_a", 90.0)
+		m.set_shader_parameter("fade_b", 110.0)
+		m.set_shader_parameter("floor_min", 0.75)
+		m.set_shader_parameter("boost", 0.75)
+		fp_gun.material_override = m
+		fp_gun.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		vp.add_child(fp_gun)
+		fp_gun_kind = ""
+	if fp_gun_kind != family:
+		fp_gun_kind = family
+		fp_gun.mesh = W3DChrono.mesh(str(FP_GUNS[family]))
+	fp_gun.visible = true
+	var box := fp_gun.mesh.get_aabb()
+	var k := FP_GUN_LEN / maxf(box.size.x, 0.1)
+	var kick := clampf(float(gm.side_scroll_weapon_cd) / 0.35, 0.0, 1.0)      # rinculo
+	var bob := sin(lamp_t * 2.1) * 0.008
+	# i modelli sono lunghi lungo +X: girati di un quarto, la canna guarda avanti
+	var turn := Basis(Vector3.RIGHT, kick * 0.22) * Basis(Vector3.UP, PI * 0.5)
+	var local := Transform3D(turn * Basis.from_scale(Vector3.ONE * k), FP_GUN_POS + Vector3(0.0, bob, kick * 0.16))
+	local.origin -= local.basis * box.get_center()
+	var world: Transform3D = cam.transform * local
+	world.origin.y -= elev_at(world.origin.x, world.origin.z)      # lo shader del mondo riaggiunge la quota
+	fp_gun.transform = world
+
+
+## punta dell'arma in mano, in coordinate 3D (quota assoluta)
+func fp_muzzle() -> Vector3:
+	if fp_temporal_family() != "":
+		return cam.transform * (FP_GUN_POS + Vector3(0.0, 0.06, -FP_GUN_LEN * 0.5))
+	# l'arma di tutti i giorni e' disegnata dall'interfaccia in basso a destra: si parte dalla sua punta
+	var size_ui: Vector2 = gm.hud.get_viewport_rect().size
+	var tip_h := 40.0
+	if gm.player.wspr != null and gm.player.wspr.texture != null:
+		tip_h = float(gm.player.wspr.texture.get_height()) * 3.0
+	var tip := Vector2(size_ui.x * 0.82, size_ui.y + 3.0) + Vector2(sin(0.18), -cos(0.18)) * tip_h
+	var on_vp := tip * Vector2(vp.size) / size_ui
+	return cam.project_position(on_vp, 1.25)
+
+
+## dove punta il mirino: alla distanza di cio' che si sta guardando, cosi' il colpo (che parte di lato) ci arriva
+func fp_aim_point() -> Vector3:
+	var eye: Vector3 = cam.position
+	var fwd_dir: Vector3 = -cam.global_transform.basis.z
+	var reach := 11.0
+	if gm.side_scroll_active and is_instance_valid(side_scroll_temporal_ufo):
+		var u := side_scroll_temporal_ufo.position
+		reach = clampf(eye.distance_to(u + Vector3(0.0, elev_at(u.x, u.z), 0.0)), 6.0, 45.0)
+	else:
+		var best := 0.975      # entro una decina di gradi dal centro dello schermo
+		for e in gm.enemies:
+			var q: Vector2 = e.position / Game.TS
+			var to := Vector3(q.x, elev_at(q.x, q.y) + 0.9, q.y) - eye
+			var dist := to.length()
+			if dist < 18.0 and dist > 0.6 and fwd_dir.dot(to / dist) > best:
+				best = fwd_dir.dot(to / dist)
+				reach = dist
+	return eye + fwd_dir * reach
+
+
+func fpv_pitch_max() -> float:
+	return 1.5 if gm.side_scroll_active else 1.2
+
+
 func _fpv_look(dt: float) -> void:
 	var aim := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down")
 	var target: Enemy = gm.player.lock
@@ -4596,7 +4793,7 @@ func _fpv_look(dt: float) -> void:
 	if aim.length() <= 0.25:
 		return
 	fpv_yaw -= aim.x * 2.4 * dt
-	fpv_pitch = clampf(fpv_pitch - aim.y * 1.8 * dt, -1.2, 1.2)
+	fpv_pitch = clampf(fpv_pitch - aim.y * 1.8 * dt, -1.2, fpv_pitch_max())
 
 
 func _unhandled_input(ev: InputEvent) -> void:
@@ -4608,7 +4805,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 		if cine.edit:
 			if cine.ed != null:
 				cine.ed.input(ev)
-		elif ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode in [KEY_ENTER, KEY_SPACE, KEY_ESCAPE]:
+		elif ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode in [KEY_ENTER, KEY_SPACE, KEY_ESCAPE] and not (cine.stage != null and ev.keycode == KEY_SPACE):
 			cine.skip()
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F10 and world_on and str(gm.state) == "play":
@@ -4620,7 +4817,7 @@ func _unhandled_input(ev: InputEvent) -> void:
 	if fpv and ev is InputEventMouseMotion:
 		var mm := ev as InputEventMouseMotion
 		fpv_yaw -= mm.relative.x * 0.0026
-		fpv_pitch = clampf(fpv_pitch - mm.relative.y * 0.0026, -1.2, 1.2)
+		fpv_pitch = clampf(fpv_pitch - mm.relative.y * 0.0026, -1.2, fpv_pitch_max())
 		return
 	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F8:
 		cycle_char_mode()
@@ -4806,7 +5003,7 @@ func _proj_mesh(n: Node) -> ArrayMesh:
 			b.shard(Vector3(0, 0, -0.1), Vector3(0, 0, -0.42), 0.14, 0.0, steel, 0.5, 0.0, 0.0)
 			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.78)), Vector3(0.22, 0.02, 0.18), Color(0.9, 0.85, 0.75), 0.05, 8)
 			b.box(Transform3D(Basis.IDENTITY, Vector3(0, 0, 0.78)), Vector3(0.02, 0.22, 0.18), Color(0.9, 0.85, 0.75), 0.05, 8)
-		"pistol", "smg":     # proiettile con scia incandescente
+		"pistol", "smg", "e_bullet":     # proiettile con scia incandescente
 			b.shard(Vector3(0, 0, 0.55), Vector3(0, 0, -0.3), 0.07, 0.0, _emis(Color(1.0, 0.85, 0.4), 1.0), 0.5, 0.0, 0.0)
 			b.shard(Vector3(0, 0, 0.1), Vector3(0, 0, -0.25), 0.04, 0.0, _emis(Color(1, 1, 0.9), 1.0), 0.5, 0.0, 0.0)
 		"shotgun":      # pallini
@@ -4926,6 +5123,23 @@ var wreck_cine: W3DCine
 var edit_id := "ufo"
 
 
+## true mentre e' in corso una cutscene della Radura (entrata o uscita dell'ufo)
+func ufo_show_active() -> bool:
+	return cine != null and cine.active and cine.stage != null
+
+
+## avvia "ufo_entrata" / "ufo_uscita" durante lo scontro; on_done viene chiamata alla fine (anche se saltata)
+func ufo_show_start(show_id: String, on_done: Callable = Callable()) -> bool:
+	if cine != null and cine.active:
+		return false
+	var c := W3DCine.new()
+	c.on_done = on_done
+	if not c.start(self, show_id):
+		return false
+	cine = c
+	return true
+
+
 func _edit_next(shift: bool) -> String:
 	var ids: Array = W3DCine.load_all().keys()
 	if ids.is_empty():
@@ -4935,7 +5149,7 @@ func _edit_next(shift: bool) -> String:
 	return edit_id
 
 
-func open_cine_editor(next := false) -> bool:
+func open_cine_editor(next := false, which := "") -> bool:
 	if cine != null and cine.active:
 		if cine.edit:
 			cine.finish(false)
@@ -4943,7 +5157,9 @@ func open_cine_editor(next := false) -> bool:
 		return false
 	if not world_on or str(gm.state) != "play":
 		return false
-	return start_cine(_edit_next(next), true)
+	if which != "":
+		edit_id = which
+	return start_cine(which if which != "" else _edit_next(next), true)
 
 
 func cine_prewarm() -> void:
@@ -5033,15 +5249,18 @@ func _cine_tick(dt: float) -> void:
 			if str(ua).begins_with("--cineid="):
 				tid = str(ua).substr(9)
 		start_cine(tid)
+		print("CINE partenza: fotogramma ", Engine.get_process_frames())
 	if cine != null and cine.active:
-		var step := 1.0 / 15.0 if test else dt
+		var movie := OS.get_cmdline_user_args().has("--noframes")
+		var step := 1.0 / 15.0 if test and not movie else dt
 		cine.update(step)
-		if test and not real and cine.active:
+		if test and not real and not movie and cine.active:
 			var img := get_viewport().get_texture().get_image()
 			img.resize(640, 360)
 			img.save_png("user://cine/f_%05d.png" % cine.frame_n)
 			cine.frame_n += 1
 	elif test and cine_test == 3:
+		print("CINE fine: fotogramma ", Engine.get_process_frames())
 		print("CINE finita: frames=", cine.frame_n, " stato=", gm.state, " eroe=", gm.player.position / 16.0)
 		if real:
 			# senza apparecchio niente Cronotone; poi l'eroe lo raccoglie

@@ -16,9 +16,29 @@ static var singularity := false
 const GUN_TIER := {"pistola": 1, "pompa": 2, "mitra": 2}
 const JACKPOT_TIER := {"drone": 1, "golem": 2, "carro": 2}
 static var tech := 0.0      # livello tecnologico unico del mondo (sale con il futuro evocato)
-## quanto il mondo e' "maturo" per le intrusioni del futuro: dipende solo dal livello tecnologico (0 all'inizio, 1 a tech 40)
+## L'AVANZATA DEL FUTURO dipende da due cose: quanto si evoca (tech) e quanto tempo si e' giocato (played).
+## Valori di partenza, DA TARARE: 1 punto ogni 6 minuti di gioco; un'evocazione vale 1 (futuro) o 0.4 (passato).
+const SECONDS_PER_POINT := 360.0
+const EIGHTIES_FROM := 45.0     # senza evocare: circa 4 ore e mezza di gioco
+const EIGHTIES_FULL := 75.0     # senza evocare: circa 7 ore e mezza
+static var played := 0.0        # secondi di gioco effettivo (salvati con la partita)
+static var preview80 := false   # prova: mostra gli anni '80 completi (menu debug o --anni80), non si salva
+
+
+static func level() -> float:
+	return tech + played / SECONDS_PER_POINT
+
+
+## quanto sono arrivati gli anni Ottanta, da 0 a 1
+static func eighties() -> float:
+	if preview80:
+		return 1.0
+	return clampf((level() - EIGHTIES_FROM) / (EIGHTIES_FULL - EIGHTIES_FROM), 0.0, 1.0)
+
+
+## quanto il mondo e' "maturo" per le intrusioni del futuro (0 all'inizio, 1 a livello 40)
 static func maturity() -> float:
-	return clampf(tech / 40.0, 0.0, 1.0)
+	return clampf(level() / 40.0, 0.0, 1.0)
 
 # --- oggetti utili: effetto immediato. era: p passato, f futuro. lv = livello minimo, w = peso
 const USE := {
@@ -101,7 +121,7 @@ const ERA_FOE := [Color(1, 1, 1), Color(0.95, 1.1, 0.95), Color(1.15, 1.0, 0.8),
 static func era() -> int:
 	var e := 0
 	for i in ERA_AT.size():
-		if tech >= float(ERA_AT[i]):
+		if level() >= float(ERA_AT[i]):
 			e = i
 	return e
 
@@ -157,6 +177,7 @@ static func era_lines() -> Array:
 static func reset() -> void:
 	owned.clear()
 	tech = 0.0
+	played = 0.0
 
 
 static func gun_allowed(id: String) -> bool:

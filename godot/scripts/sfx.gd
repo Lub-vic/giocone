@@ -73,6 +73,81 @@ func _cat(parts: Array) -> PackedFloat32Array:
 	return out
 
 
+## somma due suoni (la durata e' quella del piu' lungo)
+func _mix2(a: PackedFloat32Array, b: PackedFloat32Array) -> PackedFloat32Array:
+	var out := a.duplicate() if a.size() >= b.size() else b.duplicate()
+	var other := b if a.size() >= b.size() else a
+	for i in other.size():
+		out[i] += other[i]
+	return out
+
+
+## tuono: schiocco secco, poi un brontolio che rotola e si spegne
+func _thunder(dur: float, crack: float) -> PackedFloat32Array:
+	var n := int(dur * RATE)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var lp := 0.0
+	var lp2 := 0.0
+	var roll := 1.0
+	for i in n:
+		var t := float(i) / RATE
+		var w := randf() * 2.0 - 1.0
+		lp = lerpf(lp, w, 0.05)
+		lp2 = lerpf(lp2, lp, 0.12)
+		if i % 900 == 0:
+			roll = randf_range(0.45, 1.0)
+		var s := w * exp(-t * 28.0) * crack + lp2 * 4.2 * roll * exp(-t * 1.9) * minf(t * 30.0, 1.0)
+		out[i] = s * 0.75 * minf((dur - t) * 4.0, 1.0)
+	return out
+
+
+## scarica elettrica: scoppiettii irregolari
+func _crackle(dur: float, vol: float) -> PackedFloat32Array:
+	var n := int(dur * RATE)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var gate := 0.0
+	for i in n:
+		if i % 90 == 0:
+			gate = 1.0 if randf() < 0.55 else 0.05
+		var t := float(i) / n
+		out[i] = (randf() * 2.0 - 1.0) * gate * pow(1.0 - t, 1.5) * vol
+	return out
+
+
+## risucchio: un suono che cresce e si interrompe di colpo
+func _swell(dur: float) -> PackedFloat32Array:
+	var n := int(dur * RATE)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var phase := 0.0
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / n
+		phase += lerpf(55.0, 620.0, t * t) / RATE
+		lp = lerpf(lp, randf() * 2.0 - 1.0, 0.04 + 0.4 * t)
+		var s := sin(TAU * phase) * 0.45 + sin(TAU * phase * 2.01) * 0.2 + lp * 0.7
+		out[i] = s * pow(t, 2.2) * 0.8 * clampf((1.0 - t) * 60.0, 0.0, 1.0)
+	return out
+
+
+## nastro riavvolto: ticchettii di orologio sempre piu' fitti e un lamento che sale
+func _rewind(dur: float) -> PackedFloat32Array:
+	var n := int(dur * RATE)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var phase := 0.0
+	var beat := 0.0
+	for i in n:
+		var t := float(i) / n
+		phase += lerpf(210.0, 900.0, t * t) * (1.0 + 0.25 * sin(t * 90.0)) / RATE
+		beat += lerpf(7.0, 34.0, t) / RATE
+		var tick := (randf() * 2.0 - 1.0) * exp(-fposmod(beat, 1.0) * 22.0)
+		out[i] = (sin(TAU * phase) * 0.18 + tick * 0.5) * minf(t * 12.0, 1.0) * minf((1.0 - t) * 14.0, 1.0)
+	return out
+
+
 func _drone(f: float, dur: float, noise: float) -> PackedFloat32Array:
 	var n := int(dur * RATE)
 	var out := PackedFloat32Array()
@@ -88,6 +163,18 @@ func _drone(f: float, dur: float, noise: float) -> PackedFloat32Array:
 
 func _build() -> void:
 	cache["swing"] = _wav(_tone(0, 0, 0.13, 0, 1.0, 0.45, 0.02))
+	cache["shot"] = _wav(_mix2(_crackle(0.09, 0.8), _tone(240, 60, 0.18, 0, 0.55, 0.7, 0.001)))
+	cache["cock"] = _wav(_cat([_tone(0, 0, 0.03, 0, 1.0, 0.45, 0.001), _tone(0, 0, 0.05, 0, 0.0, 0.0), _tone(1500, 900, 0.04, 2, 0.5, 0.25, 0.001)]))
+	# cutscene dell'ufo
+	cache["thunder"] = _wav(_thunder(2.2, 1.0))
+	cache["boom_big"] = _wav(_mix2(_thunder(2.6, 0.55), _tone(95, 24, 1.8, 0, 0.12, 0.9, 0.003)))
+	cache["zap"] = _wav(_crackle(0.22, 0.5))
+	cache["rumble"] = _wav(_mix2(_tone(38, 62, 2.6, 1, 0.3, 0.38, 0.9), _tone(57, 45, 2.6, 0, 0.2, 0.4, 1.1)))
+	cache["time_open"] = _wav(_mix2(_tone(90, 780, 1.3, 0, 0.06, 0.45, 0.02), _tone(135, 1170, 1.3, 0, 0.0, 0.25, 0.05)))
+	cache["time_suck"] = _wav(_swell(1.35))
+	cache["rewind"] = _wav(_rewind(2.5))
+	cache["searchlight"] = _wav(_mix2(_tone(300, 300, 1.2, 2, 0.05, 0.12, 0.03), _tone(1210, 1190, 1.2, 0, 0.0, 0.16, 0.2)))
+	cache["alarm"] = _wav(_cat([_tone(880, 620, 0.22, 2, 0.05, 0.2), _tone(880, 620, 0.22, 2, 0.05, 0.2), _tone(880, 620, 0.22, 2, 0.05, 0.2), _tone(880, 560, 0.3, 2, 0.1, 0.2)]))
 	cache["hit"] = _wav(_tone(180, 60, 0.13, 2, 0.35, 0.6))
 	cache["slam"] = _wav(_tone(110, 35, 0.35, 1, 0.5, 0.8))
 	cache["roll"] = _wav(_tone(0, 0, 0.22, 0, 1.0, 0.35, 0.05))

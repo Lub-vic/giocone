@@ -42,6 +42,129 @@ static var ufo_log := -1
 static var ufo_pre_t := -100.0
 static var ufo_wait := 0.0   # secondi dalla fine del dialogo col fuggiasco: poi arriva l'ufo
 static var total := 0       # mostri dell'invasione (morti compresi)
+const INV_NEAR := 40.0       # celle dal villaggio entro cui ogni mostro rimasto ha la sua freccia
+const INV_FEW := 5           # rimasti in cosi' pochi, le frecce li indicano da ovunque
+const INV_REACH := 34        # raggio (celle) in cui si controlla che i mostri siano raggiungibili
+const INV_PATIENCE := 40.0   # ultimi 3: dopo tanti secondi senza uccisioni il piu' lontano viene allo scoperto
+static var inv_check_t := 0.0
+static var inv_idle := 0.0
+static var inv_last_left := -1
+
+
+## mostri dell'invasione ancora vivi: posizione attuale (o punto di nascita se sono troppo lontani per esistere)
+static func invaders(m) -> Array:
+	var found: Array = []
+	if village_free(m) or m.area != "world":
+		return found
+	var dead: Array = flags(m).get("inv_dead", [])
+	for e in m.spawns:
+		if e.get("story", "") != "invasione" or dead.has(int(e["sid"])):
+			continue
+		var node: Variant = e.get("node")
+		var pos: Vector2 = node.position if node != null and is_instance_valid(node) else e["pos"]
+		found.append({"p": pos, "e": e})
+	return found
+
+
+## quanti ne mancano, per il contatore a schermo (0 = non mostrarlo)
+static func invaders_counter(m) -> int:
+	if village_free(m) or m.area != "world" or not is_done(m, ESCAPE_INTRO) or not m.persist["bosses"].has("boss_jailer"):
+		return 0
+	return maxi(0, total - (flags(m).get("inv_dead", []) as Array).size())
+
+
+## celle raggiungibili a piedi partendo dal falo' del villaggio, con le collisioni vere del mondo 3D
+static func _reachable(m) -> Dictionary:
+	var start: Vector2i = m.SEEDS[0] + FIRE_OFF
+	var seen := {}
+	var queue: Array = []
+	for off in [Vector2i(0, 2), Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, -2), Vector2i(3, 3), Vector2i(-3, 3)]:
+		var c0: Vector2i = start + off
+		if m.free_at(m.cell_pos(c0), 5.0):
+			seen[c0] = true
+			queue.append(c0)
+	var i := 0
+	while i < queue.size():
+		var c: Vector2i = queue[i]
+		i += 1
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = c + step
+			if seen.has(n) or not m.inb(n) or Vector2(n - m.SEEDS[0]).length() > INV_REACH:
+				continue
+			if m.free_at(m.cell_pos(n), 5.0):
+				seen[n] = true
+				queue.append(n)
+	return seen
+
+
+static func _move_invader(m, foe: Dictionary, to: Vector2) -> void:
+	var e: Dictionary = foe["e"]
+	e["pos"] = to
+	var node: Variant = e.get("node")
+	if node != null and is_instance_valid(node):
+		node.position = to
+
+
+## chi e' nato o finito in un punto irraggiungibile viene spostato sul piu' vicino punto raggiungibile;
+## e se gli ultimi non si trovano, il piu' lontano si avvicina all'eroe: la missione si puo' sempre chiudere
+static func _invasion_update(m, dt: float) -> void:
+	if village_free(m) or m.area != "world" or m.state != "play" or total == 0 or not m.persist["bosses"].has("boss_jailer"):
+		return
+	if not (m.skin is W3DSkin) or not (m.skin as W3DSkin).world_on:
+		return
+	# il controllo vale solo con il villaggio caricato (le collisioni esistono solo li')
+	if m.player.position.distance_to(m.cell_pos(m.SEEDS[0])) > 30.0 * 16.0:
+		inv_check_t = 0.0
+		return
+	var alive := invaders(m)
+	if alive.size() != inv_last_left:
+		inv_last_left = alive.size()
+		inv_idle = 0.0
+	inv_idle += dt
+	inv_check_t += dt
+	if inv_check_t < 4.0:
+		return
+	inv_check_t = 1.0
+	var open := _reachable(m)
+	if open.size() < 200:
+		return          # mondo non ancora pronto
+	for foe in alive:
+		var cell := Vector2i((foe["p"] as Vector2) / 16.0)
+		if Vector2(cell - m.SEEDS[0]).length() > INV_REACH - 1:
+			continue
+		var ok := false
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				if open.has(cell + Vector2i(dx, dy)):
+					ok = true
+		if ok:
+			continue
+		var best := Vector2i.ZERO
+		var bd := INF
+		for c in open:
+			var d := Vector2(c - cell).length_squared()
+			if d < bd:
+				bd = d
+				best = c
+		print("INVASIONE: mostro ", foe["e"]["sid"], " irraggiungibile a ", cell, ", spostato in ", best)
+		_move_invader(m, foe, m.cell_pos(best))
+	if alive.size() <= 3 and inv_idle > INV_PATIENCE:
+		var far: Dictionary = {}
+		for foe2 in alive:
+			if far.is_empty() or m.player.position.distance_to(foe2["p"]) > m.player.position.distance_to(far["p"]):
+				far = foe2
+		if not far.is_empty() and m.player.position.distance_to(far["p"]) > 14.0 * 16.0:
+			var spot := Vector2i.ZERO
+			var score := INF
+			for c2 in open:
+				var s: float = absf(m.cell_pos(c2).distance_to(m.player.position) - 11.0 * 16.0)
+				if s < score:
+					score = s
+					spot = c2
+			_move_invader(m, far, m.cell_pos(spot))
+			m.say("GLI ULTIMI INVASORI TI HANNO FIUTATO: ARRIVANO")
+			m.snd("roar")
+		inv_idle = 0.0
 
 
 static func flags(m) -> Dictionary:
@@ -479,6 +602,7 @@ static func update(m, dt: float) -> void:
 	_sing_update(m, dt)
 	_device(m)
 	_barn_update(m, dt)
+	_invasion_update(m, dt)
 	if village_free(m) or m.area != "world":
 		return
 	if not is_done(m, ESCAPE_INTRO) and m.persist["bosses"].has("boss_jailer") and m.state == "play":

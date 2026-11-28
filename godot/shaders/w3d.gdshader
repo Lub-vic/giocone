@@ -7,6 +7,8 @@ global uniform sampler2D w3d_elev : filter_linear;
 global uniform vec4 w3d_elev_info;   // xy = 1 / dimensioni della mappa (celle), z = scala delle quote (0 = spente: interni)
 global uniform vec4 w3d_side_cut;    // x/y = punto del piano, z = attivo, w = tolleranza
 uniform float side_cut_exempt = 0.0;
+uniform float near_cut = 0.0;       // cutscene: cio' che sta fra la camera e l'azione si dissolve (distanza dalla camera; 0 = spento)
+uniform float near_cut_y = 2.5;     // solo sopra questa quota: terreno ed eroe restano
 
 float elev(vec2 p) {
 	if (w3d_elev_info.z <= 0.0) {
@@ -52,6 +54,12 @@ void fragment() {
 	vec2 side_depth = vec2(wpos.y - w3d_side_cut.x, wpos.z - w3d_side_cut.y);
 	if (w3d_side_cut.z > 0.5 && side_cut_exempt < 0.5 && dot(side_depth, vec2(-0.208, -0.978)) < -w3d_side_cut.w) {
 		discard;
+	}
+	if (near_cut > 0.0 && side_cut_exempt < 0.5 && wpos.y > near_cut_y) {
+		float dz = fract(52.9829189 * fract(dot(floor(FRAGCOORD.xy), vec2(0.06711056, 0.00583715))));
+		if (length(VERTEX) < near_cut - dz * 4.0) {
+			discard;
+		}
 	}
 	vec3 fn = normalize(cross(dFdx(VERTEX), dFdy(VERTEX)));
 	if (dot(fn, VIEW) < 0.0) {

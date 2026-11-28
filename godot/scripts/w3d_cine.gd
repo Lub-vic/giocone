@@ -8,6 +8,7 @@ extends RefCounted
 ## Editor: F6 (W3DCineEdit). Rivedere la sequenza: F10. Saltare: INVIO/SPAZIO/ESC.
 
 const FLAG := "ufo_cine"
+const DEFAULT_RATE := 0.85       # velocita' di tutte le cutscene (1 = tempi della timeline); ognuna puo' avere la sua "velocita"
 const FILES := ["user://cutscenes.json", "res://data/cutscenes.json"]
 const BASE_SC := {"ufo": 0.8, "device": 1.5, "hero": 1.0}
 static var ufo_mesh_cache: ArrayMesh
@@ -46,17 +47,26 @@ var dlg_until := 0.0
 var mus: AudioStreamPlayer
 var loadlab: Label
 var end_spot := Vector2.ZERO
+var step_dt := 0.0
 var hold := 0.0
+var stage: W3DUfoShow           # cutscene con "scena": "radura": si gira nella Radura Temporale, con i suoi effetti
+var own_stage := false          # radura allestita solo per l'editor (fuori dallo scontro)
+var fxs: W3DUfoShow             # effetti nelle cutscene normali ("effetti": 1): cielo, fulmini, vortice, onde
+var on_done: Callable
 
 
 # ------------------------------------------------------------------ dati
 static func load_all() -> Dictionary:
-	for path in FILES:
+	# si uniscono cutscene per cutscene: quelle modificate (user://) valgono su quelle del gioco,
+	# quelle nuove del gioco compaiono anche se esiste gia' un file salvato dall'editor
+	var out := {}
+	for i in range(FILES.size() - 1, -1, -1):
+		var path: String = FILES[i]
 		if FileAccess.file_exists(path):
 			var d: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
 			if d is Dictionary:
-				return d
-	return {}
+				out.merge(d, true)
+	return out
 
 
 static func save_all(d: Dictionary) -> String:
@@ -80,7 +90,10 @@ func _tracks() -> Dictionary:
 	var o := {"cam": cut["cam"]}
 	for n in cut["act"]:
 		o[n] = cut["act"][n]
-	o["env"] = cut["env"]
+	for n in cut.get("fx", {}):
+		o[n] = cut["fx"][n]
+	if str(cut.get("scena", "")) != "radura":
+		o["env"] = cut["env"]
 	o["ev"] = cut["ev"]
 	if not cut.has("mus"):
 		cut["mus"] = []
@@ -102,7 +115,11 @@ func start(skin, cid := "ufo", editing := false) -> bool:
 	_sort_all()
 	edit = editing
 	playing = not editing
+	if str(cut.get("scena", "")) == "radura":
+		return _start_stage()
 	_plan()
+	# "G" = l'inquadratura di gioco al momento della partenza (chiavi della camera con "auto" = 1)
+	anchors["G"] = {"p": sk.cam.position, "yaw": 0.0, "rot": sk.cam.rotation, "fov": sk.cam.fov}
 	_set_pins()
 	saved = {"curve": sk.curve, "fixed": sk.fixed_cam, "cam_h": sk.cam_h}
 	edit_pos = gm.player.position
@@ -116,6 +133,9 @@ func start(skin, cid := "ufo", editing := false) -> bool:
 	sk.stream_margin = 24.0
 	sk.fixed_cam = true
 	_build()
+	if int(cut.get("effetti", 0)) == 1:
+		fxs = W3DUfoShow.new()
+		fxs.setup_free(self)
 	if gm.hud != null:
 		gm.hud.set("visible", false)
 	if edit:
@@ -124,6 +144,68 @@ func start(skin, cid := "ufo", editing := false) -> bool:
 	else:
 		_eval(0.0)
 	return true
+
+
+## cutscene girata nella Radura Temporale: l'eroe resta dov'e' e la scena usa l'ufo dello scontro.
+## Fuori dallo scontro (editor) la radura si allestisce attorno all'eroe e si toglie alla chiusura.
+func _start_stage() -> bool:
+	own_stage = false
+	if not is_instance_valid(sk.side_scroll_temporal_ufo):
+		if gm.side_scroll_active:
+			return false
+		sk.side_scroll_temporal_begin(gm.player.position / 16.0)
+		own_stage = true
+	saved = {"curve": sk.curve, "fixed": sk.fixed_cam, "cam_h": sk.cam_h}
+	stage = W3DUfoShow.new()
+	if not stage.setup(self):
+		stage = null
+		return false
+	anchors = stage.anchors
+	edit_pos = gm.player.position
+	active = true
+	t = 0.0
+	tp = 0.0
+	flash_a = 0.0
+	gm.state = "cine"
+	gm.shake_v = 0.0
+	sk.fixed_cam = true
+	_build()
+	if gm.hud != null:
+		gm.hud.set("visible", false)
+	if edit:
+		ed = W3DCineEdit.new()
+		ed.setup(self)
+	else:
+		_eval(0.0)
+	return true
+
+
+func _finish_stage(apply_end: bool) -> void:
+	active = false
+	_music_stop(1.0)
+	gm.state = "play"
+	stage.cleanup(id)
+	for n in acts.keys():
+		if is_instance_valid(acts[n]):
+			(acts[n] as Node).queue_free()
+	acts.clear()
+	if ed != null:
+		ed.close()
+		ed = null
+	if layer != null and is_instance_valid(layer):
+		layer.queue_free()
+	sk.fixed_cam = bool(saved["fixed"])
+	sk.curve = float(saved["curve"])
+	sk.cam_h = float(saved["cam_h"])
+	sk.cam.near = 2.0
+	sk.cam.far = 120.0
+	sk.cam.rotation_degrees = Vector3(-90, 0, 0)
+	if gm.hud != null:
+		gm.hud.set("visible", true)
+	if own_stage:
+		sk.side_scroll_temporal_clear()
+	if apply_end and not edit and on_done.is_valid():
+		on_done.call()
 
 
 func _plan() -> void:
@@ -165,7 +247,7 @@ func _plan() -> void:
 	for n in pts:
 		var q: Vector2 = pts[n]
 		anchors[n] = {"p": Vector3(q.x, sk.elev_at(q.x, q.y), q.y), "yaw": fy if n in ["P0", "F0", "F1"] else 0.0}
-	print("CINE piano: bordo a ", best, " celle; ancore: ", pts)
+	print("CINE piano: bordo a ", best, " celle; ancore: ", pts, " quote: ", pts.keys().map(func(n): return [n, snappedf(anchors[n]["p"].y, 0.01)]))
 
 
 ## precarica in background il terreno lungo il percorso scriptato (volo, schianto, atterraggio): chiamata un po' prima del rapimento
@@ -204,11 +286,18 @@ func _safe_spot(c: Vector2) -> Vector2:
 func finish(apply_end := true) -> void:
 	if not active:
 		return
+	if stage != null:
+		_finish_stage(apply_end)
+		return
 	var en: Dictionary = cut.get("end", {})
 	if apply_end:
 		_eval(float(cut["dur"]), false)
 	active = false
 	_music_stop(2.0)
+	if fxs != null:
+		fxs.cleanup(id)
+		fxs = null
+		sk._mp("near_cut", 0.0)
 	Engine.time_scale = 1.0
 	gm.state = "play"
 	if apply_end and en.has("at"):
@@ -290,7 +379,7 @@ func take_device() -> void:
 
 
 func skip() -> void:
-	if active and not edit:
+	if active and not edit and (stage == null or t > 0.8):      # nello scontro non si salta per sbaglio col tasto appena premuto
 		finish()
 
 
@@ -365,6 +454,33 @@ func _emitter(col0: Color, col1: Color, amount: int, life: float, vmin: float, v
 	return p
 
 
+## sostituisce le palline piene con sbuffi morbidi sempre rivolti alla camera
+static func soften(e: CPUParticles3D, add: bool, grow: float) -> void:
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.45, 1.0])
+	g.colors = PackedColorArray([Color(1, 1, 1, 0.85), Color(1, 1, 1, 0.45), Color(1, 1, 1, 0.0)])
+	var tx := GradientTexture2D.new()
+	tx.gradient = g
+	tx.fill = GradientTexture2D.FILL_RADIAL
+	tx.fill_from = Vector2(0.5, 0.5)
+	tx.fill_to = Vector2(1.0, 0.5)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.blend_mode = BaseMaterial3D.BLEND_MODE_ADD if add else BaseMaterial3D.BLEND_MODE_MIX
+	m.vertex_color_use_as_albedo = true
+	m.albedo_texture = tx
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	m.billboard_keep_scale = true
+	m.particles_anim_h_frames = 1
+	m.particles_anim_v_frames = 1
+	var q := QuadMesh.new()
+	q.size = Vector2.ONE * grow
+	q.material = m
+	e.mesh = q
+	e.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
 func _make_actor(kind: String) -> Node3D:
 	var n := Node3D.new()
 	var mi := MeshInstance3D.new()
@@ -376,9 +492,11 @@ func _make_actor(kind: String) -> Node3D:
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			n.add_child(mi)
 			var sm := _emitter(Color(0.12, 0.12, 0.14, 0.85), Color(0.2, 0.2, 0.22, 0.0), 70, 2.6, 1.0, 3.0, 1.0, 2.8, false, 1.4)
+			soften(sm, false, 1.5)
 			sm.name = "smoke"
 			n.add_child(sm)
 			var fr := _emitter(Color(1.0, 0.75, 0.3, 0.9), Color(1.0, 0.2, 0.05, 0.0), 60, 0.9, 1.0, 3.5, 0.7, 1.6, true, 2.0)
+			soften(fr, true, 1.3)
 			fr.name = "fire"
 			n.add_child(fr)
 		"device":
@@ -418,6 +536,8 @@ func _make_actor(kind: String) -> Node3D:
 			mi.mesh = cm
 			mi.material_override = _glow(Color(0.45, 1.0, 0.7, 0.28))
 			n.add_child(mi)
+		"ufo_scena", "bolla", "anelli", "vortice", "bagliore", "luce", "faro":
+			mi.free()       # radura: solo punti che si muovono, il disegno e' di W3DUfoShow
 		"shadow":
 			var dm := CylinderMesh.new()
 			dm.top_radius = 1.0
@@ -554,15 +674,63 @@ func eval_cam(T: float) -> Dictionary:
 	var oy: float = (pa["o"] as Vector3).y
 	var rot := v3(a.get("r", [0, 0, 0])) + Vector3(0, pa["yaw"], 0)
 	var f := float(a.get("f", 38.6 if m == 0 else 80.0))
+	var nc := float(a.get("taglio", 0.0))
+	var au := _auto_cam(a)
+	if not au.is_empty():
+		rot = au["rot"]
+		f = au["fov"]
 	if s[1] != null and int(s[1].get("m", 0)) == m and not bool(s[1].get("cut", false)):
 		var b: Dictionary = s[1]
 		var pb := kpos(b)
 		var w: float = s[2]
 		p = p.lerp(pb["p"], w)
 		oy = lerpf(oy, (pb["o"] as Vector3).y, w)
-		rot = rot.lerp(v3(b.get("r", [0, 0, 0])) + Vector3(0, pb["yaw"], 0), w)
-		f = lerpf(f, float(b.get("f", 38.6 if m == 0 else 80.0)), w)
-	return {"m": m, "p": p, "oy": oy, "rot": rot, "f": f}
+		var rb := v3(b.get("r", [0, 0, 0])) + Vector3(0, pb["yaw"], 0)
+		var fb := float(b.get("f", 38.6 if m == 0 else 80.0))
+		var bu := _auto_cam(b)
+		if not bu.is_empty():
+			rb = bu["rot"]
+			fb = bu["fov"]
+		if au.is_empty() and bu.is_empty():
+			rot = rot.lerp(rb, w)
+		else:      # verso o da una camera del gioco: si gira per la via piu' corta
+			rot = Vector3(lerp_angle(rot.x, rb.x, w), lerp_angle(rot.y, rb.y, w), lerp_angle(rot.z, rb.z, w))
+		f = lerpf(f, fb, w)
+		nc = lerpf(nc, float(b.get("taglio", 0.0)), w)
+	var gz := _gaze(a, p, rot)
+	if s[1] != null and int(s[1].get("m", 0)) == m and not bool(s[1].get("cut", false)) and (str(a.get("mira", "")) != "" or str((s[1] as Dictionary).get("mira", "")) != ""):
+		# con "guarda verso" si punta ogni volta dal punto in cui la camera e' adesso, cosi' il bersaglio resta inquadrato
+		var b2: Dictionary = s[1]
+		var w2: float = s[2]
+		var ra := _gaze(a, p, v3(a.get("r", [0, 0, 0])) + Vector3(0, pa["yaw"], 0))
+		var rb2 := _gaze(b2, p, v3(b2.get("r", [0, 0, 0])) + Vector3(0, kpos(b2)["yaw"], 0))
+		rot = Vector3(lerp_angle(ra.x, rb2.x, w2), lerp_angle(ra.y, rb2.y, w2), lerp_angle(ra.z, rb2.z, w2))
+	else:
+		rot = gz
+	return {"m": m, "p": p, "oy": oy, "rot": rot, "f": f, "taglio": nc}
+
+
+## chiave con "mira" (guarda verso un'ancora o un attore, spostato di "mira_o"): angolo calcolato, resta il rollio della chiave
+func _gaze(k: Dictionary, p: Vector3, rot: Vector3) -> Vector3:
+	var g := str(k.get("mira", ""))
+	if g == "" or not (anchors.has(g) or acts.has(g)):
+		return rot
+	var q: Vector3 = ref(g)["p"]
+	if acts.has(g):
+		q.y += sk.elev_at(q.x, q.z)
+	q += v3(k.get("mira_o", [0, 0, 0]))
+	var d := q - p
+	if d.length() < 0.2:
+		return rot
+	return Vector3(atan2(d.y, Vector2(d.x, d.z).length()), atan2(-d.x, -d.z), v3(k.get("r", [0, 0, 0])).z)
+
+
+## chiave con "auto" = 1: angolo e zoom sono quelli dell'inquadratura del gioco a cui si riferisce
+func _auto_cam(k: Dictionary) -> Dictionary:
+	if int(k.get("auto", 0)) != 1:
+		return {}
+	var an: Dictionary = ref(str(k.get("a", "P0")))
+	return an if an.has("rot") else {}
 
 
 ## stato complessivo all'istante T (con_cam false: solo attori, per il ripristino del relitto)
@@ -571,10 +739,17 @@ func _eval(T: float, with_cam := true) -> void:
 		eval_act(n, T)
 	_attach(T)
 	_fx(T)
+	if stage != null:
+		var sc := eval_cam(T)
+		_apply_cam(sc)
+		stage.apply(T, step_dt)
+		return
 	if with_cam:
 		var c := eval_cam(T)
 		_apply_cam(c)
 		_env(T)
+		if fxs != null:
+			fxs.apply(T, step_dt)
 
 
 ## i blocchi di terreno attorno alle ancore indicate sono tutti caricati?
@@ -593,6 +768,17 @@ func _ready_at(names: Array, r: float) -> bool:
 	return true
 
 
+## valore numerico di un campo di una traccia attore all'istante T
+func _track_value(track: String, key: String, T: float, dflt: float) -> float:
+	var sg := seg(cut["act"].get(track, []), T)
+	if sg[0] == null:
+		return dflt
+	var v := float((sg[0] as Dictionary).get(key, dflt))
+	if sg[1] != null:
+		v = lerpf(v, float((sg[1] as Dictionary).get(key, v)), float(sg[2]))
+	return v
+
+
 func _attach(_T: float) -> void:
 	if acts.has("beam") and acts.has("ufo"):
 		var u: Node3D = acts["ufo"]
@@ -603,7 +789,7 @@ func _attach(_T: float) -> void:
 		var fl := 0.8 + 0.2 * sin(t * 40.0)
 		b.scale = Vector3(1.0 + 0.04 * sin(t * 25.0), h, 1.0 + 0.04 * sin(t * 25.0))
 		var mi: MeshInstance3D = b.get_child(0)
-		(mi.material_override as StandardMaterial3D).albedo_color = Color(0.45, 1.0, 0.7, 0.30 * fl)
+		(mi.material_override as StandardMaterial3D).albedo_color = Color(0.45, 1.0, 0.7, 0.30 * fl * _track_value("beam", "al", _T, 1.0))
 
 
 func _fx(T: float) -> void:
@@ -647,6 +833,24 @@ func _env(T: float) -> void:
 func _apply_cam(c: Dictionary) -> void:
 	var cm: Camera3D = sk.cam
 	var p: Vector3 = c["p"]
+	if stage != null:
+		var jit := Vector3(randf_range(-1.0, 1.0), randf_range(-0.6, 0.6), randf_range(-1.0, 1.0)) * shk * 0.16
+		p.y = maxf(p.y, sk.elev_at(p.x, p.z) + 1.6)
+		var rs: Vector3 = c["rot"]
+		sk.curve = 0.0
+		sk.fade_a = 62.0
+		cm.projection = Camera3D.PROJECTION_PERSPECTIVE
+		cm.near = 0.15
+		cm.far = 220.0
+		cm.fov = float(c["f"])
+		cm.position = p + jit
+		cm.rotation = Vector3(rs.x, rs.y, rs.z + sin(t * 37.0) * 0.012 * shk)
+		sk._mp("near_cut", float(c.get("taglio", 0.0)))
+		sk._mp("near_cut_y", stage.ground + 2.3)
+		return
+	if fxs != null:
+		sk._mp("near_cut", float(c.get("taglio", 0.0)) if int(c["m"]) == 1 else 0.0)
+		sk._mp("near_cut_y", 2.4)
 	var jx := randf_range(-1.0, 1.0) * shk * 0.12
 	var jz := randf_range(-1.0, 1.0) * shk * 0.12
 	if int(c["m"]) == 1:
@@ -769,7 +973,12 @@ func _fire(ev: Dictionary) -> void:
 		"shake":
 			shk = maxf(shk, float(ev.get("v", 1.0)))
 		"snd":
-			gm.snd(str(ev.get("n", "hit")))
+			if gm.sfx_node != null:
+				gm.sfx_node.play(str(ev.get("n", "hit")), float(ev.get("vol", 0.0)))
+		"fulmini", "fulmine_gigante", "anello", "onda", "esplosione", "scintille":
+			var lib: W3DUfoShow = stage if stage != null else fxs
+			if lib != null:
+				lib.event(ev)
 		"music":
 			_music_play(str(ev.get("f", "")), float(ev.get("vol", 70.0)), float(ev.get("fade", 1.5)), float(ev.get("from", 0.0)))
 		"text":
@@ -787,12 +996,20 @@ func _fire(ev: Dictionary) -> void:
 			gm.burst(Vector2(q.x, q.z) * 16.0, Color(c2.x, c2.y, c2.z), int(ev.get("n", 30)), float(ev.get("sp", 90.0)), 1.0)
 
 
+func rate() -> float:
+	return clampf(float(cut.get("velocita", DEFAULT_RATE)), 0.3, 2.0)
+
+
 func update(dt: float) -> void:
 	if not active:
 		return
 	var dur := float(cut["dur"])
+	if stage != null:
+		dt = minf(dt, 0.05)
+	dt *= rate()
+	step_dt = dt
 	shk = lerpf(shk, 0.0, minf(1.0, dt * 3.0))
-	flash_a = maxf(0.0, flash_a - dt * 1.6)
+	flash_a = maxf(0.0, flash_a - dt * (2.1 if stage != null else 1.6))
 	gm.shake_v = 0.0
 	if playing:
 		var nt := t + dt
@@ -834,6 +1051,8 @@ func _overlay(dur: float) -> void:
 	var vs: Vector2 = gm.get_viewport().get_visible_rect().size
 	var bh := vs.y * 0.115
 	var k := minf(_ease(t / 0.8), 1.0 - _ease((t - (dur - 1.4)) / 1.2))
+	if stage != null:
+		k = minf(_ease(t / float(cut.get("barre", 0.7))), 1.0 - _ease((t - (dur - 1.1)) / 1.0))
 	if edit and not preview:
 		k = 0.0
 	if loadlab != null:
@@ -847,7 +1066,7 @@ func _overlay(dur: float) -> void:
 	bar_b.offset_top = -bh * k
 	var fa := clampf(flash_a, 0.0, 1.0)
 	var fc := flash_col
-	if t < 0.7 and (not edit or preview):       # apertura: dal nero
+	if stage == null and t < 0.7 and (not edit or preview):       # apertura: dal nero
 		fc = Color.BLACK
 		fa = maxf(fa, 1.0 - t / 0.7)
 	flash.color = Color(fc.r, fc.g, fc.b, fa)
@@ -858,3 +1077,7 @@ func seek(T: float) -> void:
 	t = clampf(T, 0.0, float(cut["dur"]))
 	tp = t
 	flash_a = 0.0
+	if stage != null:
+		stage.reset()
+	if fxs != null:
+		fxs.reset()

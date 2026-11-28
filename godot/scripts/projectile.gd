@@ -13,7 +13,7 @@ var spin := 0.0
 
 const LIGHT := {"fire": Color(1.0, 0.35, 0.2), "arrow": Color(0.9, 0.8, 0.5), "knife": Color(0.8, 0.85, 0.95), "dark": Color(0.6, 0.25, 0.9),
 	"ice": Color(0.6, 0.9, 1.0), "poison": Color(0.45, 0.9, 0.3), "web": Color(0.9, 0.9, 0.95), "soul": Color(0.5, 0.95, 1.0), "blood": Color(0.8, 0.1, 0.15),
-	"bazooka_rocket": Color(1.0, 0.5, 0.15), "shotgun_pellet": Color(1.0, 0.85, 0.6), "plasma_bolt": Color(0.3, 0.7, 1.0)}
+	"bullet": Color(1.0, 0.88, 0.45), "bazooka_rocket": Color(1.0, 0.5, 0.15), "shotgun_pellet": Color(1.0, 0.85, 0.6), "plasma_bolt": Color(0.3, 0.7, 1.0)}
 
 
 func setup(m, dir: Vector2, spd: float, d: float, sl := 0.0, st := "fire") -> void:

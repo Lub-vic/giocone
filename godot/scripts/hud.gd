@@ -200,8 +200,10 @@ func _draw() -> void:
 	if main.state == "loading":
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.0, 0.04, 1.0))
 		var mid := roundf(size.y * 0.5)
-		_txt("FASE %d" % (main.phase + 1), Vector2(0, mid - 26), Color(0.55, 0.55, 0.68), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
-		_txt(main.PHASE_TITLES[main.phase], Vector2(0, mid), Color(0.95, 0.72, 0.3), 18, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		if main.loading_title:
+			_txt("FASE %d" % (main.phase + 1), Vector2(0, mid - 26), Color(0.55, 0.55, 0.68), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		if main.loading_title:
+			_txt(main.PHASE_TITLES[main.phase], Vector2(0, mid), Color(0.95, 0.72, 0.3), 18, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		_txt("CARICAMENTO...", Vector2(0, size.y - 22), Color(0.8, 0.78, 0.92), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		return
 	if main.state == "story":
@@ -282,6 +284,14 @@ func _draw() -> void:
 	for ln in olines:
 		_txt(ln, Vector2(5, oy + 7.0), Color(0.95, 0.8, 0.45, oa))
 		oy += 9.0
+	var invaders_left: int = Story.invaders_counter(main)
+	if invaders_left > 0:
+		var label := "MOSTRI RIMASTI: %d" % invaders_left
+		var lw := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, _fs(10)).x
+		var lx := (size.x - lw) * 0.5
+		draw_rect(Rect2(lx - 6.0, 6.0, lw + 12.0, 15.0), Color(0.08, 0.02, 0.03, 0.78))
+		draw_rect(Rect2(lx - 6.0, 6.0, lw + 12.0, 15.0), Color(1.0, 0.32, 0.22, 0.9), false, 1.0)
+		_txt(label, Vector2(0, 17), Color(1.0, 0.86, 0.5), 10, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 	if main.side_scroll_active and main.side_scroll_mode == "temporal_clearing":
 		var ufo_bar_x := size.x * 0.5 - 55.0
 		_txt("UFO  %d/%d" % [main.side_scroll_ufo_hits, main.TEMPORAL_UFO_HITS_TO_ESCAPE], Vector2(ufo_bar_x, 69), Color(0.72, 0.9, 1.0), 8)
@@ -312,7 +322,8 @@ func _draw() -> void:
 		_clock()
 		_edge_markers()
 		if main.state == "play" and main.skin is W3DSkin and (main.skin as W3DSkin).fpv:
-			_fpv_weapon(p)
+			if (main.skin as W3DSkin).fp_temporal_family() == "":      # l'arma temporale si vede in 3D
+				_fpv_weapon(p)
 			_fpv_crosshair(p, main.skin as W3DSkin)
 		elif bool(main.settings["aim_manual"]) and main.state == "play":
 			_crosshair(p)
@@ -558,7 +569,7 @@ func _edge_markers() -> void:
 		return
 	var n := 0
 	for tg in main.obj_targets():
-		if n >= 3:
+		if n >= (int(Story.INV_FEW) if tg.get("inv", false) else 3):
 			break
 		_edge_arrow(tg["p"] as Vector2, tg["c"] as Color)
 		n += 1

@@ -80,6 +80,53 @@ const TRAITS := {
 	"esplosivo": Color(1.5, 0.85, 0.5), "prolifico": Color(1.1, 0.8, 1.3),
 }
 var trait_ := ""
+# arma moderna (anni '80): mira, avvisa con un lampo di puntamento, poi spara tre colpi veloci
+const MODERN_KINDS := ["goblin", "kobold", "skeleton", "orc"]
+const GUN_MIN := 34.0
+const GUN_MAX := 175.0
+var armed := false
+var gun_cd := 1.5
+var gun_aim := 0.0
+var gun_burst := 0
+var gun_next := 0.0
+var gun_dir := Vector2.RIGHT
+
+
+func arm_modern() -> void:
+	armed = true
+	gun_cd = randf_range(0.8, 1.8)
+	xp = int(xp * 1.3)
+
+
+## vero mentre sta mirando o sparando: sta fermo, ed e' il momento per spostarsi o colpirlo
+func _gun_update(dt: float, d: float) -> bool:
+	if gun_burst > 0:
+		gun_next -= dt
+		if gun_next <= 0.0:
+			gun_next = 0.13
+			gun_burst -= 1
+			var muzzle := position + Vector2(0, -6) + gun_dir * 10.0
+			main.spawn_projectile(muzzle, gun_dir.rotated(randf_range(-0.05, 0.05)), 205.0, dmg * 0.55, 0.0, "bullet")
+			main.burst(muzzle, Color(1.0, 0.85, 0.4), 6, 55.0, 0.12)
+			main.snd("shot")
+		return true
+	if gun_aim > 0.0:
+		gun_aim -= dt
+		if gun_aim > 0.18:      # nell'ultimo istante la mira non segue piu': si puo' schivare
+			gun_dir = (main.player.position - position).normalized()
+		if gun_aim <= 0.0:
+			gun_burst = 3
+			gun_next = 0.0
+		return true
+	gun_cd -= dt
+	if gun_cd <= 0.0 and d > GUN_MIN and d < GUN_MAX:
+		gun_cd = randf_range(2.2, 3.2)
+		gun_aim = 0.7
+		gun_dir = (main.player.position - position).normalized()
+		main.snd("cock")
+		return true
+	return false
+
 const TEL := {"charge": 0.75, "slam": 0.85, "spin": 0.7, "summon": 0.9, "nova": 0.75, "fan": 0.55, "poison": 0.85, "blink": 0.5}
 const LUNGE := {"wolf": [0.3, 200.0], "toad": [0.4, 230.0]}
 
@@ -246,6 +293,8 @@ func setup(m, k: String, hp_mult := 1.0, is_elite := false, tint := Color.WHITE)
 		spr.modulate = spr.modulate * (TRAITS[trait_] as Color)
 		xp = int(xp * 1.4)
 	Chrono.tune_enemy(self, is_boss or champ or elite)   # l'era del mondo rende i nemici piu' tecnologici
+	if not (is_boss or champ) and kind in MODERN_KINDS and randf() < 0.3 * Chrono.eighties() and not Chrono.preview80:
+		arm_modern()
 	fer = m.ferocity(is_boss or champ)
 	speed *= 0.55 + 0.45 * fer       # piu' lenti...
 	dmg *= 0.8 + 0.2 * fer           # ...colpiscono un po' meno...
@@ -308,6 +357,8 @@ func _process(dt: float) -> void:
 		stun -= dt
 		return
 	cd -= dt * fer                   # ...e attaccano meno spesso, finche' il giocatore e' di livello basso
+	if armed and _gun_update(dt, d):
+		return
 	match ai:
 		"chase":
 			main.move_body(self, u * speed * dt, radius)

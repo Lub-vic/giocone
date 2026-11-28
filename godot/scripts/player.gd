@@ -406,13 +406,13 @@ func veh_tick(dt: float) -> void:
 		match id:
 			"tank":    # mitragliatrice: raffica di proiettili rapidi
 				var sp := randf_range(-0.09, 0.09)
-				main.spawn_parrow(position + face * 16.0, face.rotated(sp), 360.0, dmg() * float(d["dm"]), 0.7, 1, Color(1.0, 0.9, 0.5), weapon(), 0.0, false)
+				main.spawn_parrow(position + face * 16.0, face.rotated(sp), 360.0, dmg() * float(d["dm"]), 0.7, 1, Color(1.0, 0.9, 0.5), weapon(), 0.0, false, true)
 				main.snd("swing")
 			"ufo":     # raffica laser
-				main.spawn_parrow(position + Vector2(0, -6), face.rotated(randf_range(-0.14, 0.14)), 300.0, dmg() * float(d["dm"]), 0.9, 0, Color(0.6, 0.95, 1.0), weapon(), 0.0, true)
+				main.spawn_parrow(position + Vector2(0, -6), face.rotated(randf_range(-0.14, 0.14)), 300.0, dmg() * float(d["dm"]), 0.9, 0, Color(0.6, 0.95, 1.0), weapon(), 0.0, true, true)
 				main.snd("swing")
 			_:         # carro: balista perforante
-				main.spawn_parrow(position + Vector2(0, -6), face, 300.0, dmg() * float(d["dm"]), 0.9, int(d.get("pr", 0)), Color(0.85, 0.7, 0.45), weapon(), 0.0, false)
+				main.spawn_parrow(position + Vector2(0, -6), face, 300.0, dmg() * float(d["dm"]), 0.9, int(d.get("pr", 0)), Color(0.85, 0.7, 0.45), weapon(), 0.0, false, true)
 				main.snd("swing")
 	# arma secondaria dell'epoca (tasto colpo pesante): masso, cannonata, onda elettrica
 	if act("heavy") and float(veh["cd2"]) <= 0.0:
@@ -425,7 +425,7 @@ func veh_tick(dt: float) -> void:
 				Chrono.delayed(main, tgt, 0.7, 40.0, 4.0, Color(1.0, 0.75, 0.35))
 				main.snd("swing")
 			"tank":    # cannonata ad area
-				main.spawn_parrow(position + face * 18.0, face, 280.0, dmg() * 3.5, 0.9, 0, Color(1.0, 0.8, 0.4), weapon(), 34.0, true)
+				main.spawn_parrow(position + face * 18.0, face, 280.0, dmg() * 3.5, 0.9, 0, Color(1.0, 0.8, 0.4), weapon(), 34.0, true, true)
 				kb -= face * 80.0
 				main.shake(3.0)
 				main.snd("slam")
@@ -748,7 +748,7 @@ func fire(w: Dictionary, f: Dictionary, heavy: bool) -> void:
 	var dirf := face
 	if not magic:
 		dirf = face.rotated(deg_to_rad(randf_range(-1.0, 1.0) * maxf(0.0, 6.0 - 0.4 * a("des")) * (0.5 if heavy else 1.0)))
-	main.spawn_parrow(position + Vector2(0, -6), dirf, 270.0 if heavy else 230.0, dmg() * mult, 0.9, pr, col, w, aoe, magic)
+	main.spawn_parrow(position + Vector2(0, -6), dirf, 270.0 if heavy else 230.0, dmg() * mult, 0.9, pr, col, w, aoe, magic, true)
 	kb -= face * 30.0
 
 
@@ -760,32 +760,32 @@ func _fire_mod(w: Dictionary, f: Dictionary, heavy: bool) -> bool:
 	var o := position + Vector2(0, -6) + face * 8.0
 	match fam:
 		"pistol":
-			main.spawn_parrow(o, face.rotated(randf_range(-0.03, 0.03)), 340.0, d, 0.8, 1 if heavy else 0, Color(1.0, 0.9, 0.55), w, 0.0, false)
+			main.spawn_parrow(o, face.rotated(randf_range(-0.03, 0.03)), 340.0, d, 0.8, 1 if heavy else 0, Color(1.0, 0.9, 0.55), w, 0.0, false, true)
 			main.snd("swing")
 		"smg":
 			var n := 6 if heavy else 1
 			for i in n:
-				main.spawn_parrow(o, face.rotated(randf_range(-0.12, 0.12)), 330.0, d / (3.0 if heavy else 1.0), 0.7, 0, Color(1.0, 0.85, 0.45), w, 0.0, false)
+				main.spawn_parrow(o, face.rotated(randf_range(-0.12, 0.12)), 330.0, d / (3.0 if heavy else 1.0), 0.7, 0, Color(1.0, 0.85, 0.45), w, 0.0, false, true)
 			main.snd("swing")
 		"shotgun":
 			var pel := 9 if heavy else 6
 			for i in pel:
-				main.spawn_parrow(o, face.rotated(randf_range(-0.30, 0.30)), randf_range(240.0, 300.0), d / 3.0, 0.32, 1, Color(1.0, 0.8, 0.4), w, 0.0, false)
+				main.spawn_parrow(o, face.rotated(randf_range(-0.30, 0.30)), randf_range(240.0, 300.0), d / 3.0, 0.32, 1, Color(1.0, 0.8, 0.4), w, 0.0, false, true)
 			kb -= face * (90.0 if heavy else 55.0)
 			main.shake(2.5)
 			main.snd("slam")
 		"laserpistol":
 			var sh := 3 if heavy else 1
 			for i in sh:
-				main.spawn_parrow(o, face.rotated((i - (sh - 1) * 0.5) * 0.12), 380.0, d / (1.5 if heavy else 1.0), 0.8, 2 if heavy else 0, Color(0.4, 0.95, 1.0), w, 0.0, true)
+				main.spawn_parrow(o, face.rotated((i - (sh - 1) * 0.5) * 0.12), 380.0, d / (1.5 if heavy else 1.0), 0.8, 2 if heavy else 0, Color(0.4, 0.95, 1.0), w, 0.0, true, true)
 			main.snd("swing")
 		"rocket":
-			main.spawn_parrow(o, face, 190.0, d, 1.4, 0, Color(1.0, 0.6, 0.25), w, 44.0 if heavy else 34.0, true)
+			main.spawn_parrow(o, face, 190.0, d, 1.4, 0, Color(1.0, 0.6, 0.25), w, 44.0 if heavy else 34.0, true, true)
 			kb -= face * 110.0
 			main.shake(4.0)
 			main.snd("slam")
 		"plasma":
-			main.spawn_parrow(o, face, 250.0, d, 1.0, 3 if heavy else 1, Color(0.55, 1.0, 0.5), w, 18.0 if heavy else 12.0, true)
+			main.spawn_parrow(o, face, 250.0, d, 1.0, 3 if heavy else 1, Color(0.55, 1.0, 0.5), w, 18.0 if heavy else 12.0, true, true)
 			kb -= face * 35.0
 			main.snd("swing")
 		_:
@@ -881,7 +881,7 @@ func cast(slot: int) -> void:
 		face = aim
 	match id:
 		"dardo":
-			main.spawn_parrow(position + Vector2(0, -6), aim, 210.0, bd() * 2.0 * sp, 0.9, 3, Color(0.7, 0.4, 1.0), {}, 0.0, true)
+			main.spawn_parrow(position + Vector2(0, -6), aim, 210.0, bd() * 2.0 * sp, 0.9, 3, Color(0.7, 0.4, 1.0), {}, 0.0, true, true)
 			main.snd("swing")
 		"nova":
 			for e in main.enemies.duplicate():
@@ -1156,4 +1156,4 @@ func auto_weapons(dt: float) -> void:
 			var kn := mini(4, 1 + lv / 12)
 			for k in kn:
 				var off := (k - (kn - 1) * 0.5) * 0.2
-				main.spawn_parrow(position + Vector2(0, -6), dirv.rotated(off), 240.0, bd() * 1.1, 0.9, 1, Color(0.92, 0.88, 0.62), w, 0.0, false)
+				main.spawn_parrow(position + Vector2(0, -6), dirv.rotated(off), 240.0, bd() * 1.1, 0.9, 1, Color(0.92, 0.88, 0.62), w, 0.0, false, true)

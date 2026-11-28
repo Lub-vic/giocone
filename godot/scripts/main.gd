@@ -215,6 +215,7 @@ const FOG_BIO := [0.30, 0.52, 0.42, 0.58, 0.32, 0.26, 0.10]
 var fade: ColorRect
 var phase := 0                      # indice in PHASE_TITLES
 var loading_since := 0
+var loading_title := false           # il titolo della fase compare solo uscendo dalla prigione nel mondo esterno
 var story_clearing := false         # la Radura in corso fa parte della storia (la vittoria va salvata)
 var deferred_chunks := {}           # blocchi "eager" non ancora completati: si completano quando ci si avvicina
 var area_nodes: Array = []
@@ -374,6 +375,18 @@ var side_scroll_weapon_t := 0.0
 var side_scroll_weapon_cd := 0.0
 var side_scroll_ufo_hits := 0
 var side_scroll_ufo_escape_t := 0.0
+var side_scroll_defeat_pending := false
+# mira in prima persona contro l'ufo
+const TEMPORAL_FPS_SHOTS := 3            # colpi di ogni arma raccolta, da mirare: ogni centro conta
+const TEMPORAL_AIM_WEAPON_TIME := 20.0   # secondi per usarla (mirare richiede tempo)
+const TEMPORAL_SHOT_SPEED := {"rocket": 34.0, "shotgun": 46.0, "plasma": 56.0}
+const TEMPORAL_SHOT_LIFE := 2.2
+const TEMPORAL_UFO_HIT_RADIUS := 4.1
+const TEMPORAL_UFO_HIT_FLAT := 2.4       # l'ufo e' un disco: in verticale conta di meno
+var side_scroll_shots_left := 0
+var side_scroll_flight := 0.0            # quanto volteggia l'ufo (0 = fermo al centro)
+var side_scroll_flight_phase := 0.0
+var side_scroll_aim_fx: UfoAimFx = null
 var side_scroll_suspended_nodes: Array = []
 var temporal_clearing_restart_pending := false
 var temporal_clearing_restart_area := ""
@@ -540,7 +553,7 @@ func save_game() -> void:
 		"last_fire": {"area": last_fire["area"], "cell": [lc.x, lc.y]}, "persist": persist,
 		"player": {"lv": player.lv, "souls": player.souls, "rk": player.rk, "attr": player.attr, "kills": player.kills},
 		"cls": player.cls, "wslots": player.wslots, "wcur": player.wcur, "spells": player.spells, "known": player.known, "relics": player.relics, "mats": player.mats, "items": player.items, "armor": player.armor, "brews": player.brews, "bag": player.bag, "belt": player.belt, "relic_eq": player.relic_eq,
-		"chrono": {"e": player.chrono, "pity": player.pity, "tech": Chrono.tech, "junk": Chrono.owned}}
+		"chrono": {"e": player.chrono, "pity": player.pity, "tech": Chrono.tech, "played": Chrono.played, "junk": Chrono.owned}}
 	var ws: PackedByteArray = world_seen()
 	if ws.size() == WORLD_W * WORLD_H:
 		d["seen"] = Marshalls.raw_to_base64(ws.compress(FileAccess.COMPRESSION_DEFLATE))
@@ -857,7 +870,8 @@ func loading_enabled() -> bool:
 
 
 ## mostra la schermata e aspetta che sia disegnata, prima di un lavoro che blocca il gioco
-func begin_loading() -> void:
+func begin_loading(with_title := false) -> void:
+	loading_title = with_title
 	state = "loading"
 	loading_since = Time.get_ticks_msec()
 	await get_tree().process_frame
@@ -966,6 +980,7 @@ func start_game(ld: Dictionary, cls_id := "negromante") -> void:
 			player.chrono = float(cd.get("e", 60.0))
 			player.pity = int(cd.get("pity", 0))
 			Chrono.tech = float(cd.get("tech", 0.0))
+			Chrono.played = float(cd.get("played", 0.0))
 			for jk in cd.get("junk", {}):
 				if Chrono.JUNK.has(str(jk)):
 					Chrono.owned[str(jk)] = int(cd["junk"][jk])
@@ -3218,6 +3233,9 @@ const DEBUG_FUNCTION_ACTIONS := [
 	["skip_prison", "F5 - SALTA LE CELLE"],
 	["cine_edit", "F6 - EDITOR CUTSCENE"],
 	["cine_edit_next", "MAIUSC+F6 - EDITOR CUTSCENE SUCCESSIVA"],
+	["cine_edit_entrata", "EDITOR CUTSCENE - ENTRATA UFO (RADURA)"],
+	["cine_edit_uscita", "EDITOR CUTSCENE - USCITA UFO (RADURA)"],
+	["anni80", "PROVA VILLAGGIO ANNI 80 (ATTIVA/DISATTIVA)"],
 	["fpv", "F7 - ATTIVA/DISATTIVA PRIMA PERSONA"],
 	["char_mode", "F8 - CAMBIA STILE PERSONAGGI"],
 	["mission_list", "F9 - ELENCO MISSIONI"],
@@ -3448,12 +3466,19 @@ func _debug_activate_function(action: String) -> void:
 				return
 			state = "play"
 			skip_d0()
-		"cine_edit", "cine_edit_next":
+		"anni80":
+			if not skin is W3DSkin or not (skin as W3DSkin).world_on:
+				say("PROVA DISPONIBILE SOLO NEL MONDO APERTO")
+				return
+			state = "play"
+			anni80_set(not Chrono.preview80)
+		"cine_edit", "cine_edit_next", "cine_edit_entrata", "cine_edit_uscita":
 			if not skin is W3DSkin:
 				say("EDITOR CUTSCENE NON DISPONIBILE")
 				return
 			state = "play"
-			if not (skin as W3DSkin).open_cine_editor(action == "cine_edit_next"):
+			var which := "ufo_entrata" if action == "cine_edit_entrata" else ("ufo_uscita" if action == "cine_edit_uscita" else "")
+			if not (skin as W3DSkin).open_cine_editor(action == "cine_edit_next", which):
 				state = "debug"
 				say("EDITOR CUTSCENE NON DISPONIBILE IN QUESTA SCENA")
 		"fpv":
@@ -3748,6 +3773,10 @@ func _side_scroll_start(mode: String = "travel") -> void:
 	side_scroll_weapon_cd = 0.0
 	side_scroll_ufo_hits = 0
 	side_scroll_ufo_escape_t = 0.0
+	side_scroll_defeat_pending = false
+	side_scroll_shots_left = 0
+	side_scroll_flight = 0.0
+	side_scroll_flight_phase = 0.0
 	side_scroll_suspended_nodes.clear()
 	var suspended_ids := {}
 	for list in [enemies, villagers, allies, critters, pickups, props]:
@@ -3778,7 +3807,10 @@ func _side_scroll_start(mode: String = "travel") -> void:
 			side_scroll_ufo = skin3d.side_scroll_temporal_ufo
 			side_scroll_bubble = skin3d.side_scroll_temporal_bubble
 		side_scroll_spawn_t = 1.8
-		say("RADURA TEMPORALE: MUOVITI NELLA RADURA, SCHIVA LE CADUTE E USA LE ARMI CONTRO L'UFO")
+		var intro_msg := "RADURA TEMPORALE: MUOVITI NELLA RADURA, SCHIVA LE CADUTE E USA LE ARMI CONTRO L'UFO"
+		say(intro_msg)
+		if _ufo_shows_enabled():
+			(skin as W3DSkin).ufo_show_start("ufo_entrata", func(): say(intro_msg))
 	else:
 		for i in 3:
 			var pickup := Pickup.new()
@@ -3793,6 +3825,186 @@ func _side_scroll_start(mode: String = "travel") -> void:
 			side_scroll_pickups.append(pickup)
 		say("SIDE SCROLLING: USA FRECCE SINISTRA/DESTRA O A/D PER MUOVERTI. RAGGIUNGI LA CATTEDRALE IN ROVINA")
 	player.cam.reset_smoothing()
+
+
+## PROVA degli anni '80: il villaggio completo e due banditi armati ai suoi margini. Non si salva.
+var anni80_foes: Array = []
+
+
+func anni80_set(on: bool) -> void:
+	Chrono.preview80 = on
+	for e in anni80_foes:
+		if is_instance_valid(e):
+			enemies.erase(e)
+			e.queue_free()
+	anni80_foes.clear()
+	if not on:
+		say("PROVA ANNI 80 DISATTIVATA")
+		return
+	var village := cell_pos(SEEDS[0])
+	if player.position.distance_to(village) > 40.0 * Game.TS:
+		player.position = cell_pos(free_near(SEEDS[0] + Vector2i(0, 4)))
+		ensure_area(player.position, 2)
+		player.cam.reset_smoothing()
+	for off in [Vector2i(24, 6), Vector2i(26, -3)]:
+		var c := free_near(SEEDS[0] + off)
+		var e := spawn_enemy("goblin", cell_pos(c), 1.0)
+		e.arm_modern()
+		anni80_foes.append(e)
+	say("PROVA ANNI 80: IL VILLAGGIO E' CAMBIATO. A EST CI SONO DUE GOBLIN ARMATI")
+
+
+## mira manuale in prima persona: serve il tasto F7, quindi con il pad o sul touch resta il colpo automatico.
+## Nelle prove automatiche si attiva solo con --ufofps.
+func _ufo_aim_enabled() -> bool:
+	if not skin is W3DSkin or use_pad or DisplayServer.is_touchscreen_available():
+		return false
+	return not testing or OS.get_cmdline_user_args().has("--ufofps")
+
+
+func _side_scroll_take_weapon(family: String) -> void:
+	side_scroll_weapon_family = family
+	side_scroll_weapon_t = TEMPORAL_AIM_WEAPON_TIME if _ufo_aim_enabled() else 12.0
+	side_scroll_weapon_cd = 0.0
+	side_scroll_shots_left = TEMPORAL_FPS_SHOTS if _ufo_aim_enabled() else 1
+	var weapon_name: String = str(Rpg.FAM[family]["n"]).to_upper()
+	if _ufo_aim_enabled():
+		snd("cock")
+		msg_t = 0.0
+	else:
+		say("ARMA TEMPORALE: %s - ATTACCA PER COLPIRE L'UFO" % weapon_name)
+
+
+func _side_scroll_drop_weapon() -> void:
+	side_scroll_weapon_t = 0.0
+	side_scroll_weapon_family = ""
+	side_scroll_shots_left = 0
+
+
+## qualcosa sta per colpire l'eroe? (serve all'avviso "SPOSTATI!" mentre si mira)
+func side_scroll_danger() -> bool:
+	if not side_scroll_active or side_scroll_mode != "temporal_clearing" or player == null:
+		return false
+	var hp_ := player.position / Game.TS
+	for drop in side_scroll_drops:
+		var landed := bool(drop.get("landed", false))
+		if bool(drop.get("is_weapon", false)) or (landed and not bool(drop.get("explosive", false))):
+			continue
+		if Vector2(drop["target"]).distance_to(hp_) < (3.1 if landed else 2.2):
+			return true
+	if side_scroll_laser_charge > 0.0 or side_scroll_laser_t > 0.0:
+		return side_scroll_laser_target.distance_to(hp_) < 2.6
+	return false
+
+
+## l'ufo volteggia: piano quando si e' a mani vuote, in pieno quando si ha un'arma; ogni colpo subito lo agita di piu'
+func _side_scroll_update_flight(dt: float) -> void:
+	var want := 0.0
+	if _ufo_aim_enabled():
+		want = 1.0 if side_scroll_weapon_t > 0.0 else 0.4
+	side_scroll_flight = move_toward(side_scroll_flight, want, dt * 0.45)
+	side_scroll_flight_phase += dt * (1.0 + 0.055 * side_scroll_ufo_hits)
+
+
+## colpo mirato: parte dagli occhi nella direzione dello sguardo e vola dritto
+func _side_scroll_fire_aimed() -> void:
+	var sk3 := skin as W3DSkin
+	if not sk3.fpv:
+		say("PER SPARARE ALL'UFO PASSA IN PRIMA PERSONA (F7)")
+		snd("cock")
+		return
+	var start: Vector3 = sk3.fp_muzzle()
+	var dir: Vector3 = (sk3.fp_aim_point() - start).normalized()
+	var shot_node := sk3.side_scroll_temporal_add_shot(side_scroll_weapon_family, start)
+	if shot_node == null:
+		return
+	side_scroll_temporal_shots.append({"node": shot_node, "family": side_scroll_weapon_family, "aimed": true, "pos": start,
+		"vel": dir * float(TEMPORAL_SHOT_SPEED.get(side_scroll_weapon_family, 40.0)), "t": 0.0})
+	side_scroll_shots_left -= 1
+	side_scroll_weapon_cd = 0.35
+	snd("shot")
+	shake(1.6)
+
+
+## vola il colpo mirato; vero quando il colpo e' finito (a segno, a terra o perso in cielo)
+func _side_scroll_update_aimed(shot: Dictionary, dt: float) -> bool:
+	var sk3 := skin as W3DSkin
+	var node: Node3D = shot["node"]
+	shot["t"] = float(shot["t"]) + dt
+	var from: Vector3 = shot["pos"]
+	var to: Vector3 = from + (shot["vel"] as Vector3) * dt
+	shot["pos"] = to
+	sk3.side_scroll_temporal_update_shot(node, to, shot["vel"])
+	var done := false
+	if side_scroll_ufo_escape_t <= 0.0 and is_instance_valid(side_scroll_ufo):
+		var u: Vector3 = side_scroll_ufo.position + Vector3(0, sk3.elev_at(side_scroll_ufo.position.x, side_scroll_ufo.position.z), 0)
+		for i in 9:      # a passi: il colpo e' veloce e non deve attraversare l'ufo fra un fotogramma e l'altro
+			var q := from.lerp(to, i / 8.0)
+			var d := q - u
+			if Vector3(d.x, d.y * TEMPORAL_UFO_HIT_FLAT, d.z).length() < TEMPORAL_UFO_HIT_RADIUS:
+				sk3.side_scroll_temporal_impact(q)
+				sk3.side_scroll_temporal_ufo_hurt()
+				if side_scroll_shots_left <= 0:
+					_side_scroll_drop_weapon()
+				_side_scroll_register_ufo_hit()
+				done = true
+				break
+	if not done:
+		var floor_y := sk3.elev_at(to.x, to.z) + 0.1
+		if to.y <= floor_y:
+			sk3.side_scroll_temporal_impact(Vector3(to.x, floor_y, to.z), 0.5)
+			done = true
+		elif float(shot["t"]) >= TEMPORAL_SHOT_LIFE:
+			done = true
+		if done and side_scroll_ufo_escape_t <= 0.0:
+			if side_scroll_shots_left <= 0 and side_scroll_weapon_t > 0.0:
+				_side_scroll_drop_weapon()
+				say("MANCATO! COLPI FINITI: CERCA UN'ALTRA ARMA")
+			else:
+				say("MANCATO! ANTICIPA IL SUO MOVIMENTO")
+	if done:
+		sk3.side_scroll_temporal_remove_shot(node)
+		if side_scroll_shots_left <= 0 and side_scroll_weapon_t > 0.0:
+			_side_scroll_drop_weapon()
+	return done
+
+
+## le cutscene di entrata e uscita dell'ufo: sempre in gioco; nelle prove automatiche solo con --ufoshow
+func _ufo_shows_enabled() -> bool:
+	return skin is W3DSkin and (not testing or OS.get_cmdline_user_args().has("--ufoshow"))
+
+
+## l'ufo e' stato sconfitto: via tutto cio' che e' in volo, poi la scena della sua scomparsa
+func _side_scroll_begin_defeat() -> void:
+	side_scroll_defeat_pending = false
+	_side_scroll_cancel_laser()
+	for index in range(side_scroll_drops.size() - 1, -1, -1):
+		_side_scroll_remove_drop(index)
+	for shot in side_scroll_temporal_shots:
+		(skin as W3DSkin).side_scroll_temporal_remove_shot(shot.get("node"))
+	side_scroll_temporal_shots.clear()
+	_side_scroll_end_aim()
+	if not (skin as W3DSkin).ufo_show_start("ufo_uscita", _side_scroll_victory):
+		_side_scroll_victory()
+
+
+func _side_scroll_end_aim() -> void:
+	if skin is W3DSkin and (skin as W3DSkin).fpv:
+		(skin as W3DSkin).fpv_set(false)
+	if side_scroll_aim_fx != null and is_instance_valid(side_scroll_aim_fx):
+		side_scroll_aim_fx.queue_free()
+	side_scroll_aim_fx = null
+
+
+func _side_scroll_victory() -> void:
+	_side_scroll_stop()
+	if story_clearing:
+		story_clearing = false
+		Story.flags(self)["radura_done"] = true
+		save_game()
+	if mission_test_active:
+		_mission_test_restore()
+	say("L'UFO E' FUGGITO")
 
 
 func _try_restart_temporal_clearing() -> bool:
@@ -3878,7 +4090,8 @@ func _side_scroll_spawn_drop(force_kind: String = "") -> void:
 	if visual == null or shadow == null or bubble == null:
 		return
 	visual.scale = Vector3.ZERO
-	visual.position = Vector3(side_scroll_temporal_center.x, W3DSkin.TEMPORAL_UFO_HEIGHT - TEMPORAL_DROP_BELOW_UFO, side_scroll_temporal_center.y)
+	var ufo_xz := Vector2(side_scroll_ufo.position.x, side_scroll_ufo.position.z)
+	visual.position = Vector3(ufo_xz.x, W3DSkin.TEMPORAL_UFO_HEIGHT - TEMPORAL_DROP_BELOW_UFO, ufo_xz.y)
 	var start_ground := (skin as W3DSkin).elev_at(side_scroll_temporal_center.x, side_scroll_temporal_center.y)
 	var target_ground := (skin as W3DSkin).elev_at(target.x, target.y)
 	var gravity := 14.0
@@ -3890,7 +4103,7 @@ func _side_scroll_spawn_drop(force_kind: String = "") -> void:
 		"kind": kind,
 		"weapon_family": weapon_family,
 		"is_weapon": is_weapon,
-		"start": side_scroll_temporal_center,
+		"start": ufo_xz,
 		"target": target,
 		"start_world_y": start_ground + W3DSkin.TEMPORAL_UFO_HEIGHT - TEMPORAL_DROP_BELOW_UFO,
 		"start_ground_y": start_ground,
@@ -3939,6 +4152,7 @@ func _side_scroll_update_temporal(dt: float) -> void:
 		side_scroll_weapon_t = maxf(0.0, side_scroll_weapon_t - dt)
 		if side_scroll_weapon_t <= 0.0:
 			side_scroll_weapon_family = ""
+			side_scroll_shots_left = 0
 			say("L'ARMA TEMPORALE SI E' ESAURITA")
 	side_scroll_weapon_cd = maxf(0.0, side_scroll_weapon_cd - dt)
 	if side_scroll_ufo_escape_t > 0.0:
@@ -3947,17 +4161,16 @@ func _side_scroll_update_temporal(dt: float) -> void:
 			var escape_progress := 1.0 - side_scroll_ufo_escape_t / TEMPORAL_UFO_ESCAPE_DURATION
 			(skin as W3DSkin).side_scroll_temporal_update(side_scroll_ufo_t, true, escape_progress)
 		if side_scroll_ufo_escape_t <= 0.0:
-			_side_scroll_stop()
-			if story_clearing:
-				story_clearing = false
-				Story.flags(self)["radura_done"] = true
-				save_game()
-			if mission_test_active:
-				_mission_test_restore()
-			say("L'UFO E' FUGGITO")
+			_side_scroll_victory()
 			return
 	elif skin is W3DSkin:
-		(skin as W3DSkin).side_scroll_temporal_update(side_scroll_ufo_t)
+		_side_scroll_update_flight(dt)
+		(skin as W3DSkin).side_scroll_temporal_update(side_scroll_ufo_t, false, 0.0, side_scroll_flight, side_scroll_flight_phase)
+	if _ufo_aim_enabled():
+		if side_scroll_aim_fx == null or not is_instance_valid(side_scroll_aim_fx):
+			side_scroll_aim_fx = UfoAimFx.new()
+			side_scroll_aim_fx.main = self
+			add_child(side_scroll_aim_fx)
 	_side_scroll_update_laser(dt)
 	if side_scroll_ufo_escape_t <= 0.0:
 		side_scroll_spawn_t -= dt
@@ -3977,11 +4190,7 @@ func _side_scroll_update_temporal(dt: float) -> void:
 			if bool(drop.get("is_weapon", false)):
 				var weapon_target: Vector2 = landed_target * Game.TS
 				if player.position.distance_to(weapon_target) < player.radius + 22.0:
-					side_scroll_weapon_family = str(drop["weapon_family"])
-					side_scroll_weapon_t = 12.0
-					side_scroll_weapon_cd = 0.0
-					var weapon_name: String = str(Rpg.FAM[side_scroll_weapon_family]["n"]).to_upper()
-					say("ARMA TEMPORALE: %s - ATTACCA PER COLPIRE L'UFO" % weapon_name)
+					_side_scroll_take_weapon(str(drop["weapon_family"]))
 					_side_scroll_remove_drop(index)
 					continue
 				if float(drop["age"]) > 12.0:
@@ -4047,11 +4256,7 @@ func _side_scroll_update_temporal(dt: float) -> void:
 			var impact_position := target * Game.TS
 			if bool(drop.get("is_weapon", false)):
 				if player.position.distance_to(impact_position) < player.radius + 22.0:
-					side_scroll_weapon_family = str(drop["weapon_family"])
-					side_scroll_weapon_t = 12.0
-					side_scroll_weapon_cd = 0.0
-					var weapon_name: String = str(Rpg.FAM[side_scroll_weapon_family]["n"]).to_upper()
-					say("ARMA TEMPORALE: %s - ATTACCA PER COLPIRE L'UFO" % weapon_name)
+					_side_scroll_take_weapon(str(drop["weapon_family"]))
 					_side_scroll_remove_drop(index)
 			else:
 				burst(impact_position, Color(0.5, 0.85, 1.0), 8, 32.0, 0.25)
@@ -4063,6 +4268,10 @@ func _side_scroll_update_temporal(dt: float) -> void:
 		var shot_node: Node3D = shot.get("node")
 		if not is_instance_valid(shot_node):
 			side_scroll_temporal_shots.remove_at(index)
+			continue
+		if bool(shot.get("aimed", false)):
+			if _side_scroll_update_aimed(shot, dt):
+				side_scroll_temporal_shots.remove_at(index)
 			continue
 		shot["t"] = float(shot["t"]) + dt
 		var progress := clampf(float(shot["t"]) / float(shot["duration"]), 0.0, 1.0)
@@ -4079,6 +4288,8 @@ func _side_scroll_update_temporal(dt: float) -> void:
 			if skin is W3DSkin:
 				(skin as W3DSkin).side_scroll_temporal_remove_shot(shot_node)
 			side_scroll_temporal_shots.remove_at(index)
+	if side_scroll_defeat_pending:
+		_side_scroll_begin_defeat()
 
 
 func _side_scroll_cancel_laser() -> void:
@@ -4140,6 +4351,9 @@ func _side_scroll_update_laser(dt: float) -> void:
 func _side_scroll_fire_temporal_weapon() -> void:
 	if side_scroll_ufo_escape_t > 0.0 or side_scroll_weapon_t <= 0.0 or side_scroll_weapon_family.is_empty() or side_scroll_weapon_cd > 0.0 or not side_scroll_temporal_shots.is_empty() or not is_instance_valid(side_scroll_ufo) or not (skin is W3DSkin):
 		return
+	if _ufo_aim_enabled():
+		_side_scroll_fire_aimed()
+		return
 	var family := side_scroll_weapon_family
 	var start_x := player.position.x / Game.TS
 	var start_z := player.position.y / Game.TS
@@ -4158,8 +4372,7 @@ func _side_scroll_fire_temporal_weapon() -> void:
 		"duration": start.distance_to(target) / projectile_speed,
 	})
 	side_scroll_weapon_cd = 0.0
-	side_scroll_weapon_t = 0.0
-	side_scroll_weapon_family = ""
+	_side_scroll_drop_weapon()
 	snd("swing")
 
 
@@ -4170,6 +4383,7 @@ func _side_scroll_register_ufo_hit() -> void:
 	if side_scroll_ufo_hits >= TEMPORAL_UFO_HITS_TO_ESCAPE:
 		side_scroll_ufo_escape_t = TEMPORAL_UFO_ESCAPE_DURATION
 		side_scroll_spawn_t = INF
+		side_scroll_defeat_pending = _ufo_shows_enabled()
 		say("UFO COLPITO! SI DA' ALLA FUGA")
 	else:
 		if side_scroll_ufo_hits % 2 == 0:
@@ -4290,6 +4504,7 @@ func side_scroll_collect(kind: String) -> void:
 
 func _side_scroll_stop() -> void:
 	if side_scroll_active:
+		_side_scroll_end_aim()
 		side_scroll_active = false
 	side_scroll_mode = "travel"
 	if skin is W3DSkin:
@@ -4322,6 +4537,7 @@ func _side_scroll_stop() -> void:
 	side_scroll_weapon_cd = 0.0
 	side_scroll_ufo_hits = 0
 	side_scroll_ufo_escape_t = 0.0
+	side_scroll_defeat_pending = false
 	for saved in side_scroll_suspended_nodes:
 		var node = saved.get("node")
 		if node == null or not is_instance_valid(node):
@@ -6475,7 +6691,14 @@ func obj_targets() -> Array:
 		elif dvc != null:
 			out.append({"p": (dvc as Vector2) * 16.0, "c": Color(0.75, 0.5, 1.0), "n": "APPARECCHIO"})
 		elif persist["bosses"].has("boss_jailer") and not Story.village_free(self):
-			out.append({"p": cell_pos(SEEDS[0]), "c": gold, "n": "VILLAGGIO"})      # la freccia guida al villaggio invaso
+			var foes: Array = Story.invaders(self)
+			var near_village: bool = player.position.distance_to(cell_pos(SEEDS[0])) < Story.INV_NEAR * 16.0
+			if not foes.is_empty() and (near_village or foes.size() <= Story.INV_FEW):
+				foes.sort_custom(func(a, b): return player.position.distance_squared_to(a["p"]) < player.position.distance_squared_to(b["p"]))
+				for foe in foes:
+					out.append({"p": foe["p"], "c": Color(1.0, 0.3, 0.22), "n": "MOSTRO", "inv": true})
+			else:
+				out.append({"p": cell_pos(SEEDS[0]), "c": gold, "n": "VILLAGGIO"})      # la freccia guida al villaggio invaso
 		elif jt != null:
 			if not (Story.barn_status(self) in ["march", "active", "final"]):      # il fienile ha gia' la sua freccia
 				out.append({"p": jt, "c": gold, "n": "OBIETTIVO"})
@@ -7944,10 +8167,14 @@ func grant_graces(n: int, title: String) -> void:
 	say(title + "  +  " + ", ".join(names))
 
 
-func spawn_parrow(pos: Vector2, dir: Vector2, spd: float, d: float, lf: float, pr: int, col: Color, w: Dictionary, aoe: float, magic: bool) -> void:
+func spawn_parrow(pos: Vector2, dir: Vector2, spd: float, d: float, lf: float, pr: int, col: Color, w: Dictionary, aoe: float, magic: bool, own := false) -> void:
 	var a := PArrow.new()
 	a.setup(self, dir, spd, d, lf, pr, col, w, aoe, magic)
 	a.position = pos
+	if own and skin is W3DSkin and (skin as W3DSkin).fpv:      # in prima persona i colpi escono dall'arma e vanno al mirino
+		var sk3 := skin as W3DSkin
+		var look := Vector2(-sin(sk3.fpv_yaw), -cos(sk3.fpv_yaw))
+		a.aim3d(sk3, sk3.fp_muzzle(), sk3.fp_aim_point(), look.angle_to(dir))
 	fx.add_child(a)
 
 
@@ -8378,7 +8605,7 @@ func change_area(dest: String) -> void:
 	var tw := create_tween()
 	tw.tween_property(fade, "color:a", 1.0, 0.35)
 	# la prima uscita dalle celle genera tutto il mondo: schermata col titolo invece del nero
-	if dest == "world" and world_cache.is_empty() and loading_enabled():
+	if dest == "world" and (area == "d0" or world_cache.is_empty()) and loading_enabled():
 		tw.tween_callback(_change_with_loading.bind(dest))
 		return
 	tw.tween_callback(_do_change.bind(dest))
@@ -8388,7 +8615,7 @@ func change_area(dest: String) -> void:
 
 func _change_with_loading(dest: String) -> void:
 	fade.color.a = 0.0      # il velo nero sta sopra l'HUD e coprirebbe la schermata
-	await begin_loading()
+	await begin_loading(area == "d0" and dest == "world")
 	_do_change(dest)
 	await end_loading("play")
 	msg_t = 3.0             # il nome della zona non deve scadere dietro la schermata
@@ -9984,6 +10211,596 @@ var ai_base := Vector2.ZERO
 var run_test_base := Vector2.ZERO
 var side_scroll_test_run_mode := false
 var temporal_clearing_test_results: Dictionary = {}
+var ufo_movie_step := 0
+var ufo_movie_f := 0
+var ufo_movie_wait := 0
+
+
+func _anni80_sign_name(sk: W3DSkin, key: String) -> String:
+	return str(W3DEighties.SIGNS[int(sk.era80.slots[key]["n"])][0])
+
+
+## prova della mira in prima persona nella radura (user://ufofps_*.png): scritta, F7, colpi mancati e a segno, vittoria
+var fps_step := 0
+var fps_wait := 0
+var fps_log: Dictionary = {}
+var fps_curve0 := 0.0
+
+
+func _fps_shot_png(tag: String) -> void:
+	get_viewport().get_texture().get_image().save_png("user://ufofps_%s.png" % tag)
+
+
+func _fps_parrow(sk: W3DSkin, up_angle: float) -> void:
+	sk.fpv_pitch = up_angle
+	sk.cam.rotation = Vector3(up_angle, sk.fpv_yaw, 0.0)
+	spawn_parrow(player.position + Vector2(0, -6), Vector2(-sin(sk.fpv_yaw), -cos(sk.fpv_yaw)), 230.0, 5.0, 0.9, 0, Color(0.7, 0.4, 1.0), {}, 0.0, true, true)
+
+
+func _fps_parrows() -> Array:
+	return fx.get_children().filter(func(n): return n is PArrow and not n.is_queued_for_deletion())
+
+
+## punta dove l'ufo sara' quando il colpo ci arriva
+func _fps_aim(sk: W3DSkin, error: Vector3) -> void:
+	var eye := sk.cam.position
+	var speed := float(TEMPORAL_SHOT_SPEED[side_scroll_weapon_family])
+	var now_off: Vector3 = W3DSkin.ufo_flight_offset(side_scroll_flight_phase) * side_scroll_flight
+	var base := side_scroll_ufo.position - now_off
+	var lead := 0.3
+	var target := side_scroll_ufo.position
+	for i in 5:
+		var ph := side_scroll_flight_phase + lead * (1.0 + 0.055 * side_scroll_ufo_hits)
+		target = base + W3DSkin.ufo_flight_offset(ph) * side_scroll_flight
+		lead = eye.distance_to(target) / speed
+	var d := target + error - eye
+	sk.fpv_yaw = atan2(-d.x, -d.z)
+	sk.fpv_pitch = atan2(d.y, Vector2(d.x, d.z).length())
+	sk.cam.rotation = Vector3(sk.fpv_pitch, sk.fpv_yaw, 0.0)      # subito: lo sparo legge la camera
+
+
+func _ufo_fps_test() -> void:
+	ufo_movie_f += 1
+	var sk := skin as W3DSkin
+	if ufo_movie_f == 5:
+		persist["bosses"]["boss_jailer"] = true
+		if area != "world":
+			_do_change("world")
+		state = "play"
+		var spot := Missions.radura_cell(self)
+		ensure_area(cell_pos(spot), 2)
+		player.position = cell_pos(spot)
+		player.cam.reset_smoothing()
+		return
+	if ufo_movie_f < 200 or player == null:
+		return
+	player.hp = player.max_hp
+	player.inv = 1.0
+	if fps_step < 20:
+		side_scroll_spawn_t = 100.0
+		side_scroll_laser_cd = 100.0
+	match fps_step:
+		0:
+			state = "play"
+			fps_curve0 = sk.curve
+			_side_scroll_start("temporal_clearing")
+			fps_step = 1
+			fps_wait = ufo_movie_f + 60
+		1:
+			if sk.ufo_show_active():
+				fps_wait = ufo_movie_f + 30
+			elif ufo_movie_f >= fps_wait:
+				_side_scroll_take_weapon("rocket")
+				fps_step = 2
+				fps_wait = ufo_movie_f + 70
+		2:      # la scritta dall'alto, in due momenti diversi
+			if ufo_movie_f == fps_wait - 28:
+				_fps_shot_png("alto_1")
+			if ufo_movie_f == fps_wait:
+				_fps_shot_png("alto_2")
+				_side_scroll_fire_temporal_weapon()      # dall'alto non si spara
+				fps_log["dall_alto_non_spara"] = side_scroll_temporal_shots.is_empty() and side_scroll_shots_left == TEMPORAL_FPS_SHOTS
+				var ke := InputEventKey.new()
+				ke.keycode = KEY_F7
+				ke.pressed = true
+				Input.parse_input_event(ke)
+				fps_step = 3
+				fps_wait = ufo_movie_f + 45
+		3:
+			if ufo_movie_f >= fps_wait:
+				fps_log["f7_attiva"] = sk.fpv
+				_fps_aim(sk, Vector3.ZERO)
+				fps_step = 4
+				fps_wait = ufo_movie_f + 3
+		4:
+			if ufo_movie_f >= fps_wait:
+				_fps_shot_png("fps_mira")
+				sk.fpv_pitch = 0.0                      # colpo volutamente sbagliato: dritto davanti, l'ufo e' in alto
+				sk.cam.rotation.x = 0.0
+				fps_step = 5
+		5:      # lo sguardo si aggiorna al fotogramma dopo
+			sk.side_scroll_temporal_update(side_scroll_ufo_t, false, 0.0, side_scroll_flight, side_scroll_flight_phase)
+			var on_screen := sk.cam.unproject_position(sk.fp_muzzle()) / Vector2(sk.vp.size)
+			print("UFOFPS punta dell'arma temporale sullo schermo: ", on_screen.snappedf(0.01))
+			fps_log["parte_dall_arma"] = on_screen.x > 0.55 and on_screen.y > 0.55 and sk.fp_gun != null and sk.fp_gun.visible
+			_side_scroll_fire_temporal_weapon()
+			fps_log["sparo_parte"] = side_scroll_temporal_shots.size() == 1
+			fps_step = 6
+		6:
+			if side_scroll_temporal_shots.is_empty():
+				fps_log["colpo_mancato_ne_restano_2"] = side_scroll_ufo_hits == 0 and side_scroll_shots_left == 2 and side_scroll_weapon_t > 0.0
+				fps_step = 7
+				fps_wait = ufo_movie_f + 20
+		7:      # un colpo mirato in anticipo: deve andare a segno
+			if ufo_movie_f >= fps_wait:
+				_fps_aim(sk, Vector3.ZERO)
+				fps_step = 8
+				fps_wait = ufo_movie_f + 2
+		8:
+			if ufo_movie_f >= fps_wait:
+				_fps_aim(sk, Vector3.ZERO)
+				fps_step = 9
+		9:
+			_side_scroll_fire_temporal_weapon()
+			fps_step = 10
+			fps_wait = ufo_movie_f + 6
+		10:
+			if ufo_movie_f == fps_wait:
+				_fps_shot_png("fps_colpo")
+			if side_scroll_temporal_shots.is_empty() and ufo_movie_f > fps_wait:
+				fps_log["colpo_a_segno_ne_resta_1"] = side_scroll_ufo_hits == 1 and side_scroll_shots_left == 1 and side_scroll_weapon_t > 0.0
+				_fps_shot_png("fps_segno")
+				fps_step = 11
+				fps_wait = ufo_movie_f + 60
+		11:      # il terzo colpo finisce a terra: l'arma e' scarica
+			if ufo_movie_f >= fps_wait and side_scroll_weapon_t > 0.0 and side_scroll_temporal_shots.is_empty():
+				sk.fpv_pitch = -0.6
+				sk.cam.rotation.x = -0.6
+				_side_scroll_fire_temporal_weapon()
+				fps_wait = ufo_movie_f + 40
+			elif ufo_movie_f >= fps_wait:
+				fps_log["tre_colpi_poi_scarica"] = side_scroll_weapon_t <= 0.0 and side_scroll_ufo_hits == 1
+				# finiti i colpi la visuale resta quella: si esce solo con F7
+				fps_log["non_torna_da_solo"] = sk.fpv
+				_fps_shot_png("fps_dopo")
+				var back := InputEventKey.new()
+				back.keycode = KEY_F7
+				back.pressed = true
+				Input.parse_input_event(back)
+				fps_step = 111
+				fps_wait = ufo_movie_f + 20
+		111:
+			if ufo_movie_f >= fps_wait:
+				fps_log["f7_torna_in_terza"] = not sk.fpv
+				fps_log["a_mani_vuote_niente_arma"] = side_scroll_weapon_t <= 0.0
+				_fps_shot_png("alto_dopo")
+				fps_step = 13
+				fps_wait = ufo_movie_f + 20
+		13:      # pericolo mentre si mira
+			if ufo_movie_f >= fps_wait:
+				_side_scroll_take_weapon("plasma")
+				sk.fpv_set(true)
+				_side_scroll_spawn_drop("tostapane")
+				side_scroll_drops.back()["target"] = player.position / Game.TS
+				fps_step = 14
+				fps_wait = ufo_movie_f + 24
+		14:
+			if ufo_movie_f >= fps_wait:
+				fps_log["avviso_pericolo"] = side_scroll_danger()
+				_fps_aim(sk, Vector3.ZERO)
+				_fps_shot_png("fps_pericolo")
+				for i in range(side_scroll_drops.size() - 1, -1, -1):
+					_side_scroll_remove_drop(i)
+				fps_step = 15
+		15:      # si arriva all'ottavo colpo mirando
+			if side_scroll_ufo_hits < TEMPORAL_UFO_HITS_TO_ESCAPE:
+				if side_scroll_weapon_t <= 0.0 and side_scroll_temporal_shots.is_empty():
+					_side_scroll_take_weapon(["rocket", "shotgun", "plasma"][side_scroll_ufo_hits % 3])
+					sk.fpv_set(true)
+					fps_wait = ufo_movie_f + 12
+				elif side_scroll_temporal_shots.is_empty() and side_scroll_weapon_cd <= 0.0 and ufo_movie_f >= fps_wait:
+					_fps_aim(sk, Vector3.ZERO)
+					sk.cam.rotation = Vector3(sk.fpv_pitch, sk.fpv_yaw, 0.0)
+					_side_scroll_fire_temporal_weapon()
+					fps_log["tiri_finali"] = int(fps_log.get("tiri_finali", 0)) + 1
+			if sk.ufo_show_active():
+				fps_log["vittoria_avvia_uscita"] = side_scroll_ufo_hits == TEMPORAL_UFO_HITS_TO_ESCAPE and not sk.fpv and side_scroll_aim_fx == null
+				fps_step = 20
+		20:
+			if not sk.ufo_show_active() and not side_scroll_active:
+				fps_step = 21
+				fps_wait = ufo_movie_f + 30
+		21:
+			if ufo_movie_f >= fps_wait:
+				fps_log["curvatura_ripristinata"] = is_equal_approx(sk.curve, fps_curve0) and not sk.fpv
+				for e in enemies.duplicate():
+					enemies.erase(e)
+					e.queue_free()
+				sk.fpv_set(true)
+				fps_step = 22
+				fps_wait = ufo_movie_f + 10
+		22:      # colpi dell'eroe in 3D: un bersaglio fermo 5 unita' davanti
+			if ufo_movie_f >= fps_wait:
+				var lane := Vector2(0, -1)
+				for a in 24:
+					var cand := Vector2.from_angle(TAU * a / 24.0)
+					var clear := true
+					for step_n_ in range(1, 22):
+						var q: Vector2 = player.position + cand * 8.0 * step_n_
+						if solid_at(q) or not free_at(q, 6.0):
+							clear = false
+							break
+					if clear:
+						lane = cand
+						break
+				sk.fpv_yaw = atan2(-lane.x, -lane.y)
+				var foe := spawn_enemy("goblin", player.position + lane * 80.0, 1.0)
+				foe.set_process(false)
+				fps_log["foe"] = foe
+				_fps_parrow(sk, 0.75)          # alto: deve passare sopra
+				fps_log["hp0"] = foe.hp
+				var born: PArrow = _fps_parrows().back()
+				var m2 := sk.cam.unproject_position(Vector3(born.position.x / 16.0, born.alt, born.position.y / 16.0)) / Vector2(sk.vp.size)
+				print("UFOFPS punta dell'arma normale sullo schermo: ", m2.snappedf(0.01))
+				fps_log["bastone_parte_dall_arma"] = m2.x > 0.55 and m2.y > 0.55
+				fps_step = 23
+				fps_wait = ufo_movie_f + 12
+		23:
+			if ufo_movie_f == fps_wait - 8:
+				var up := _fps_parrows()
+				fps_log["in_alto_sale"] = not up.is_empty() and (up[0] as PArrow).height > 2.5
+			if ufo_movie_f >= fps_wait:
+				fps_log["in_alto_manca"] = (fps_log["foe"] as Enemy).hp == float(fps_log["hp0"])
+				for a in _fps_parrows():
+					a.queue_free()
+				_fps_parrow(sk, -0.7)          # in basso: finisce a terra prima del bersaglio
+				fps_step = 24
+				fps_wait = ufo_movie_f + 14
+		24:
+			if ufo_movie_f >= fps_wait:
+				fps_log["in_basso_a_terra"] = _fps_parrows().is_empty() and (fps_log["foe"] as Enemy).hp == float(fps_log["hp0"])
+				var tp3: Vector2 = (fps_log["foe"] as Enemy).position / 16.0
+				var flat: float = (player.position / 16.0).distance_to(tp3)
+				var to3: Vector2 = tp3 - player.position / 16.0
+				sk.fpv_yaw = atan2(-to3.x, -to3.y)
+				_fps_parrow(sk, atan2(sk.elev_at(tp3.x, tp3.y) + 0.9 - sk.cam.position.y, flat))      # mirino sul bersaglio
+				fps_log["_arrow"] = _fps_parrows().back()
+				fps_step = 25
+				fps_wait = ufo_movie_f + 20
+		25:
+			if is_instance_valid(fps_log.get("_arrow")) and is_instance_valid(fps_log.get("foe")) and not (fps_log["_arrow"] as PArrow).is_queued_for_deletion():
+				var ar := fps_log["_arrow"] as PArrow
+				var fe := fps_log["foe"] as Enemy
+				print("UFOFPS volo d=", snappedf(fe.position.distance_to(ar.position), 0.1), " h=", snappedf(ar.height, 0.01), " muro=", solid_at(ar.position), " hp=", snappedf(fe.hp, 0.1), " pos=", ar.position.snapped(Vector2.ONE), " nemico=", fe.position.snapped(Vector2.ONE))
+			if ufo_movie_f >= fps_wait:
+				fps_log.erase("_arrow")
+				var f2: Variant = fps_log["foe"]
+				fps_log["dritto_colpisce"] = not is_instance_valid(f2) or (f2 as Enemy).hp < float(fps_log["hp0"])
+				fps_log.erase("foe")
+				print("UFOFPS ", fps_log, " curva=", sk.curve, " attesa=", fps_curve0)
+				get_tree().quit()
+	if ufo_movie_f > 6000:
+		print("UFOFPS FERMO al passo ", fps_step, " ", fps_log, " colpi=", side_scroll_ufo_hits)
+		get_tree().quit()
+
+
+## prova: con un solo invasore rimasto (quello nato in un ostacolo) la liberazione del villaggio si deve poter chiudere
+var inv_f := 0
+var inv_log: Dictionary = {}
+
+
+func _invasion_test() -> void:
+	inv_f += 1
+	var sk := skin as W3DSkin
+	if inv_f == 5:
+		persist["bosses"]["boss_jailer"] = true
+		if area != "world":
+			_do_change("world")
+		var fl := Story.flags(self)
+		fl.erase(Story.INV)
+		fl[Story.ESCAPE_INTRO] = true
+		fl["inv_shown"] = true
+		fl[W3DCine.FLAG] = true
+		fl[Story.CHRONO] = true
+		fl["inv_dead"] = [4, 9, 8, 10, 3, 7, 2, 5, 0, 1]      # come nella partita rimasta bloccata: manca il 6
+		# stesse posizioni di una partita vera: si tolgono soltanto i mostri gia' uccisi
+		for sp in spawns:
+			if sp.get("story", "") == "invasione" and Story.is_dead(self, sp) and sp.get("node") != null and is_instance_valid(sp["node"]):
+				enemies.erase(sp["node"])
+				(sp["node"] as Node).queue_free()
+				sp["node"] = null
+		Story.left_n = 1
+		player.position = cell_pos(free_near(SEEDS[0] + Vector2i(0, 4)))
+		ensure_area(player.position, 2)
+		player.cam.reset_smoothing()
+		return
+	if inv_f < 6 or player == null:
+		return
+	state = "play" if inv_f < 700 else state
+	player.hp = player.max_hp
+	player.inv = 1.0
+	if inv_f == 90:
+		var foes := Story.invaders(self)
+		inv_log["uno_rimasto"] = foes.size() == 1 and int(foes[0]["e"]["sid"]) == 6
+		inv_log["nato_in_un_ostacolo"] = not sk.world_free(foes[0]["e"]["pos"], 5.0)
+		inv_log["contatore"] = Story.invaders_counter(self) == 1
+	if inv_f == 420:
+		var foes2 := Story.invaders(self)
+		var open := Story._reachable(self)
+		var cell := Vector2i((foes2[0]["p"] as Vector2) / 16.0)
+		var near_ok := false
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				near_ok = near_ok or open.has(cell + Vector2i(dx, dy))
+		inv_log["ora_raggiungibile"] = near_ok
+		var arrows := obj_targets().filter(func(t): return t["n"] == "MOSTRO")
+		inv_log["freccia_sul_mostro"] = arrows.size() == 1 and (arrows[0]["p"] as Vector2).distance_to(foes2[0]["p"]) < 2.0
+		print("INVTEST celle raggiungibili=", open.size(), " mostro a ", cell, " distanza eroe=", int(player.position.distance_to(foes2[0]["p"]) / 16.0))
+		# rete di sicurezza: lo si lascia lontano e si aspetta
+		var far := cell
+		var best := 0.0
+		for c in open:
+			var d := player.position.distance_to(cell_pos(c))
+			if d > best:
+				best = d
+				far = c
+		Story._move_invader(self, foes2[0], cell_pos(far))
+		Story.inv_idle = Story.INV_PATIENCE - 1.0
+		inv_log["_far"] = best / 16.0
+		get_viewport().get_texture().get_image().save_png("user://invasione_contatore.png")
+	if inv_f == 520:
+		var foes3 := Story.invaders(self)
+		var now := player.position.distance_to(foes3[0]["p"]) / 16.0
+		print("INVTEST rete di sicurezza: da ", int(inv_log["_far"]), " celle a ", int(now))
+		inv_log.erase("_far")
+		inv_log["viene_allo_scoperto"] = now < 16.0
+		get_viewport().get_texture().get_image().save_png("user://invasione_freccia.png")
+		var node: Variant = foes3[0]["e"].get("node")
+		if node != null and is_instance_valid(node):
+			(node as Enemy).hurt(999999.0, Vector2.RIGHT, 0.0, false)
+	if inv_f == 640:
+		inv_log["villaggio_libero"] = Story.village_free(self)
+		inv_log["contatore_sparito"] = Story.invaders_counter(self) == 0
+	if inv_f == 660:
+		state = "loading"
+		loading_title = false
+	if inv_f == 664:
+		get_viewport().get_texture().get_image().save_png("user://carico_semplice.png")
+		loading_title = true
+	if inv_f == 668:
+		get_viewport().get_texture().get_image().save_png("user://carico_titolo.png")
+	if inv_f == 700:
+		print("INVTEST ", inv_log)
+		get_tree().quit()
+
+
+## prova a schermate del villaggio anni '80 (user://anni80_*.png): prima, dopo, e i goblin armati che sparano
+var a80_shots := 0
+var a80_hp := 0.0
+
+
+func _anni80_test() -> void:
+	ufo_movie_f += 1
+	var sk := skin as W3DSkin
+	var village: Vector2i = SEEDS[0]
+	if ufo_movie_f == 5:
+		persist["bosses"]["boss_jailer"] = true
+		if area != "world":
+			_do_change("world")
+		state = "play"
+		Story.flags(self)[Story.INV] = true
+		Story.flags(self)[W3DCine.FLAG] = true
+		Story.flags(self)[Story.CHRONO] = true
+		for e in enemies.duplicate():
+			enemies.erase(e)
+			e.queue_free()
+		player.position = cell_pos(free_near(village + Vector2i(0, 4)))
+		ensure_area(player.position, 2)
+		player.cam.reset_smoothing()
+		return
+	if player != null and ufo_movie_f > 5:
+		player.hp = player.max_hp
+		if ufo_movie_f < 625 or ufo_movie_f >= 765:
+			player.inv = 1.0
+		state = "play"
+		spawn_t = 100.0
+	var spots := {"a": Vector2i(0, 4), "b": Vector2i(-12, -4), "c": Vector2i(11, 8)}
+	var plan := [[300, "a", "prima"], [330, "b", "prima"], [360, "c", "prima"], [560, "a", "dopo"], [590, "b", "dopo"], [620, "c", "dopo"]]
+	for step in plan:
+		if ufo_movie_f == int(step[0]) - 25:
+			player.position = cell_pos(free_near(village + (spots[step[1]] as Vector2i)))
+			player.cam.reset_smoothing()
+		if ufo_movie_f == int(step[0]):
+			get_viewport().get_texture().get_image().save_png("user://anni80_%s_%s.png" % [step[2], step[1]])
+	if ufo_movie_f == 390:
+		player.position = cell_pos(free_near(village + Vector2i(0, 4)))
+		print("ANNI80 nascosti prima della prova=", sk.ed_hide_keys.size())
+		anni80_set(true)
+	if ufo_movie_f == 625:
+		var rep := {}
+		for sl in sk.era80.slots.values():
+			rep[sl["kind"]] = int(rep.get(sl["kind"], 0)) + 1
+		print("ANNI80 posti: ", rep, " presenti=", sk.era80.live.size())
+		for k in sk.era80.live:
+			if str(k).begins_with("neon:"):
+				var rc: Dictionary = sk.era80.live[k]
+				var tp: Vector3 = rc["top"]
+				var od: Vector2 = rc["out"]
+				# verticale come un muro, rivolta come la facciata, porta verso il basso dello schermo
+				var nm: Vector3 = rc["normal"]
+				print("ANNI80 INSEGNA ", _anni80_sign_name(sk, k), ": verticale=", tp == Vector3.UP and absf(nm.y) < 0.001, " rivolta_come_la_porta=", Vector2(nm.x, nm.z).dot(od) > 0.99, " porta_in_basso=", od.y > 0.75)
+	if ufo_movie_f > 625 and ufo_movie_f < 760 and a80_shots < 2:
+		var g2: Variant = anni80_foes[0] if not anni80_foes.is_empty() else null
+		if g2 != null and is_instance_valid(g2):
+			if a80_shots == 0 and g2.gun_aim > 0.0 and g2.gun_aim < 0.4:
+				get_viewport().get_texture().get_image().save_png("user://anni80_mira.png")
+				a80_shots = 1
+			elif a80_shots == 1 and g2.gun_burst == 0 and g2.gun_aim <= 0.0:
+				var bullets := 0
+				for n in fx.get_children():
+					if n is Projectile and (n as Projectile).style == "bullet":
+						bullets += 1
+				print("ANNI80 raffica partita, proiettili in volo=", bullets)
+				get_viewport().get_texture().get_image().save_png("user://anni80_sparo.png")
+				a80_shots = 2
+	# davanti a ogni insegna, per guardarla
+	var signs: Array = []
+	if ufo_movie_f >= 765 and sk != null:
+		for k in sk.era80.slots:
+			if str(k).begins_with("neon:"):
+				signs.append(sk.era80.slots[k])
+		signs.sort_custom(func(a, b): return int(a["n"]) < int(b["n"]))
+	if ufo_movie_f == 762:      # via i banditi prima del giro delle insegne
+		for e in anni80_foes:
+			if is_instance_valid(e):
+				enemies.erase(e)
+				e.queue_free()
+		anni80_foes.clear()
+	for i in 6:      # ogni insegna dall'alto e in prima persona
+		if i / 2 < signs.size() and ufo_movie_f == 765 + i * 45:
+			var door: Vector2 = (signs[i / 2]["p"] as Vector2) + sk.world_off
+			sk.fpv_set(false)
+			player.position = cell_pos(free_near(Vector2i(door + Vector2(0.0, 3.0 if i % 2 == 0 else 7.0))))
+			player.cam.reset_smoothing()
+			if i % 2 == 1:
+				player.face = Vector2(0, -1)
+				sk.fpv_set(true)
+				sk.fpv_pitch = 0.12
+		if i / 2 < signs.size() and ufo_movie_f == 765 + i * 45 + 38:
+			get_viewport().get_texture().get_image().save_png("user://anni80_insegna_%d.png" % i)
+	if ufo_movie_f == 1040:
+		sk.fpv_set(false)
+		anni80_set(false)
+	if ufo_movie_f == 1075:
+		print("ANNI80 dopo la disattivazione: oggetti=", sk.era80.live.size(), " nascosti=", sk.ed_hide_keys.size(), " scatti=", a80_shots)
+		get_tree().quit()
+
+
+## prova dell'editor sulle cutscene della Radura (ATTENZIONE: l'editor salva da solo, salvare e ripristinare i cutscenes.json)
+func _ufo_edit_test() -> void:
+	ufo_movie_f += 1
+	var sk := skin as W3DSkin
+	if ufo_movie_f == 5:
+		persist["bosses"]["boss_jailer"] = true
+		if area != "world":
+			_do_change("world")
+		state = "play"
+		var spot := Missions.radura_cell(self)
+		ensure_area(cell_pos(spot), 2)
+		player.position = cell_pos(spot)
+		player.cam.reset_smoothing()
+		return
+	var plan := {420: "ufo_entrata", 560: "ufo_uscita", 700: "ufo"}
+	for at in plan:
+		var cid: String = plan[at]
+		if ufo_movie_f == at:
+			state = "play"
+			print("EDITTEST apro ", cid, " = ", sk.open_cine_editor(false, cid))
+		elif ufo_movie_f == at + 20:
+			sk.cine.seek(5.6 if cid == "ufo_entrata" else 6.4)
+		elif ufo_movie_f == at + 60:
+			var img := get_viewport().get_texture().get_image()
+			img.save_png("user://edit_%s.png" % cid)
+		elif ufo_movie_f == at + 70:
+			var ed: W3DCineEdit = sk.cine.ed
+			var names: Array = ed.names()
+			var report := []
+			for i in names.size():
+				ed.tr = i
+				ed.ki = 0
+				if ed.keys().is_empty():
+					continue
+				sk.cine.seek(5.13)
+				var before: int = ed.keys().size()
+				ed._add_key()
+				report.append("%s %d->%d campi=%d" % [names[i], before, ed.keys().size(), ed.fields().size()])
+			print("EDITTEST keyframe: ", report)
+			# modifica di un valore: il raggio della bolla deve cambiare quello che si vede
+			ed.tr = names.find("bolla")
+			sk.cine.seek(5.13)
+			for j in ed.keys().size():
+				if absf(float(ed.keys()[j]["t"]) - 5.13) < 0.001:
+					ed.ki = j
+			var f0: Array = ed.fields()
+			for j in f0.size():
+				if str(f0[j][0]) == "s":
+					ed.fi = j
+			sk.cine.update(0.0)
+			var lib: W3DUfoShow = sk.cine.stage if sk.cine.stage != null else sk.cine.fxs
+			if sk.cine.id == "ufo":
+				sk.cine.seek(1.5)
+				for j in ed.keys().size():
+					if absf(float(ed.keys()[j]["t"]) - 1.5) < 0.001:
+						ed.ki = j
+				sk.cine.update(0.0)
+			var f1: Array = ed.fields()
+			for j in f1.size():
+				if str(f1[j][0]) == "s":
+					ed.fi = j
+			print("EDITTEST campo scelto: ", ed.fields()[ed.fi][0], " keyframe a ", ed.cur()["t"])
+			var r0: float = lib.bubble_r
+			ed._adjust(1.0, 10.0)
+			sk.cine.update(0.0)
+			print("EDITTEST raggio bolla prima=", snappedf(r0, 0.1), " dopo=", snappedf(lib.bubble_r, 0.1))
+			sk.cine.finish(false)
+			print("EDITTEST chiuso: stato=", state, " radura rimossa=", not is_instance_valid(sk.side_scroll_temporal_ufo))
+	if ufo_movie_f == 800:
+		get_tree().quit()
+
+
+## prova a video delle due cutscene dell'ufo: con --ufoshow --ufomovie salva i fotogrammi in user://ufoshow
+func _ufo_movie_test() -> void:
+	ufo_movie_f += 1
+	var sk := skin as W3DSkin
+	if ufo_movie_step == 0 and ufo_movie_f == 5:
+		DirAccess.make_dir_recursive_absolute("user://ufoshow")
+		persist["bosses"]["boss_jailer"] = true
+		if area != "world":
+			_do_change("world")
+		state = "play"
+		var spot := Missions.radura_cell(self)
+		ensure_area(cell_pos(spot), 2)
+		player.position = cell_pos(spot + Vector2i(-3, 9))
+		player.cam.reset_smoothing()
+		ufo_movie_step = 1
+		ufo_movie_wait = ufo_movie_f + 420
+		return
+	if player != null:
+		player.hp = player.max_hp
+	if ufo_movie_step == 1 and ufo_movie_f >= ufo_movie_wait:
+		state = "play"
+		_side_scroll_start("temporal_clearing")
+		print("UFOMOVIE entrata: fotogramma ", Engine.get_process_frames(), " quota=", sk.elev_at(side_scroll_temporal_center.x, side_scroll_temporal_center.y), " attiva=", sk.ufo_show_active())
+		ufo_movie_step = 2
+		ufo_movie_wait = 0
+	elif ufo_movie_step == 2 and not sk.ufo_show_active():
+		print("UFOMOVIE entrata finita: fotogramma ", Engine.get_process_frames(), " stato=", state)
+		ufo_movie_step = 3
+		ufo_movie_wait = ufo_movie_f + 75
+		side_scroll_spawn_t = 100.0
+		side_scroll_laser_cd = 100.0
+	elif ufo_movie_step == 3 and ufo_movie_f >= ufo_movie_wait:
+		for i in TEMPORAL_UFO_HITS_TO_ESCAPE:
+			_side_scroll_register_ufo_hit()
+		print("UFOMOVIE ultimo colpo: fotogramma ", Engine.get_process_frames())
+		ufo_movie_step = 4
+	elif ufo_movie_step == 4 and sk.ufo_show_active():
+		ufo_movie_step = 5
+	elif ufo_movie_step == 5 and not sk.ufo_show_active():
+		print("UFOMOVIE uscita finita: fotogramma ", Engine.get_process_frames(), " stato=", state, " scontro_chiuso=", not side_scroll_active)
+		ufo_movie_step = 6
+		ufo_movie_wait = ufo_movie_f + 45
+	elif ufo_movie_step == 6 and ufo_movie_f >= ufo_movie_wait:
+		get_tree().quit()
+	if ufo_movie_step >= 2 and ufo_movie_f % 6 == 0 and not OS.get_cmdline_user_args().has("--noframes"):
+		var tag := "x"
+		var at := 0.0
+		if sk.ufo_show_active():
+			tag = "in" if sk.cine.id == "ufo_entrata" else "out"
+			at = sk.cine.t
+		var img := get_viewport().get_texture().get_image()
+		img.resize(640, 360)
+		img.save_png("user://ufoshow/%s_%05d_%05.2f.png" % [tag, ufo_movie_f, at])
 
 
 func _process(_dt: float) -> void:
@@ -11658,6 +12475,16 @@ func _process(_dt: float) -> void:
 			print("BARN richiesta=", started, " auto_fire_off=", automatic_fire_disabled, " nemici_onda=", horde_count, " visibili=", horde_within_view, " deboli_iniziali=", horde_early_weak and early_roster_weak, " incantatori_su_20=", early_mages, " difficolta_progressiva=", staged_difficulty, " anime_ridotte=", reduced_souls, " camera=", camera_height_reasonable, " conto_alla_rovescia=", countdown_active, " conclusa=", completed, " auto_fire_ripristinato=", automatic_fire_restored, " progresso=", advanced, " avvicinamento=", steps, " obiettivo=", objective())
 			assert(started and automatic_fire_disabled and limited_waves and horde_within_view and horde_early_weak and early_roster_weak and few_casters and staged_difficulty and reduced_souls and camera_height_reasonable and countdown_active and completed and automatic_fire_restored and advanced, "Assalto al fienile non completato correttamente")
 			get_tree().quit()
+	if OS.get_cmdline_user_args().has("--ufomovie"):
+		_ufo_movie_test()
+	if OS.get_cmdline_user_args().has("--ufoedittest"):
+		_ufo_edit_test()
+	if OS.get_cmdline_user_args().has("--invasiontest"):
+		_invasion_test()
+	if OS.get_cmdline_user_args().has("--ufofps"):
+		_ufo_fps_test()
+	if OS.get_cmdline_user_args().has("--anni80shot"):
+		_anni80_test()
 	if OS.get_cmdline_user_args().has("--temporalclearingtest"):
 		tgs += 1
 		if tgs == 5:
@@ -12437,6 +13264,8 @@ func _process(_dt: float) -> void:
 				spawn_tick()
 				poi_tick()
 				world_event_update(0.5)
+	if player != null and state == "play" and not testing:
+		Chrono.played += real
 	if player != null and state == "play" and not side_scroll_active:
 		quest_update()
 		journey_update()

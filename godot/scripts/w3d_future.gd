@@ -11,6 +11,7 @@ var colls: Dictionary = {}              # blocco -> Array di [chiave collisione,
 var anim: Array = []                    # nodi che ruotano o ondeggiano
 var meshes: Dictionary = {}
 var last_tech := -1.0
+var last_summon := -1.0
 var last_step := -1
 var pulse := 0.0
 var spawn_near := false
@@ -26,7 +27,7 @@ const BLK := 20.0                       # lato di un blocco (unita' di gioco)
 
 func _process(dt: float) -> void:
 	t += dt
-	var tech: float = Chrono.tech
+	var tech: float = Chrono.level()
 	if sk == null or not sk.active or not sk.world_on or str(sk.gm.area) != "world":
 		_clear_all(false)
 		sk.post_mat.set_shader_parameter("glitch", 0.0)
@@ -36,7 +37,9 @@ func _process(dt: float) -> void:
 		last_tech = tech
 	# le intrusioni dipendono solo da tech: all'inizio quasi niente (poche evocazioni), poi sempre piu' evidenti
 	var mat: float = Chrono.maturity()
-	if tech > last_tech + 0.01:            # appena evocato qualcosa dal futuro: onda nel tempo, piu' forte col procedere del gioco
+	var summoned := Chrono.tech > last_summon + 0.01 and last_summon >= 0.0
+	last_summon = Chrono.tech
+	if summoned:            # appena evocato qualcosa dal futuro: onda nel tempo, piu' forte col procedere del gioco
 		pulse = 0.35 + 0.65 * mat
 		spawn_near = mat >= 0.2
 		var pp: Vector2 = sk.gm.player.position

@@ -18,11 +18,19 @@ const HELP := ["TIMELINE (in basso): barra rossa = tempo attuale,",
 	"SPAZIO = play/pausa dal punto attuale (con audio)",
 	"P = ANTEPRIMA pulita dall'inizio, con audio (un tasto la ferma)",
 	"F camera libera (WASD QE, tasto dx) | C = cattura la camera",
+	"PAG SU / PAG GIU' = velocita' della cutscene (dura di meno / di piu')",
 	"ESC esci | Ctrl+Backspace = ripristina l'originale del gioco"]
-const LBL := {"t": "TEMPO (s)", "a": "RIFERIMENTO", "f": "ZOOM (fov)", "m": "MODO (0 alto, 1 libera)", "e": "CURVA (0-3)",
-	"cut": "TAGLIO (1 = secco)", "v": "VISIBILE (1/0)", "s": "SCALA", "w": "PESO (0-1)", "sun": "LUCE SOLE", "fog": "NEBBIA", "k": "TIPO", "n": "NUMERO", "d": "DURATA (s)", "x": "TESTO"}
-const L3 := {"o": ["POSIZIONE X", "ALTEZZA", "POSIZIONE Z"], "r": ["PITCH su/giu", "YAW gira", "ROLLIO"], "c": ["COLORE R", "COLORE G", "COLORE B"]}
+const LBL := {"mira": "GUARDA VERSO", "chiarore": "CHIARORE (0-1)", "t": "TEMPO (s)", "a": "RIFERIMENTO", "f": "ZOOM (fov)", "m": "MODO (0 alto, 1 libera)", "e": "CURVA (0-3)",
+	"cut": "TAGLIO (1 = secco)", "v": "VISIBILE (1/0)", "s": "SCALA", "al": "INTENSITA' (0-1)", "giro": "ROTAZIONE (rad)", "forza": "ENERGIA BOLLA", "alto": "ALLUNGAMENTO",
+	"taglio": "DISSOLVI DAVANTI (dist.)", "auto": "CAMERA DEL GIOCO (1/0)", "vol": "VOLUME (dB)", "g": "SPESSORE", "raggio": "RAGGIO", "dove": "DOVE",
+	"tempesta": "TEMPESTA (0-1)", "tempo_fermo": "TEMPO FERMO (0-1)", "lente": "LENTE (0-1)", "pietre": "PIETRE IN ARIA (0-1)", "caduta": "PIETRE CADONO (0-1)",
+	"risucchio": "PIETRE RISUCCHIATE", "impronta": "IMPRONTA A TERRA", "terra": "FULMINI A TERRA /s", "dal_cielo": "SAETTE DAL CIELO /s",
+	"di_lato": "SCARICHE DI LATO /s", "sulla_bolla": "ARCHI SULLA BOLLA", "nel_punto": "SCINTILLE NEL PUNTO /s", "sullo_scafo": "ARCHI SULLO SCAFO /s",
+	"sull_impronta": "ARCHI A TERRA /s", "echi": "ECHI DELL'UFO (0-1)", "eco_scala": "ECHI CHE SI ALLARGANO", "sfarfallio": "SFARFALLIO (0-1)",
+	"tremito": "TREMITO", "fumo": "FUMO (1/0)", "fuoco": "FUOCO (1/0)", "luce_risucchiata": "LUCE RISUCCHIATA (1/0)", "braci": "BRACI (1/0)", "w": "PESO (0-1)", "sun": "LUCE SOLE", "fog": "NEBBIA", "k": "TIPO", "n": "NUMERO", "d": "DURATA (s)", "x": "TESTO"}
+const L3 := {"mira_o": ["MIRA SPOSTATA X", "MIRA ALTEZZA", "MIRA SPOSTATA Z"], "o": ["POSIZIONE X", "ALTEZZA", "POSIZIONE Z"], "r": ["PITCH su/giu", "YAW gira", "ROLLIO"], "c": ["COLORE R", "COLORE G", "COLORE B"]}
 const TOP := 11.0
+const COL_W := 158.0
 
 var c: W3DCine
 var tr := 0                     # traccia selezionata
@@ -37,6 +45,7 @@ var hp: Control
 var tl: Control
 var hdr := ""
 var fy0 := 0.0
+var f0 := 0                    # primo valore visibile nel pannello (scorre col valore scelto)
 var msg := ""
 var drag := false
 var preview := false
@@ -51,7 +60,8 @@ func setup(cine: W3DCine) -> void:
 	var vs: Vector2 = c.gm.get_viewport().get_visible_rect().size
 	pn = Control.new()
 	pn.position = Vector2(3, 3)
-	pn.size = Vector2(196, vs.y - 92)
+	var tl_h := maxf(86.0, TOP + c._tracks().size() * 6.2 + 2.0)      # piu' righe = timeline piu' alta
+	pn.size = Vector2(COL_W * 2.0 + 4.0, vs.y - tl_h - 6.0)      # i valori stanno su due colonne
 	pn.mouse_filter = Control.MOUSE_FILTER_STOP
 	pn.draw.connect(_draw_pn)
 	pn.gui_input.connect(_pn_input)
@@ -65,7 +75,7 @@ func setup(cine: W3DCine) -> void:
 	layer.add_child(hp)
 	tl = Control.new()
 	tl.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	tl.offset_top = -86
+	tl.offset_top = -tl_h
 	tl.mouse_filter = Control.MOUSE_FILTER_STOP
 	tl.draw.connect(_draw_tl)
 	tl.gui_input.connect(_tl_input)
@@ -109,12 +119,15 @@ func fields() -> Array:
 	ks.sort()
 	ks.erase("t")
 	ks.push_front("t")
+	if names()[tr] == "cam" and int(k.get("m", 0)) == 1 and not k.has("mira"):
+		k["mira"] = ""       # ogni inquadratura libera puo' puntare un bersaglio
+		ks.append("mira")
 	for n in ks:
 		var v: Variant = k[n]
 		if v is Array:
 			for i in (v as Array).size():
 				out.append([n, i])
-		elif v is float or v is int or n == "a" or (n == "f" and v is String) or (n == "x" and v is String):
+		elif v is float or v is int or (n == "a" and v is String) or (n == "f" and v is String) or (n == "x" and v is String) or (n == "n" and v is String) or (n == "mira" and v is String):
 			out.append([n, -1])
 	return out
 
@@ -122,6 +135,12 @@ func fields() -> Array:
 func _label(n: String, i: int) -> String:
 	if names()[tr] == "musica":
 		return {"f": "FILE AUDIO", "vol": "VOLUME (0-100 %)", "from": "PARTI DAL SECONDO (brano)", "fade": "DISSOLVENZA (s)"}.get(n, LBL.get(n, n))
+	if i >= 0 and n == "c":
+		return L3["c"][i]
+	if n == "a" and cur() != null and str((cur() as Dictionary).get("k", "")) == "flash":
+		return "FORZA DEL LAMPO"
+	if n == "n" and cur() != null and str((cur() as Dictionary).get("k", "")) == "snd":
+		return "SUONO"
 	if i >= 0 and L3.has(n):
 		return L3[n][i]
 	if n == "e" and names()[tr] == "env":
@@ -137,7 +156,16 @@ func _adjust(dir: float, mult: float) -> void:
 	var k: Dictionary = cur()
 	var n: String = fl[fi][0]
 	var i: int = fl[fi][1]
-	if n == "x" and k[n] is String:
+	if n == "mira":
+		var tg: Array = [""] + c.anchors.keys() + c.acts.keys()
+		k["mira"] = tg[(tg.find(str(k["mira"])) + int(dir) + tg.size()) % tg.size()]
+		if str(k["mira"]) != "" and not k.has("mira_o"):
+			k["mira_o"] = [0.0, 0.0, 0.0]
+	elif n == "n" and k[n] is String:
+		var snds: Array = c.gm.sfx_node.cache.keys()
+		snds.sort()
+		k[n] = snds[(snds.find(str(k[n])) + int(dir) + snds.size()) % snds.size()]
+	elif n == "x" and k[n] is String:
 		var tx: Array = ["????", "?!", "...", "!!!", "??"]
 		var jx: int = tx.find(str(k["x"]))
 		k["x"] = tx[(jx + int(dir) + tx.size()) % tx.size()]
@@ -157,9 +185,11 @@ func _adjust(dir: float, mult: float) -> void:
 		var stp := 0.1
 		if names()[tr] == "musica" and n in ["vol", "from", "fade"]:
 			stp = 5.0 if n == "vol" else (1.0 if n == "from" else 0.5)
-		elif n in ["m", "v", "e", "cut", "on"] and not (n == "e" and names()[tr] == "env"):
+		elif n in ["m", "v", "e", "cut", "on", "auto", "fumo", "fuoco", "braci", "luce_risucchiata"] and not (n == "e" and names()[tr] == "env"):
 			stp = 1.0
-		elif n == "o":
+		elif n in ["terra", "dal_cielo", "di_lato", "sulla_bolla", "nel_punto", "sullo_scafo", "sull_impronta", "taglio", "raggio"]:
+			stp = 1.0
+		elif n in ["o", "mira_o"]:
 			stp = 0.5
 		elif n in ["r", "c"]:
 			stp = 0.05
@@ -200,6 +230,9 @@ func input(ev: InputEvent) -> void:
 	var sh: float = 10.0 if ev.shift_pressed else (0.1 if ev.ctrl_pressed else 1.0)
 	var key: int = ev.keycode
 	match key:
+		KEY_PAGEUP, KEY_PAGEDOWN:
+			c.cut["velocita"] = snappedf(clampf(c.rate() + (0.05 if key == KEY_PAGEUP else -0.05), 0.3, 2.0), 0.01)
+			_touch()
 		KEY_ESCAPE:
 			c.finish(false)
 		KEY_BACKSPACE:
@@ -350,6 +383,8 @@ func _add_key() -> void:
 			off = Vector3(off.x, float(ev["oy"]), off.z)
 		var rr: Vector3 = ev["rot"]
 		k = {"t": snappedf(c.t, 0.01), "m": int(ev["m"]), "a": src.get("a", "P0"), "o": [off.x, off.y, off.z], "r": [rr.x, rr.y - float(rf["yaw"]), rr.z], "f": float(ev["f"])}
+	elif (c.stage != null or c.fxs != null) and nm != "env" and nm != "ev" and nm != "musica":
+		k = _copy_key(arr)
 	elif nm == "env":
 		k = {"t": snappedf(c.t, 0.01), "w": 1.0, "c": [0.5, 0.5, 0.7], "e": 0.2}
 	elif nm == "musica":
@@ -375,11 +410,42 @@ func _add_key() -> void:
 	_touch()
 
 
+## radura: il nuovo keyframe e' lo stato attuale della traccia (tutti i valori interpolati)
+func _copy_key(arr: Array) -> Dictionary:
+	var s: Array = c.seg(arr, c.t)
+	if s[0] == null:
+		return {"t": snappedf(c.t, 0.01), "a": "T", "o": [0, 0, 0], "r": [0, 0, 0], "s": 1.0, "v": 1}
+	var a: Dictionary = s[0]
+	var k := a.duplicate(true)
+	k["t"] = snappedf(c.t, 0.01)
+	k.erase("cut")
+	if s[1] != null:
+		var b: Dictionary = s[1]
+		var w: float = s[2]
+		for n in k:
+			if n in ["t", "e", "v", "m", "auto"] or not b.has(n):
+				continue
+			if k[n] is float or k[n] is int:
+				k[n] = snappedf(lerpf(float(a[n]), float(b[n]), w), 0.001)
+			elif k[n] is Array and n == "r":
+				k[n] = [lerpf(a[n][0], b[n][0], w), lerpf(a[n][1], b[n][1], w), lerpf(a[n][2], b[n][2], w)]
+			elif k[n] is Array and n == "o":
+				# la posizione si interpola fra le due ancore e si riporta in quella della chiave precedente
+				var rf := c.ref(str(a.get("a", "P0")))
+				var p: Vector3 = (c.kpos(a)["p"] as Vector3).lerp(c.kpos(b)["p"], w)
+				var off := Basis(Vector3.UP, float(rf["yaw"])).inverse() * (p - (rf["p"] as Vector3))
+				k[n] = [snappedf(off.x, 0.01), snappedf(off.y, 0.01), snappedf(off.z, 0.01)]
+	return k
+
+
 func _capture() -> void:
 	if names()[tr] != "cam" or cur() == null or not fly:
 		msg = "C: scegli la riga cam, un keyframe e attiva F"
 		return
 	var k: Dictionary = cur()
+	if int(k.get("auto", 0)) == 1:       # la chiave smette di seguire la camera del gioco
+		k["auto"] = 0
+		k["a"] = "C"
 	var rf := c.ref(str(k.get("a", "P0")))
 	var off := Basis(Vector3.UP, float(rf["yaw"])).inverse() * (fp - (rf["p"] as Vector3))
 	if int(k.get("m", 0)) == 0:
@@ -415,14 +481,21 @@ func update() -> void:
 		c.sk.cam.near = 0.12
 		c.sk.cam.far = 260.0
 		c.sk.curve = 0.0
-		c.gm.player.position = Vector2(fp.x, fp.z) * 16.0
+		if c.stage == null:
+			c.gm.player.position = Vector2(fp.x, fp.z) * 16.0
+		else:
+			c.sk._mp("near_cut", 0.0)
 	var nm: String = names()[tr]
-	hdr = "CUTSCENE '%s'   tempo %.2f / %.1f s\n%s%s\nRIGA: %s   KEYFRAME %d di %d
-H = aiuto | V = nascondi valori" % [c.id, c.t, float(c.cut["dur"]), "PLAY" if c.playing else "PAUSA", "   CAMERA LIBERA" if fly else "", nm, ki + 1, keys().size()]
+	hdr = "CUTSCENE '%s'   tempo %.2f / %.1f s\nVELOCITA' %d%% (Pag su/giu): dura %.1f s\n%s%s\nRIGA: %s   KEYFRAME %d di %d
+H = aiuto | V = nascondi valori" % [c.id, c.t, float(c.cut["dur"]), int(round(c.rate() * 100.0)), float(c.cut["dur"]) / c.rate(), "PLAY" if c.playing else "PAUSA", "   CAMERA LIBERA" if fly else "", nm, ki + 1, keys().size()]
 	fi = clampi(fi, 0, maxi(fields().size() - 1, 0))
 	pn.queue_redraw()
 	hp.queue_redraw()
 	tl.queue_redraw()
+
+
+func _rows() -> int:
+	return maxi(int((pn.size.y - fy0 - 14.0) / 10.0), 3)
 
 
 func _draw_pn() -> void:
@@ -438,17 +511,23 @@ func _draw_pn() -> void:
 	fy0 = y
 	var fl := fields()
 	var k: Variant = cur()
-	for i in fl.size():
+	var rows := _rows()
+	var shown := rows * 2
+	f0 = clampi(f0, maxi(fi - shown + 1, 0), mini(fi, maxi(fl.size() - shown, 0)))
+	if fl.size() > shown:
+		pn.draw_string(f, Vector2(pn.size.x - 62, fy0 - 10.0), "su/giu: altri", HORIZONTAL_ALIGNMENT_LEFT, -1, 6, Color(1, 0.8, 0.4))
+	for i in range(f0, mini(fl.size(), f0 + shown)):
 		var n: String = fl[i][0]
 		var j: int = fl[i][1]
 		var val: Variant = k[n][j] if j >= 0 else k[n]
+		var x := COL_W * float((i - f0) / rows)
+		var ry := y + 10.0 * float((i - f0) % rows)
 		if i == fi:
-			pn.draw_rect(Rect2(2, y - 8, pn.size.x - 4, 10), Color(0.9, 0.7, 0.1, 0.45))
-		pn.draw_string(f, Vector2(5, y), _label(n, j), HORIZONTAL_ALIGNMENT_LEFT, 118, 7, Color.WHITE)
-		pn.draw_string(f, Vector2(128, y), ("%.2f" % float(val)) if (val is float or val is int) else str(val), HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(0.6, 1, 0.7))
-		y += 10.0
+			pn.draw_rect(Rect2(x + 2, ry - 8, COL_W - 4, 10), Color(0.9, 0.7, 0.1, 0.45))
+		pn.draw_string(f, Vector2(x + 5, ry), _label(n, j), HORIZONTAL_ALIGNMENT_LEFT, 104, 6, Color.WHITE)
+		pn.draw_string(f, Vector2(x + 112, ry), ("%.2f" % float(val)) if (val is float or val is int) else str(val), HORIZONTAL_ALIGNMENT_LEFT, 44, 7, Color(0.6, 1, 0.7))
 	if k != null and (k as Dictionary).has("k"):
-		pn.draw_string(f, Vector2(5, y), "evento: " + str((k as Dictionary)["k"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(1, 0.8, 0.6))
+		pn.draw_string(f, Vector2(5, pn.size.y - 15), "evento: " + str((k as Dictionary)["k"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(1, 0.8, 0.6))
 	pn.draw_string(f, Vector2(4, pn.size.y - 5), msg, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(0.5, 1, 0.6))
 
 
@@ -465,8 +544,9 @@ func _pn_input(ev: InputEvent) -> void:
 		var b: int = ev.button_index
 		if b == MOUSE_BUTTON_LEFT:
 			var row := int((ev.position.y - fy0 + 8.0) / 10.0)
-			if row >= 0 and row < fields().size():
-				fi = row
+			var idx := f0 + row + (_rows() if ev.position.x >= COL_W else 0)
+			if row >= 0 and row < _rows() and idx < fields().size():
+				fi = idx
 		elif b == MOUSE_BUTTON_WHEEL_UP or b == MOUSE_BUTTON_WHEEL_DOWN:
 			_adjust(1.0 if b == MOUSE_BUTTON_WHEEL_UP else -1.0, 10.0 if ev.shift_pressed else (0.1 if ev.ctrl_pressed else 1.0))
 

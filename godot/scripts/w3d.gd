@@ -29,6 +29,7 @@ var first_pier := Vector2(-9999, -9999)
 var first_field := Vector2(-9999, -9999)
 var edge_fn := Callable()        # (Vector2 punto) -> true se e' fuori dalla mappa di gioco (vuoto)
 var house_doors: Dictionary = {}     # chiave arrotondata -> Vector3(x, z, yaw della facciata)
+var house_roofs: Dictionary = {}     # stessa chiave -> misure del tetto (servono alle insegne degli anni Ottanta)
 var bio_cache: Dictionary = {}
 var stream_margin := 30.0
 var stream_drop := 56.0
@@ -1591,6 +1592,7 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 	var ab := t0.basis
 	var dwp: Vector3 = t0 * Vector3(w * 0.5 + 0.8, 0, dz)
 	house_doors[Vector2i(roundi(dwp.x * 2.0), roundi(dwp.z * 2.0))] = Vector3(dwp.x, dwp.z, yaw)
+	house_roofs[Vector2i(roundi(dwp.x * 2.0), roundi(dwp.z * 2.0))] = {"t": t0, "w": w, "d": d, "wh": wh, "rh": rh, "ov": ov, "dz": dz, "busy": ([czl] if cxl > -0.2 else [])}
 	o.box(Transform3D(ab, t0 * Vector3(w * 0.5 + 0.1, 1.0, dz)), Vector3(0.42, 2.1, 1.2), Color(0.05, 0.035, 0.035), 0.1, 8)
 	o.box(Transform3D(ab, t0 * Vector3(w * 0.5 + 0.55, 0.12, dz)), Vector3(0.9, 0.24, 1.6), Color(0.24, 0.23, 0.23), 0.12, 8)
 	if r.randf() < 0.85:
@@ -1618,6 +1620,10 @@ func _house(o: W3DBuilder, p: Vector2, yaw: float, r: RandomNumberGenerator, col
 		var ds := -1.0 if dr.randf() < 0.5 else 1.0
 		var dvv := 0.4
 		var dzc := dr.randf_range(-d * 0.25, d * 0.25)
+		if ds > 0.0:
+			var rk := Vector2i(roundi(dwp.x * 2.0), roundi(dwp.z * 2.0))
+			if house_roofs.has(rk):
+				(house_roofs[rk]["busy"] as Array).append(dzc)
 		var dxl: float = ds * (w * 0.5 + ov) * (1.0 - dvv)
 		var dyl: float = wh - 0.1 + (rh + 0.16) * dvv
 		o.box(t0 * Transform3D(Basis.IDENTITY, Vector3(dxl, dyl + 0.5, dzc)), Vector3(0.95, 1.0, 1.0), base_col * 1.1, 0.1, 8)
