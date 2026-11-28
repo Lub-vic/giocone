@@ -204,7 +204,7 @@ static func _make_raw(tab: int, v: Array, p, roll := false) -> Dictionary:
 static func _make_junk(v: Array) -> Dictionary:
 	var id := str(v[0])
 	if id == "" or int(Chrono.owned.get(id, 0)) <= 0:
-		return {"cost": {}, "lines": ["NESSUN OGGETTO ANACRONISTICO", "EVOCA CON N (SELECT)"], "item": {}, "err": "NESSUN OGGETTO"}
+		return {"cost": {}, "lines": ["NESSUN OGGETTO ANACRONISTICO", "EVOCA CON N (Y)"], "item": {}, "err": "NESSUN OGGETTO"}
 	var j: Dictionary = Chrono.JUNK[id]
 	var need: int = Chrono.forge_tier(id)
 	if Chrono.story_tier < need:

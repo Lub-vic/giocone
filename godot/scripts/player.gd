@@ -117,6 +117,15 @@ func bag_free() -> int:
 
 
 ## comandi del giocatore, bloccati mentre la borsa e' aperta (il mondo non si ferma)
+func swap_weapon() -> void:
+	if not idle() or wslots[1 - wcur] == null:
+		return
+	wcur = 1 - wcur
+	refresh_weapon()
+	main.snd("page")
+	main.say("%s  [%s]" % [Rpg.wname(weapon()), Rpg.RARITY[int(weapon()["r"])]["n"]])
+
+
 func act(a: String) -> bool:
 	return not main.inv_open and Input.is_action_just_pressed(a)
 
@@ -130,7 +139,7 @@ func auto_fire(f: Dictionary) -> bool:
 	var near: Enemy = main.nearest_enemy(position, reach)
 	if near == null or near.dying or not near.awake:
 		return false
-	if not bool(main.settings["aim_manual"]):
+	if not main.manual_aim():
 		face = (near.position - position).normalized()
 	return true
 
@@ -400,7 +409,7 @@ func veh_tick(dt: float) -> void:
 	var id := str(veh["id"])
 	var near: Enemy = main.nearest_enemy(position, 170.0)
 	if act_held("attack") and float(veh["cd"]) <= 0.0 and not main.inv_open:
-		if near != null and not bool(main.settings["aim_manual"]):
+		if near != null and not main.manual_aim():
 			face = (near.position - position).normalized()
 		veh["cd"] = float(d["cd"])
 		match id:
@@ -416,7 +425,7 @@ func veh_tick(dt: float) -> void:
 				main.snd("swing")
 	# arma secondaria dell'epoca (tasto colpo pesante): masso, cannonata, onda elettrica
 	if act("heavy") and float(veh["cd2"]) <= 0.0:
-		if near != null and not bool(main.settings["aim_manual"]):
+		if near != null and not main.manual_aim():
 			face = (near.position - position).normalized()
 		veh["cd2"] = float(d["cd2"])
 		match id:
@@ -507,17 +516,17 @@ func _process(dt: float) -> void:
 	var in_fpv: bool = fsk is W3DSkin and (fsk as W3DSkin).fpv
 	if in_fpv:
 		dir = dir.rotated(-(fsk as W3DSkin).fpv_yaw)       # prima persona: avanti e' dove guardi
-	if bool(main.settings["aim_manual"]) or in_fpv:
+	if main.manual_aim() or in_fpv:
 		if act("lock"):
 			cycle_lock()
 		if lock != null and (not is_instance_valid(lock) or lock.dying or lock.position.distance_to(position) > 280.0):
 			lock = null
 	else:
 		lock = null
-	if bool(main.settings["aim_manual"]) and lock != null:
+	if main.manual_aim() and lock != null:
 		face = (lock.position - position).normalized()
 		aim_world = lock.position + Vector2(0, -8)
-	elif bool(main.settings["aim_manual"]):
+	elif main.manual_aim():
 		if main.use_pad:
 			var aim := Input.get_vector("aim_left", "aim_right", "aim_up", "aim_down")
 			if aim.length() > 0.4:
@@ -533,7 +542,7 @@ func _process(dt: float) -> void:
 	else:
 		aim_world = position + face * 80.0
 	var free := atk_t <= 0.0 and dash_t <= 0.0 and heavy_t <= 0.0
-	if dir.length() > 0.1 and free and not bool(main.settings["aim_manual"]):
+	if dir.length() > 0.1 and free and not main.manual_aim():
 		face = dir.normalized()
 	if in_fpv:
 		var fy: float = (fsk as W3DSkin).fpv_yaw
@@ -549,7 +558,7 @@ func _process(dt: float) -> void:
 			face = Vector2.LEFT if face.x < 0.0 else Vector2.RIGHT
 		aim_world = position + face * 80.0
 	var barn_horde := Story.barn_assault_active(main)
-	# V / croce destra cambia Orda/Tattica; U / croce giu' cambia zoom. Il movimento usa lo stick sinistro.
+	# H / croce giu' cambia Orda/Tattica; U cambia zoom. Il movimento usa lo stick sinistro.
 	if act("zoom") and not main.side_scroll_active:
 		cycle_zoom()
 	if act("camera_zoom") and not main.side_scroll_active and main.state == "play" and main.area == "world" and main.skin is W3DSkin:
@@ -580,11 +589,8 @@ func _process(dt: float) -> void:
 		if act("heavy"):
 			main.order_follow()
 	# cambio arma e magie
-	if act("swap") and idle() and wslots[1 - wcur] != null:
-		wcur = 1 - wcur
-		refresh_weapon()
-		main.snd("page")
-		main.say("%s  [%s]" % [Rpg.wname(weapon()), Rpg.RARITY[int(weapon()["r"])]["n"]])
+	if act("swap") and main.inv_back_t < 0.0:      # con SELECT si cambia al rilascio (tenuto apre la borsa)
+		swap_weapon()
 	if act("spell1"):
 		cast(0)
 	if act("spell2"):
@@ -632,7 +638,7 @@ func _process(dt: float) -> void:
 	if not temporal_clearing and act("heavy") and idle() and st > 0.0 and (zmode == 0 or barn_horde) and veh.is_empty() and spend(float(f["hc"]) * Rpg.st_mult(w)):
 		heavy_t = f["hw"]
 		var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
-		if near != null and not bool(main.settings["aim_manual"]):
+		if near != null and not main.manual_aim():
 			face = (near.position - position).normalized()
 	if heavy_t > 0.0:
 		heavy_t -= dt
@@ -707,7 +713,7 @@ func attack() -> void:
 		return
 	main.snd("swing")
 	var near: Enemy = main.nearest_enemy(position, 170.0 if f["ranged"] else 55.0)
-	if near != null and not bool(main.settings["aim_manual"]):
+	if near != null and not main.manual_aim():
 		face = (near.position - position).normalized()
 	var cdm := Rpg.cd_mult(w) / (1.0 + 0.07 * rl("corvo"))
 	if main.run_mode and main.chain >= 5:
@@ -876,7 +882,7 @@ func cast(slot: int) -> void:
 	var sp := spell_pow()
 	var aim := face
 	var near: Enemy = main.nearest_enemy(position, 170.0)
-	if near != null and not bool(main.settings["aim_manual"]):
+	if near != null and not main.manual_aim():
 		aim = (near.position - position).normalized()
 		face = aim
 	match id:
@@ -1151,7 +1157,7 @@ func auto_weapons(dt: float) -> void:
 		if tg != null:
 			knife_t = maxf(0.35, 0.8 - 0.01 * lv)
 			var dirv := (tg.position - position).normalized()
-			if bool(main.settings["aim_manual"]):
+			if main.manual_aim():
 				dirv = face   # con la mira manuale i pugnali vanno dove punta il mirino
 			var kn := mini(4, 1 + lv / 12)
 			for k in kn:

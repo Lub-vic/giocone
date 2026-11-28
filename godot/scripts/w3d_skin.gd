@@ -4658,7 +4658,7 @@ func fpv_set(on: bool) -> void:
 		for k in dyn.keys():
 			_drop_dyn(k)
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-		gm.say("PRIMA PERSONA (F7 PER TORNARE)")
+		gm.say("PRIMA PERSONA (%s PER TORNARE)" % gm.view_key())
 	else:
 		curve = fpv_curve_saved
 		char_mode = fpv_char_saved

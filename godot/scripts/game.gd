@@ -137,7 +137,7 @@ static func setup_input() -> void:
 	var m := {
 		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT],
 		"move_up": [KEY_W, KEY_UP], "move_down": [KEY_S, KEY_DOWN],
-		"attack": [KEY_SPACE, KEY_J], "dash": [KEY_SHIFT, KEY_K], "restart": [KEY_R, KEY_ENTER], "heavy": [KEY_L], "flask": [KEY_Q, KEY_F], "interact": [KEY_E], "zoom": [KEY_V], "camera_zoom": [KEY_U], "lock": [KEY_Y], "parry": [KEY_C], "swap": [KEY_TAB], "spell1": [KEY_1, KEY_R], "spell2": [KEY_2, KEY_G], "item_next": [KEY_Z], "item_use": [KEY_X], "summon": [KEY_N],
+		"attack": [KEY_SPACE, KEY_J], "dash": [KEY_SHIFT, KEY_K], "restart": [KEY_R, KEY_ENTER], "heavy": [KEY_L], "flask": [KEY_Q, KEY_F], "interact": [KEY_E], "zoom": [KEY_H], "view": [KEY_V], "camera_zoom": [KEY_U], "lock": [KEY_Y], "parry": [KEY_C], "swap": [KEY_TAB], "spell1": [KEY_1, KEY_R], "spell2": [KEY_2, KEY_G], "item_next": [KEY_Z], "item_use": [KEY_X], "summon": [KEY_N],
 		"aim_left": [], "aim_right": [], "aim_up": [], "aim_down": [],
 	}
 	for a in m:
@@ -164,15 +164,16 @@ static func setup_input() -> void:
 	_jbtn("dash", JOY_BUTTON_B)
 	_jbtn("interact", JOY_BUTTON_A)
 	_jbtn("flask", JOY_BUTTON_X)
-	_jbtn("swap", JOY_BUTTON_Y)
+	_jbtn("swap", JOY_BUTTON_BACK)   # al rilascio: tenuto apre la borsa
 	_jbtn("spell1", JOY_BUTTON_LEFT_SHOULDER)
-	_jaxis("spell2", JOY_AXIS_TRIGGER_LEFT, 1.0)
-	_jbtn("zoom", JOY_BUTTON_DPAD_RIGHT)
-	_jbtn("camera_zoom", JOY_BUTTON_DPAD_DOWN)
+	_jbtn("spell2", JOY_BUTTON_DPAD_UP)
+	_jbtn("zoom", JOY_BUTTON_DPAD_DOWN)
 	_jbtn("lock", JOY_BUTTON_RIGHT_STICK)   # R3: aggancia il nemico (mira manuale), premuto di nuovo passa al successivo
-	_jbtn("parry", JOY_BUTTON_LEFT_STICK)
-	_jbtn("summon", JOY_BUTTON_BACK)   # SELECT / Share: bolla spazio-temporale
-	_jaxis("item_use", JOY_AXIS_TRIGGER_LEFT, 1.0)
+	_jaxis("parry", JOY_AXIS_TRIGGER_LEFT, 1.0)
+	_jbtn("view", JOY_BUTTON_LEFT_STICK)   # L3: prima persona e ritorno, sempre
+	_jbtn("summon", JOY_BUTTON_Y)   # Y / triangolo: bolla spazio-temporale
+	_jbtn("item_use", JOY_BUTTON_DPAD_RIGHT)
+	_jbtn("item_next", JOY_BUTTON_DPAD_LEFT)
 	_jbtn("ui_accept", JOY_BUTTON_A)
 	_jbtn("ui_cancel", JOY_BUTTON_B)
 	_jbtn("restart", JOY_BUTTON_START)
@@ -182,7 +183,7 @@ static func setup_input() -> void:
 	for a in ["aim_left", "aim_right", "aim_up", "aim_down"]:
 		InputMap.action_set_deadzone(a, 0.25)
 	InputMap.action_set_deadzone("heavy", 0.5)
-	InputMap.action_set_deadzone("spell2", 0.5)
+	InputMap.action_set_deadzone("parry", 0.5)
 	var rb := InputEventMouseButton.new()
 	rb.button_index = MOUSE_BUTTON_RIGHT
 	InputMap.action_add_event("heavy", rb)

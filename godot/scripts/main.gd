@@ -264,7 +264,7 @@ var doors: Array = []
 var carved: Array = []
 var use_pad := false
 var show_fps := false
-var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "photo": false, "aiground": false, "auto_fire": false}
+var settings := {"full": false, "master": 8, "sfx": 8, "amb": 8, "shake": true, "bright": 2, "fps": false, "aim_manual": false, "aim_manual_pad": true, "photo": false, "aiground": false, "auto_fire": false}
 var opt_sel := 0
 var pause_sel := 0
 var debug_sel := 0
@@ -291,7 +291,8 @@ const OPTIONS := [
 	{"k": "shake", "n": "SCUOTIMENTO SCHERMO", "t": "toggle"},
 	{"k": "bright", "n": "LUMINOSITA", "t": "slider", "max": 5},
 	{"k": "fps", "n": "MOSTRA FPS", "t": "toggle"},
-	{"k": "aim_manual", "n": "MIRA MANUALE", "t": "toggle"},
+	{"k": "aim_manual_pad", "n": "MIRA MANUALE (PAD)", "t": "toggle"},
+	{"k": "aim_manual", "n": "MIRA MANUALE (MOUSE)", "t": "toggle"},
 	{"k": "auto_fire", "n": "FUOCO AUTOMATICO", "t": "toggle"},
 	{"k": "photo", "n": "GRAFICA FOTO (PROVA)", "t": "toggle"},
 	{"k": "aiground", "n": "TERRENO AI (PROVA)", "t": "toggle"},
@@ -312,6 +313,7 @@ var auto_doors := true               # le porte si aprono avvicinandosi (le prov
 var chain := 0
 var chain_t := 0.0
 var testing := false
+const Tutorial = preload("res://scripts/tutorial.gd")
 var run_mode := true                 # partita a ondate con progressione salvata fuori dalla partita
 var run_t := 0.0
 var run_stage := 0
@@ -3854,10 +3856,10 @@ func anni80_set(on: bool) -> void:
 	say("PROVA ANNI 80: IL VILLAGGIO E' CAMBIATO. A EST CI SONO DUE GOBLIN ARMATI")
 
 
-## mira manuale in prima persona: serve il tasto F7, quindi con il pad o sul touch resta il colpo automatico.
+## mira in prima persona contro l'ufo (tastiera e pad); sul touch resta il colpo automatico.
 ## Nelle prove automatiche si attiva solo con --ufofps.
 func _ufo_aim_enabled() -> bool:
-	if not skin is W3DSkin or use_pad or DisplayServer.is_touchscreen_available():
+	if not skin is W3DSkin or DisplayServer.is_touchscreen_available():
 		return false
 	return not testing or OS.get_cmdline_user_args().has("--ufofps")
 
@@ -3879,6 +3881,29 @@ func _side_scroll_drop_weapon() -> void:
 	side_scroll_weapon_t = 0.0
 	side_scroll_weapon_family = ""
 	side_scroll_shots_left = 0
+
+
+## prima persona e ritorno con un tasto solo, in qualsiasi momento del gioco: V sulla tastiera, L3 sul pad
+## (rimappabili; F7 resta valido). Dove la prima persona non c'e' ancora lo si dice.
+func _view_input(ev: InputEvent) -> bool:
+	if state != "play" or inv_open or not ev.is_action_pressed("view"):
+		return false
+	var sk4 := skin as W3DSkin
+	if sk4 == null or not sk4.world_on:
+		say("PRIMA PERSONA: PER ORA SOLO ALL'APERTO")
+	elif not sk4.ufo_show_active() and not (sk4.cine != null and sk4.cine.active):
+		sk4.fpv_set(not sk4.fpv)
+	return true
+
+
+## tasto della visuale, secondo il dispositivo in uso
+func view_key() -> String:
+	return Keybinds.pad_text("view") if use_pad else Keybinds.key_text("view")
+
+
+## mira manuale: scelta separata per pad (di norma attiva) e per mouse e tastiera
+func manual_aim() -> bool:
+	return bool(settings["aim_manual_pad" if use_pad else "aim_manual"])
 
 
 ## qualcosa sta per colpire l'eroe? (serve all'avviso "SPOSTATI!" mentre si mira)
@@ -3910,7 +3935,7 @@ func _side_scroll_update_flight(dt: float) -> void:
 func _side_scroll_fire_aimed() -> void:
 	var sk3 := skin as W3DSkin
 	if not sk3.fpv:
-		say("PER SPARARE ALL'UFO PASSA IN PRIMA PERSONA (F7)")
+		say("PER SPARARE ALL'UFO PASSA IN PRIMA PERSONA (%s)" % view_key())
 		snd("cock")
 		return
 	var start: Vector3 = sk3.fp_muzzle()
@@ -8760,8 +8785,8 @@ func _input(ev: InputEvent) -> void:
 		save_settings()
 	if ev is InputEventJoypadButton or (ev is InputEventJoypadMotion and absf(ev.axis_value) > 0.25):
 		use_pad = true
-	elif ev is InputEventKey or ev is InputEventMouseButton or ev is InputEventMouseMotion:
-		use_pad = false
+	elif ev is InputEventKey or ev is InputEventMouseButton or (ev is InputEventMouseMotion and ev.relative.length() > 2.0):
+		use_pad = false      # catturare il mouse (prima persona) genera un movimento nullo: non conta
 
 
 func _activate_pause_selection() -> void:
@@ -9056,6 +9081,9 @@ func _unhandled_input(ev: InputEvent) -> void:
 			debug_return_state = state
 			state = "debug"
 		return
+	if _view_input(ev):      # prima del blocco qui sotto: deve valere anche nella radura
+		get_viewport().set_input_as_handled()
+		return
 	if side_scroll_active and (ev is InputEventKey or ev is InputEventJoypadButton or ev is InputEventMouseButton):
 		return
 	if state == "debug":
@@ -9091,6 +9119,8 @@ func _unhandled_input(ev: InputEvent) -> void:
 			if not inv_back_used:
 				if inv_open:
 					inv_toggle()
+				elif InputMap.event_is_action(ev, "swap"):
+					player.swap_weapon()
 				else:
 					item_cycle()
 			inv_back_t = -1.0
@@ -9892,9 +9922,9 @@ func _pad_test() -> void:
 	tpad += 1
 	var items := [
 		["attack", "b", JOY_BUTTON_RIGHT_SHOULDER], ["dash", "b", JOY_BUTTON_B], ["flask", "b", JOY_BUTTON_X],
-		["swap", "b", JOY_BUTTON_Y], ["spell1", "b", JOY_BUTTON_LEFT_SHOULDER], ["interact", "b", JOY_BUTTON_A],
-		["zoom", "b", JOY_BUTTON_DPAD_UP], ["lock", "b", JOY_BUTTON_RIGHT_STICK], ["restart", "b", JOY_BUTTON_START],
-		["heavy", "a", JOY_AXIS_TRIGGER_RIGHT], ["spell2", "a", JOY_AXIS_TRIGGER_LEFT],
+		["swap", "b", JOY_BUTTON_BACK], ["summon", "b", JOY_BUTTON_Y], ["view", "b", JOY_BUTTON_LEFT_STICK], ["spell1", "b", JOY_BUTTON_LEFT_SHOULDER], ["interact", "b", JOY_BUTTON_A],
+		["zoom", "b", JOY_BUTTON_DPAD_DOWN], ["item_next", "b", JOY_BUTTON_DPAD_LEFT], ["item_use", "b", JOY_BUTTON_DPAD_RIGHT], ["lock", "b", JOY_BUTTON_RIGHT_STICK], ["restart", "b", JOY_BUTTON_START],
+		["heavy", "a", JOY_AXIS_TRIGGER_RIGHT], ["parry", "a", JOY_AXIS_TRIGGER_LEFT], ["spell2", "b", JOY_BUTTON_DPAD_UP],
 		["move_left", "a", JOY_AXIS_LEFT_X], ["move_up", "a", JOY_AXIS_LEFT_Y],
 		["ui_accept", "b", JOY_BUTTON_A], ["ui_cancel", "b", JOY_BUTTON_B], ["ui_down", "b", JOY_BUTTON_DPAD_DOWN],
 		["move_right", "b", JOY_BUTTON_DPAD_RIGHT],
@@ -10259,6 +10289,77 @@ func _fps_aim(sk: W3DSkin, error: Vector3) -> void:
 	sk.cam.rotation = Vector3(sk.fpv_pitch, sk.fpv_yaw, 0.0)      # subito: lo sparo legge la camera
 
 
+var tuto_f := 0
+
+
+func _tutorial_shot(tag: String) -> void:
+	get_viewport().get_texture().get_image().save_png("user://tuto_%s.png" % tag)
+
+
+## prova (--tutotest): i suggerimenti compaiono senza fermare il gioco, seguono il dispositivo, spariscono
+## quando si fa l'azione; prima persona solo all'aperto (user://tuto_*.png)
+func _tutorial_test() -> void:
+	tuto_f += 1
+	if player != null:
+		player.hp = player.max_hp
+		player.inv = 1.0
+	if area == "d0" and tuto_f > 5:
+		for e in enemies:
+			e.awake = false
+	match tuto_f:
+		5:
+			_do_change("d0")
+			state = "play"
+		200:
+			var covered := {"move": ["move_up", "move_down", "move_left", "move_right"], "spell": ["spell1", "spell2"],
+				"item": ["item_next", "item_use"], "camera": ["camera_zoom"]}
+			var have := {"summon": true}
+			for id in Tutorial.BASE + Tutorial.OUT:
+				for act_name in covered.get(id, [id]):
+					have[act_name] = true
+				assert(str(Tutorial.tip(self, id)[1]) != "")
+			var missing := Keybinds.ACTIONS.filter(func(x): return not have.has(x[0]))
+			print("TUTO comandi senza suggerimento=", missing.map(func(x): return x[0]))
+			_tutorial_shot("cella_tasti")
+			print("TUTO cella stato=", state, " suggerimento=", Tutorial.cur)
+			use_pad = true
+		215:
+			_tutorial_shot("cella_pad")
+			Input.action_press("move_right")
+		320:
+			Input.action_release("move_right")
+		380:
+			print("TUTO movimento fatto=", persist["tuto"].has("move"), " visti=", persist["tuto"].keys())
+			print("TUTO in cella niente prima persona=", not persist["tuto"].has("view") and Tutorial.cur != "view")
+			persist["bosses"]["boss_jailer"] = true
+			_do_change("world")
+			state = "play"
+		395:
+			for e in enemies.duplicate():
+				enemies.erase(e)
+				e.queue_free()
+			Tutorial.cur = ""
+			Tutorial.gap_t = 0.0
+		700:
+			use_pad = true
+		712:
+			_tutorial_shot("fuori_pad")
+			print("TUTO fuori stato=", state, " suggerimento=", Tutorial.cur)
+			var l3 := InputEventJoypadButton.new()
+			l3.button_index = JOY_BUTTON_LEFT_STICK
+			l3.pressed = true
+			Input.parse_input_event(l3)
+		730:
+			_tutorial_shot("fuori_fatto")
+			print("TUTO prima persona fatta=", persist["tuto"].has("view"))
+			(skin as W3DSkin).fpv_set(false)
+			use_pad = true
+			Story.flags(self)[Story.SING] = 1
+		790:
+			_tutorial_shot("powerup_pad")
+			get_tree().quit()
+
+
 func _ufo_fps_test() -> void:
 	ufo_movie_f += 1
 	var sk := skin as W3DSkin
@@ -10300,15 +10401,15 @@ func _ufo_fps_test() -> void:
 				_fps_shot_png("alto_2")
 				_side_scroll_fire_temporal_weapon()      # dall'alto non si spara
 				fps_log["dall_alto_non_spara"] = side_scroll_temporal_shots.is_empty() and side_scroll_shots_left == TEMPORAL_FPS_SHOTS
-				var ke := InputEventKey.new()
-				ke.keycode = KEY_F7
+				var ke := InputEventJoypadButton.new()
+				ke.button_index = JOY_BUTTON_LEFT_STICK
 				ke.pressed = true
 				Input.parse_input_event(ke)
 				fps_step = 3
 				fps_wait = ufo_movie_f + 45
 		3:
 			if ufo_movie_f >= fps_wait:
-				fps_log["f7_attiva"] = sk.fpv
+				fps_log["l3_attiva"] = sk.fpv
 				_fps_aim(sk, Vector3.ZERO)
 				fps_step = 4
 				fps_wait = ufo_movie_f + 3
@@ -10364,14 +10465,14 @@ func _ufo_fps_test() -> void:
 				fps_log["non_torna_da_solo"] = sk.fpv
 				_fps_shot_png("fps_dopo")
 				var back := InputEventKey.new()
-				back.keycode = KEY_F7
+				back.physical_keycode = KEY_V
 				back.pressed = true
 				Input.parse_input_event(back)
 				fps_step = 111
 				fps_wait = ufo_movie_f + 20
 		111:
 			if ufo_movie_f >= fps_wait:
-				fps_log["f7_torna_in_terza"] = not sk.fpv
+				fps_log["v_torna_in_terza"] = not sk.fpv
 				fps_log["a_mani_vuote_niente_arma"] = side_scroll_weapon_t <= 0.0
 				_fps_shot_png("alto_dopo")
 				fps_step = 13
@@ -10804,6 +10905,9 @@ func _ufo_movie_test() -> void:
 
 
 func _process(_dt: float) -> void:
+	Tutorial.tick(self, _dt)
+	if OS.get_cmdline_user_args().has("--tutotest"):
+		_tutorial_test()
 	if mission_test_active and not mission_test_pending.is_empty() and state == "play" and area == "world":
 		_mission_test_begin_pending()
 	if side_scroll_active and state == "dying":
@@ -11216,6 +11320,7 @@ func _process(_dt: float) -> void:
 		if tgs == 3:
 			state = "play"
 			settings["aim_manual"] = true
+			settings["aim_manual_pad"] = true
 			player.max_hp = 99999.0
 			player.hp = 99999.0
 			for i in 3:

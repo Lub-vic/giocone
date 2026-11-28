@@ -9,8 +9,8 @@ const ACTIONS := [
 	["move_up", "MUOVI SU", false], ["move_down", "MUOVI GIU", false], ["move_left", "MUOVI SINISTRA", false], ["move_right", "MUOVI DESTRA", false],
 	["attack", "COLPO LEGGERO", true], ["heavy", "COLPO PESANTE", true], ["dash", "ROTOLATA", true], ["parry", "PARATA", true],
 	["flask", "FIALA", true], ["interact", "INTERAGISCI", true], ["swap", "CAMBIA ARMA", true],
-	["spell1", "MAGIA 1", true], ["spell2", "MAGIA 2", true], ["item_next", "OGGETTO: CAMBIA", false], ["item_use", "OGGETTO: USA", true],
-	["summon", "CRONOTONE: BOLLA", true], ["zoom", "ZOOM ORDA / TATTICA", true], ["camera_zoom", "ZOOM CAMERA", true], ["lock", "AGGANCIA NEMICO", true],
+	["spell1", "MAGIA 1", true], ["spell2", "MAGIA 2", true], ["item_next", "OGGETTO: CAMBIA", true], ["item_use", "OGGETTO: USA", true],
+	["summon", "CRONOTONE: BOLLA", true], ["view", "PRIMA PERSONA", true], ["zoom", "ZOOM ORDA / TATTICA", true], ["camera_zoom", "ZOOM CAMERA", true], ["lock", "AGGANCIA NEMICO", true],
 ]
 const RESERVED := [KEY_ESCAPE, KEY_F2, KEY_F3, KEY_F9, KEY_F10, KEY_F11, KEY_F12, KEY_M, KEY_B, KEY_I, KEY_T]
 const PAD_NAMES := {0: "A", 1: "B", 2: "X", 3: "Y", 4: "SELECT", 6: "START", 7: "L3", 8: "R3", 9: "LB", 10: "RB", 11: "CROCE SU", 12: "CROCE GIU", 13: "CROCE SX", 14: "CROCE DX"}
@@ -185,8 +185,12 @@ static func _load() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(PATH) != OK:
 		return
+	# comandi salvati prima di "view": quelli spostati ripartono dai nuovi predefiniti
+	var old_layout := not cfg.has_section_key("pad", "view")
 	for a in ACTIONS:
 		var act: String = a[0]
+		if old_layout and act in ["parry", "spell2", "item_use", "item_next", "zoom", "camera_zoom", "swap", "summon"]:
+			continue
 		if cfg.has_section_key("keys", act):
 			for e in InputMap.action_get_events(act):
 				if e is InputEventKey:

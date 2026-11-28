@@ -527,7 +527,7 @@ static func _sing_update(m, dt: float) -> void:
 		if fx == null or not is_instance_valid(fx):
 			fx = SingFx.new()
 			m.add_child(fx)
-		fx.key = Keybinds.key_text("summon")
+		fx.key = Keybinds.pad_text("summon") if m.use_pad else Keybinds.key_text("summon")
 	elif fx != null:
 		if is_instance_valid(fx):
 			fx.queue_free()

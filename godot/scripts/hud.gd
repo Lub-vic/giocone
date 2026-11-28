@@ -194,7 +194,16 @@ func _fpv_weapon(p: Player) -> void:
 
 
 # ---------------------------------------------------------------- schermata principale
+const Tutorial = preload("res://scripts/tutorial.gd")
+
+
 func _draw() -> void:
+	_draw_base()
+	if main != null and main.player != null:
+		Tutorial.draw(self)
+
+
+func _draw_base() -> void:
 	if main == null or main.player == null:
 		return
 	if main.state == "loading":
@@ -208,7 +217,7 @@ func _draw() -> void:
 		return
 	if main.state == "story":
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.0, 0.04, 0.96))
-		_txt("CRYPT OF EMBERS", Vector2(0, 38), Color(0.95, 0.72, 0.3), 18, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+		_txt("TEMPORAMA", Vector2(0, 38), Color(0.95, 0.72, 0.3), 18, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 		var sy := 66.0
 		for ln in main.STORY:
 			_txt(ln, Vector2(0, sy), Color(0.88, 0.84, 0.95), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
@@ -255,7 +264,7 @@ func _draw() -> void:
 		_bar(Vector2(54, 27), 40, 3, float(p.veh["hp"]) / float(p.veh["max"]), Color(1.0, 0.6, 0.25))
 		_txt("%s %ds" % [str(Chrono.JACKPOT[p.veh["id"]]["n"]), int(ceil(float(p.veh["t"])))], Vector2(98, 30), Color(1.0, 0.8, 0.5))
 	elif cr_full and Story.has_chrono(main) and main.state == "play":
-		_txt("N: EVOCA", Vector2(98, 25), Color(0.5, 1.0, 1.0))
+		_txt("%s: EVOCA" % _k(Keybinds.key_text("summon"), Keybinds.pad_text("summon")), Vector2(98, 25), Color(0.5, 1.0, 1.0))
 	draw_texture(Game.tex("flask"), Vector2(4, 26), Color(1, 1, 1, 0.95))
 	_txt("x%d" % p.flasks, Vector2(16, 34), Color(1, 0.82, 0.4))
 	_txt("LV %d" % p.lv, Vector2(36, 34), Color(0.85, 0.82, 0.95))
@@ -325,7 +334,7 @@ func _draw() -> void:
 			if (main.skin as W3DSkin).fp_temporal_family() == "":      # l'arma temporale si vede in 3D
 				_fpv_weapon(p)
 			_fpv_crosshair(p, main.skin as W3DSkin)
-		elif bool(main.settings["aim_manual"]) and main.state == "play":
+		elif main.manual_aim() and main.state == "play":
 			_crosshair(p)
 	if main.chain >= 2:
 		_txt("SERIE x%d   ANIME x%.1f" % [main.chain, main.chain_mult()], Vector2(0, 78), Color(1, 0.78, 0.3), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)
@@ -856,8 +865,9 @@ func _travel() -> void:
 
 func _title() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.02, 0.0, 0.04, 1.0))
-	_txt("CRYPT OF EMBERS", Vector2(0, 96), Color(1, 0.72, 0.3), 24, HORIZONTAL_ALIGNMENT_CENTER, size.x)
+	_txt("TEMPORAMA", Vector2(0, 96), Color(1, 0.72, 0.3), 24, HORIZONTAL_ALIGNMENT_CENTER, size.x)
 	draw_rect(Rect2(size.x / 2 - 130, 108, 260, 1), GOLD_D)
+	_txt("...a proposito di un ufo e uno stregone", Vector2(0, 122), Color(0.7, 0.68, 0.8), 9, HORIZONTAL_ALIGNMENT_CENTER, size.x)      # sottotitolo provvisorio
 	var opts := ["CONTINUA", "NUOVA PARTITA", "IMPOSTAZIONI"]
 	if main.run_mode:
 		opts = ["NUOVA PARTITA", "IMPOSTAZIONI", "ESCI"]
@@ -1401,25 +1411,26 @@ func _controls() -> void:
 		["COLPO LEGGERO", "SPAZIO / J / CLICK", "RB"],
 		["COLPO PESANTE", "L / CLICK DESTRO", "RT"],
 		["ROTOLATA", "SHIFT / K", "B"],
-		["PARATA (TEMPISMO)", "C", "L3 (STICK SX)"],
+		["PARATA (TEMPISMO)", "C", "LT"],
+		["PRIMA PERSONA", "V / F7", "L3 (STICK SX)"],
 		["FIALA", "Q / F", "X"],
-		["OGGETTO: CAMBIA / USA", "Z / X", "SELECT / LT"], ["BORSA ED EQUIPAGGIAMENTO", "I", "SELECT (TIENI)"],
-		["MAGIA 1 / 2", "1 / 2  (R / G)", "LB / LT"],
-		["CAMBIA ARMA", "TAB", "Y"],
+		["OGGETTO: CAMBIA / USA", "Z / X", "CROCE SX / DX"], ["BORSA ED EQUIPAGGIAMENTO", "I", "SELECT (TIENI)"],
+		["MAGIA 1 / 2", "1 / 2  (R / G)", "LB / CROCE SU"],
+		["CAMBIA ARMA", "TAB", "SELECT"],
 		["INTERAGISCI", "E", "A"],
 		["PAUSA", "ESC", "START"],
 		["MAPPA / BESTIARIO", "M / B", "START > MAPPA"],
 		["SCHERMO INTERO / FPS", "F11 / F3", "-"],
 		["ZOOM ESTERNO 3D", "U", "-"],
-		["ZOOM: ORDA/TATTICA", "V", "CROCE SU"],
+		["ZOOM: ORDA/TATTICA", "H", "CROCE GIU"],
 		["AGGANCIA NEMICO", "Y", "R3"],
 		["TATTICA: INVIA", "CLICK / SPAZIO", "RB"],
 		["TATTICA: RICHIAMA", "L / CLICK DESTRO", "RT"],
 		["CAMPO: MAGIE / VIAGGIO", "Z / X / T", "LB / RB / Y"],
-		["CRONOTONE: BOLLA", "N", "SELECT"],
+		["CRONOTONE: BOLLA", "N", "Y"],
 	]
 	for i in rows.size():
-		var y: float = r.position.y + 58.0 + i * 8.9
+		var y: float = r.position.y + 57.0 + i * 8.5
 		_txt(rows[i][0], Vector2(x, y), Color(0.85, 0.83, 0.95))
 		_txt(rows[i][1], Vector2(x + 152, y), Color(0.7, 0.85, 1.0))
 		_txt(rows[i][2], Vector2(x + 290, y), Color(0.7, 1.0, 0.8))

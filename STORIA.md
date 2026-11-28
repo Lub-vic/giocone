@@ -236,6 +236,34 @@ contare.
 
 ---
 
+## Missione «Fuori»: rompere la quarta parete (idea salvata, da provare)
+L'eroe esce dal gioco e invade il desktop di chi gioca. **Preferenza tua: il desktop vero**, con i suoi oggetti usati
+nel gameplay. Una sola volta, verso metà storia e senza annunciarla (posizione negli atti da decidere).
+
+**Traccia:** il rapimento dell'ufo va storto, il gioco finge di chiudersi, compare il desktop, l'eroe cade dall'alto,
+si guarda intorno e poi guarda chi gioca. I nemici lo seguono e trasformano il desktop. Al ritorno resta una traccia
+(una crepa nel menu, un personaggio che ricorda).
+
+**Come si fa (non ancora provato):** il gioco ricostruisce una copia con lo sfondo e le icone vere nelle stesse
+posizioni, così si possono spingere e distruggere senza toccare niente. Icone: interfaccia Shell di Windows
+(`IFolderView`); finestre aperte: `EnumWindows`; barra delle applicazioni: area libera dello schermo in Godot.
+In prototipo con uno script PowerShell, nella versione finale con un modulo GDExtension.
+
+**Oggetti nel gameplay:** cestino (arma contro il boss: ci finiscono i nemici), cartelle (nascondigli e passaggi),
+collegamenti (portali), immagini (scudi o specchi), documenti (lame di carta), programmi (casse con potenziamenti),
+barra delle applicazioni e finestre (pavimento, muri, piattaforme). **Boss: il cursore**, che trascina l'eroe nel cestino.
+
+**Regole:** consenso senza anticipare la sorpresa (senza consenso, desktop inventato); dati solo in memoria, mai
+salvati o inviati; dei file solo nome, tipo e icona, mai il contenuto; non si modifica nulla di vero; niente finti
+errori di Windows troppo credibili. Con poche icone se ne aggiungono di finte, con troppe solo alcune sono
+interattive, il cestino c'è sempre. Controllare la reazione dell'antivirus. Regia modificabile con l'editor F6,
+senza scritte a schermo.
+
+**Passi:** 1) test di sola lettura che ricostruisce il desktop, da confrontare con quello vero (punto più incerto:
+scalatura e più schermi); 2) prototipo in Godot con icone solide da lanciare; 3) missione completa.
+
+---
+
 ## Oggetti del Cronotone
 
 La bolla resta la sorpresa che fa scoprire. Un oggetto importante, una volta ottenuto, resta tuo.

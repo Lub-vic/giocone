@@ -91,10 +91,11 @@ func _draw_fx() -> void:
 			else:
 				_chrome(word, Vector2(vs.x * 0.5, vs.y * 0.47), vs.x * 0.6, pal, punch, tilt)
 		if fps:
-			_small("CLICK O %s: SPARA    COLPI: %d" % [Keybinds.key_text("attack"), main.side_scroll_shots_left], vs.x * 0.5, vs.y * 0.815, vs.x * 0.34, Color(0.75, 1.0, 1.0))
+			var fire: String = Keybinds.pad_text("attack") if main.use_pad else "CLICK O " + Keybinds.key_text("attack")
+			_small("%s: SPARA    COLPI: %d" % [fire, main.side_scroll_shots_left], vs.x * 0.5, vs.y * 0.815, vs.x * 0.34, Color(0.75, 1.0, 1.0))
 		else:
 			var a := 0.75 + 0.25 * sin(t * 9.0)
-			_small("PREMI F7: PRIMA PERSONA", vs.x * 0.5, vs.y * 0.62, vs.x * 0.34, Color(0.75, 1.0, 1.0, a))
+			_small("PREMI %s: PRIMA PERSONA" % main.view_key(), vs.x * 0.5, vs.y * 0.62, vs.x * 0.34, Color(0.75, 1.0, 1.0, a))
 	if danger and fposmod(t * 5.0, 1.0) < 0.65:
 		_chrome("SPOSTATI!", Vector2(vs.x * 0.5, vs.y * 0.69), vs.x * 0.3, [Color(1.0, 0.18, 0.1), Color(0.35, 0.0, 0.0), Color(1.0, 0.85, 0.2)], 1.0, 0.0)
 		ctl.draw_rect(Rect2(Vector2(2, 2), vs - Vector2(4, 4)), Color(1.0, 0.1, 0.05, 0.55), false, 4.0)
